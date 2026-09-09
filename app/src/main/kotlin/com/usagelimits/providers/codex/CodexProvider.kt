@@ -210,7 +210,7 @@ class CodexProvider(
         val windows = CodexUsageParser.parse(payload, now)
 
         // The dedicated endpoint is authoritative but optional: a failure there should cost
-        // the reset-credit row, not the entire usage refresh. The usage payload carries a copy.
+        // the reset-credit rows, not the entire usage refresh. The usage payload carries a copy.
         val embedded = JsonSupport.obj(
             payload,
             "rate_limit_reset_credits",
@@ -221,9 +221,17 @@ class CodexProvider(
                 CreditsResult(
                     credits = CodexUsageParser.parseResetCredits(embedded),
                     count = CodexUsageParser.availableCreditCount(embedded),
-                    applicable = CodexUsageParser.applicableCreditCount(embedded),
                 )
             }
+
+        // The two sources are not the same payload with the same fields, which is easy to miss
+        // and was wrong here until a live account was checked. The dedicated endpoint returns
+        // `credits`, `available_count`, `total_earned_count` and no applicable count at all;
+        // the embedded copy returns `available_count` and `applicable_available_count` and no
+        // `credits` array. Reading the applicable count off whichever source answered meant it
+        // was only ever available on the FALLBACK path — the button lost its gate precisely
+        // when the authoritative call succeeded.
+        val applicable = CodexUsageParser.applicableCreditCount(embedded)
 
         // The reported count wins over the row count. The list can be truncated or filtered
         // while the count stays exact, and gating the redeem button on the rows would hide it
@@ -232,14 +240,13 @@ class CodexProvider(
             windows = windows,
             resetCredits = credits.credits,
             resetCreditCount = credits.count ?: credits.credits.size,
-            applicableResetCreditCount = credits.applicable,
+            applicableResetCreditCount = applicable,
         )
     }
 
     private data class CreditsResult(
         val credits: List<ResetCredit>,
         val count: Int?,
-        val applicable: Int?,
     )
 
     private suspend fun fetchResetCredits(
@@ -254,7 +261,6 @@ class CodexProvider(
         return CreditsResult(
             credits = CodexUsageParser.parseResetCredits(payload),
             count = CodexUsageParser.availableCreditCount(payload),
-            applicable = CodexUsageParser.applicableCreditCount(payload),
         )
     }
 

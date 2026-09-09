@@ -38,14 +38,47 @@ object ClaudeUsageParser {
         return primary + discoverUnknownWindows(payload, primary)
     }
 
-    /** Reads the plan label the profile endpoint reports, for the account subtitle. */
+    /**
+     * Reads the plan label the profile endpoint reports, for the account subtitle.
+     *
+     * `organization.rate_limit_tier` is preferred over the `has_claude_max` boolean because the
+     * boolean cannot tell a Max 5× subscription from a Max 20× one — a fivefold difference in
+     * the very quantity this app exists to show. A live profile reports
+     * `default_claude_max_5x`, so the multiplier is right there; the booleans are the fallback
+     * for a payload that omits the tier.
+     */
     fun parsePlan(profile: JsonObject): String? {
+        val organization = JsonSupport.obj(profile, "organization")
+        val tier = JsonSupport.string(organization, "rate_limit_tier", "rateLimitTier")
+        planFromTier(tier)?.let { return it }
+
         val account = JsonSupport.obj(profile, "account") ?: return null
         return when {
             JsonSupport.boolean(account, "has_claude_max", "hasClaudeMax") == true -> "Max"
             JsonSupport.boolean(account, "has_claude_pro", "hasClaudePro") == true -> "Pro"
             else -> null
         }
+    }
+
+    /**
+     * Turns `default_claude_max_5x` into `Max 5×`.
+     *
+     * Read structurally rather than from a table of known tiers: Anthropic adds tiers, and a
+     * table would render a new one as no plan at all. An unrecognised tier still yields
+     * something readable, which beats a blank subtitle.
+     */
+    private fun planFromTier(tier: String?): String? {
+        val raw = tier?.trim()?.lowercase()?.removePrefix("default_")?.removePrefix("claude_")
+        if (raw.isNullOrBlank()) return null
+
+        val multiplier = Regex("_(\\d+)x$").find(raw)?.groupValues?.get(1)
+        val base = raw.removeSuffix("_${multiplier}x").replace('_', ' ').trim()
+        if (base.isEmpty()) return null
+
+        val name = base.split(' ').joinToString(" ") { part ->
+            part.replaceFirstChar { it.uppercase() }
+        }
+        return if (multiplier == null) name else "$name $multiplier×"
     }
 
     /**
