@@ -3,6 +3,6 @@
     <style name="Theme.UsageLimits" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowBackground">#05070D</item>
+        <item name="android:windowBackground">#0F0F0E</item>
     </style>
 </resources>
