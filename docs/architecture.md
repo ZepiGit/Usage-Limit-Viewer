@@ -35,9 +35,12 @@ The dependency rule is that arrows point *down* this list, and it holds where it
   testable in a plain JVM test with no Robolectric, and it is worth defending.
 - `providers/` depends on `core/` and on nothing above it. A provider cannot reach a screen,
   a widget, or the database.
-- `widget/` imports only `core.model`, `core.time.Countdown`, `core.database.AccountUsage`
-  and `core.sync.SyncWorker`. It has no import of `core.auth` and no import of `providers` —
-  the point of §"Two stores" below, and a property you can re-verify with one grep.
+- `widget/` has no import of `core.auth` and no import of `providers` — the point of
+  §"Two stores" below, and a property you can re-verify with one grep. What it does import is
+  `core.model`, `core.time.Countdown`, `core.database` (`AccountUsage`, `WidgetConfigEntity`),
+  `core.sync.SyncWorker` and `ui/`, plus `MainActivity` for the tap target and
+  `providerSymbol`/`providerTint` from `feature/overview` so a tile and a card cannot disagree
+  about a provider's glyph or colour — a third upward edge, and the least defensible of them.
 
 Two edges deliberately point back up, and both are at the composition seam rather than inside
 a layer:
@@ -133,10 +136,12 @@ concept a provider does not have.
 above 50% healthy, 20–50% medium, above zero but at or below 20% low, zero exhausted, plus
 `STALE` and `ERROR`. The enum is ordered best-to-worst so "the worst window in this account"
 is `maxOf`, and both the app and the widgets read the same enum — which is why a card and a
-widget tile can never disagree about whether something is low. One honest gap:
-`Severity.STALE_AFTER_MS` (one hour) is declared but not yet applied anywhere. Old data is
-currently shown with its true age via `Countdown.freshnessLabel` rather than being downgraded
-to `STALE`, and `STALE` appears only as the fallback for an account that has never synced.
+widget tile can never disagree about whether something is low. `Severity.STALE_AFTER_MS`
+(one hour) is applied by `UsageSnapshot.severityAt(nowMs)`, which downgrades a snapshot to
+`STALE` once it is that old; `ERROR` still wins over age, because a failed fetch is the more
+specific thing to say. Every screen and both widgets call `severityAt` rather than the
+age-blind `severity`, and `Countdown.freshnessLabel` shows the true age beside it. `STALE` is
+also the fallback for an account that has never synced.
 
 ## Two stores, and why widgets can only reach one
 

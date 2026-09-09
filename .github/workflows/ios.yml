@@ -1,0 +1,71 @@
+name: iOS
+
+# The split this workflow exists to serve:
+#
+#   UsageLimitsKit  — Foundation only, no Apple SDK. Builds and tests on Linux, so the quota
+#                     engine is verified on every push without needing a Mac at all.
+#   UsageLimits app — SwiftUI, WidgetKit, Keychain, ASWebAuthenticationSession. Needs the real
+#                     iOS SDK, so a macOS runner is the only thing that can honestly say it
+#                     compiles.
+#
+# That is not an arbitrary boundary. On the Android side every real defect found — inverted
+# percentages, a missing `config` envelope, windows classified by payload position — was in a
+# parser. None was in a view. So the layer that can be tested without Apple hardware is also
+# the layer where the bugs actually live.
+
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit-linux:
+    name: UsageLimitsKit (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.0.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: ios/UsageLimitsKit
+        run: swift build -v
+      - name: Test
+        working-directory: ios/UsageLimitsKit
+        run: swift test --parallel
+
+  kit-macos:
+    name: UsageLimitsKit (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        working-directory: ios/UsageLimitsKit
+        run: swift test --parallel
+
+  app-ios:
+    name: iOS app (real SDK)
+    runs-on: macos-latest
+    # Only meaningful once the Xcode project exists; until then a missing project should not
+    # report the whole workflow red.
+    if: ${{ hashFiles('ios/UsageLimits/**/*.xcodeproj/project.pbxproj') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: xcodebuild -version && xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Build for simulator
+        working-directory: ios/UsageLimits
+        run: |
+          xcodebuild build \
+            -scheme UsageLimits \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty && exit ${PIPESTATUS[0]}
