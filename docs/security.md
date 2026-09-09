@@ -208,12 +208,14 @@ app explicitly does not take on. Someone who can add a system CA can equally ask
 to decrypt on the app's behalf, so a pin is not what would be standing between them and the
 tokens.
 
-What is left is cost, and it is real. Four providers' chains rotate independently on schedules
-none of them publish, all but the OAuth token endpoints are undocumented internal APIs, and
-there is no channel to ship a new pin faster than a store release. A stale pin is a total,
-self-inflicted outage for that provider, indistinguishable to the user from the provider being
-down. Not pinning four undocumented, independently-rotating endpoints with no rotation channel
-is the right call.
+What is left is cost, and it is real. The four providers are fourteen distinct hosts between
+them in `ProviderEndpoints` — two for Codex, three for Claude, six for Antigravity once the
+`cloudcode-pa` fallbacks are counted, three for xAI — and most of those are undocumented
+internal APIs whose chains rotate on schedules nobody publishes and whose operators owe this
+app no notice. There is no channel to ship a new pin faster than a store release, so a stale
+pin is a total, self-inflicted outage for that provider, indistinguishable to the user from
+the provider being down. Not pinning fourteen undocumented, independently-rotating endpoints
+with no rotation channel is the right call.
 
 ## Concurrency and credential lifecycle
 

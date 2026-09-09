@@ -208,13 +208,14 @@ class AntigravityProvider(
             ?: email
             ?: throw ProviderException.MalformedPayload("userinfo had no account identifier")
 
+        val (projectId, plan) = resolveProjectId(credentials)
+
         return ProviderProfile(
             externalAccountId = accountId,
             email = email,
             displayName = JsonSupport.string(payload, "name"),
-            // Antigravity does not report a plan name; the quota groups are the plan signal.
-            plan = null,
-            attributes = mapOf(ATTR_PROJECT_ID to resolveProjectId(credentials)),
+            plan = plan,
+            attributes = mapOf(ATTR_PROJECT_ID to projectId),
         )
     }
 
@@ -226,7 +227,7 @@ class AntigravityProvider(
      * account rather than to one refresh: without a project id the app can authenticate but
      * can never read a number.
      */
-    private suspend fun resolveProjectId(credentials: OAuthCredentials): String {
+    private suspend fun resolveProjectId(credentials: OAuthCredentials): Pair<String, String?> {
         var lastError: ProviderException? = null
 
         // Same reasoning as the quota read: which host serves a given account varies, and this
@@ -240,7 +241,8 @@ class AntigravityProvider(
                     headers = authenticatedJsonHeaders(credentials),
                     body = HttpClient.jsonBody(LOAD_CODE_ASSIST_BODY),
                 )
-                extractProjectId(JsonSupport.parseObject(response.body))?.let { return it }
+                val payload = JsonSupport.parseObject(response.body)
+                extractProjectId(payload)?.let { return it to extractTierName(payload) }
             } catch (e: ProviderException) {
                 lastError = e
             }
@@ -251,6 +253,16 @@ class AntigravityProvider(
             "loadCodeAssist returned no GCP project id. If this account has never used " +
                 "Antigravity, sign in to the desktop client once to provision it, then add it here.",
         )
+    }
+
+    private fun extractTierName(payload: JsonObject?): String? {
+        for (key in arrayOf("currentTier", "current_tier", "paidTier", "paid_tier")) {
+            val tier = JsonSupport.obj(payload, key) ?: continue
+            val name = JsonSupport.string(tier, "name")?.takeIf { it.isNotBlank() }
+                ?: JsonSupport.string(tier, "id")?.takeIf { it.isNotBlank() }
+            if (name != null) return name
+        }
+        return null
     }
 
     /**

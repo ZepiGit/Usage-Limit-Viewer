@@ -72,27 +72,37 @@ object XaiBillingParser {
         // drawn from an assumed zero.
         val config = config(payload)
         val usedPercent = JsonSupport.double(config, "creditUsagePercent", "credit_usage_percent")
+            ?.takeIf { it.isFinite() }
             ?: return emptyList()
 
         val period = JsonSupport.obj(config, "currentPeriod", "current_period")
         val startMs = Instants.parse(JsonSupport.string(period, "start"))
         val endMs = Instants.parse(JsonSupport.string(period, "end"))
+        val periodType = JsonSupport.string(period, "type")
 
-        // The span is measured rather than assumed. xAI calls this window "weekly" today, but
-        // deriving the length means a change upstream reclassifies itself instead of
-        // mislabelling a fortnight as a week. An unusable or inverted pair leaves the length
-        // unknown, which classifies as OTHER — still rendered, just not claimed to be weekly.
+        // The measured span takes precedence so a change upstream reclassifies itself instead
+        // of mislabelling a fortnight as a week. Without a usable span, the reported type can
+        // still identify the period; without either, OTHER avoids claiming a known length.
         val periodSeconds = if (startMs != null && endMs != null && endMs > startMs) {
             (endMs - startMs) / 1000
         } else {
-            null
+            when {
+                periodType?.contains("week", ignoreCase = true) == true -> 604_800L
+                periodType?.contains("month", ignoreCase = true) == true -> BILLING_PERIOD_SECONDS
+                else -> null
+            }
         }
+        val category = WindowCategory.fromPeriodSeconds(periodSeconds)
 
         return listOf(
             UsageWindow(
                 id = CREDITS_WINDOW_ID,
-                label = "Weekly credits",
-                category = WindowCategory.fromPeriodSeconds(periodSeconds),
+                label = when (category) {
+                    WindowCategory.WEEKLY -> "Weekly credits"
+                    WindowCategory.MONTHLY -> "Monthly credits"
+                    else -> "Credits"
+                },
+                category = category,
                 usedPercent = usedPercent,
                 periodSeconds = periodSeconds,
                 resetAt = endMs,
@@ -118,7 +128,7 @@ object XaiBillingParser {
         // Neither figure present means this is not a billing payload we understand.
         if (monthlyLimit == null && used == null) return emptyList()
 
-        val limitCents = monthlyLimit ?: 0.0
+        val limitCents = monthlyLimit
         val usedCents = used ?: 0.0
         val resetAt = Instants.parse(
             JsonSupport.string(config, "billingPeriodEnd", "billing_period_end"),
@@ -129,8 +139,7 @@ object XaiBillingParser {
         // Spend past the allowance is on-demand spend, so the included bar stops at 100 %.
         // Without the clamp an overspending account reads "140 % used", which is both wrong
         // for this window and hides the overage from the row that actually meters it.
-        val includedUsed = minOf(usedCents, limitCents)
-        val includedPercent = percentOf(includedUsed, limitCents)
+        val includedPercent = limitCents?.let { percentOf(minOf(usedCents, it), it) }
         windows += UsageWindow(
             id = MONTHLY_WINDOW_ID,
             label = "Monthly included",
@@ -145,20 +154,22 @@ object XaiBillingParser {
         // empty bar for a facility that does not exist would just be noise.
         val onDemandCap = cents(config, "onDemandCap", "on_demand_cap") ?: 0.0
         if (onDemandCap > 0.0) {
-            // Older payloads omit the on-demand figure and only report total spend, in which
-            // case everything above the allowance is by definition on demand.
+            // Older payloads omit the on-demand figure and only report total spend. Only a
+            // known allowance makes it possible to identify the excess as on-demand spend.
             val onDemandUsed = cents(config, "onDemandUsed", "on_demand_used")
-                ?: maxOf(0.0, usedCents - limitCents)
-            val onDemandPercent = percentOf(onDemandUsed, onDemandCap)
-            windows += UsageWindow(
-                id = ON_DEMAND_WINDOW_ID,
-                label = "On-demand",
-                category = WindowCategory.MONTHLY,
-                usedPercent = onDemandPercent,
-                periodSeconds = BILLING_PERIOD_SECONDS,
-                resetAt = resetAt,
-                exhausted = isExhausted(onDemandPercent),
-            )
+                ?: limitCents?.let { maxOf(0.0, usedCents - it) }
+            if (onDemandUsed != null) {
+                val onDemandPercent = percentOf(onDemandUsed, onDemandCap)
+                windows += UsageWindow(
+                    id = ON_DEMAND_WINDOW_ID,
+                    label = "On-demand",
+                    category = WindowCategory.MONTHLY,
+                    usedPercent = onDemandPercent,
+                    periodSeconds = BILLING_PERIOD_SECONDS,
+                    resetAt = resetAt,
+                    exhausted = isExhausted(onDemandPercent),
+                )
+            }
         }
 
         return windows
@@ -167,10 +178,10 @@ object XaiBillingParser {
     /**
      * Joins the two views, credits first.
      *
-     * Ids are de-duplicated because the two views are projections of one resource: if the
-     * credit view ever starts reporting a monthly figure as well, the account gets one bar
-     * rather than two contradictory ones. First occurrence wins, so the credit view — the
-     * only one that reports a percentage directly — stays authoritative.
+     * The parsers' ids are currently disjoint by construction, so de-duplication guards
+     * against a future id collision rather than removing any rows today. First occurrence
+     * wins, so the credit view — the only one that reports a percentage directly — takes
+     * precedence if a collision is introduced.
      */
     fun merge(credits: List<UsageWindow>, billing: List<UsageWindow>): List<UsageWindow> {
         val seen = mutableSetOf<String>()
@@ -185,7 +196,7 @@ object XaiBillingParser {
      * compare as "healthy" against the severity thresholds.
      */
     private fun percentOf(amount: Double, total: Double): Double? =
-        if (total > 0.0) amount / total * 100.0 else null
+        if (total > 0.0) (amount / total * 100.0).takeIf { it.isFinite() } else null
 
     private fun isExhausted(usedPercent: Double?): Boolean =
         usedPercent != null && usedPercent >= 100.0
