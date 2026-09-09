@@ -77,16 +77,22 @@ carries a "do not rename casually" note; `WidgetScope.fromName` maps anything un
 including `null` — to `MOST_CRITICAL` so a bad or missing row degrades to a useful widget
 rather than an empty one.
 
-**Honest status: there is no configuration UI yet.** No activity is declared with
-`android:configure` in either `widget_compact_info.xml` or `widget_detailed_info.xml`, and
-nothing in the app writes a `WidgetConfigEntity` — the table is only ever read. Every placed
-widget therefore takes the `null` path and renders `MOST_CRITICAL`. The storage, the reducer
-and the fallback are all finished and exercised by the read path; what is missing is the
-screen. Adding it means a small configuration activity that receives
-`EXTRA_APPWIDGET_ID`, offers the four scopes plus an account or provider picker, upserts one
-row through `WidgetConfigDao`, calls `updateAll` for that widget class, and returns
-`RESULT_OK` with the id — plus `android:configure` in the provider XML. The reducer needs no
-change at all.
+**The configuration screen.** `WidgetConfigActivity` is declared as `android:configure` on
+both providers, so the launcher opens it when a widget is dropped and again on reconfigure
+(`android:widgetFeatures="reconfigurable"`). It receives `EXTRA_APPWIDGET_ID`, offers the four
+scopes — "most important limits", "all accounts", one provider, one account — upserts a single
+`WidgetConfigEntity` through `WidgetConfigDao`, repaints so the widget lands showing the chosen
+scope, and returns `RESULT_OK` with the id.
+
+The result is set to `RESULT_CANCELED` first and only flipped on an explicit choice. That is
+the framework contract: backing out removes the widget rather than leaving an unconfigured one
+on the home screen. The activity is not exported — only the system starts it, through the
+`APPWIDGET_CONFIGURE` action.
+
+This screen was missing for a while, and the cost was larger than "a setting you cannot
+change": with no row ever written, `WidgetScope.fromName(null)` sent every widget down the
+`MOST_CRITICAL` path, so `ACCOUNT` and `PROVIDER` were unreachable code and two widgets placed
+to watch two different Codex accounts rendered identically.
 
 ## The data path, and why a token cannot reach the home screen
 

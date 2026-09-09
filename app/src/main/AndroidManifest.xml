@@ -43,6 +43,19 @@
             </intent-filter>
         </activity>
 
+        <!--
+          Opened by the launcher when a widget is dropped. Not exported: only the system
+          starts it, via the APPWIDGET_CONFIGURE action.
+        -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:exported="false"
+            android:theme="@style/Theme.UsageLimits">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".widget.CompactUsageWidgetReceiver"
             android:exported="true"
