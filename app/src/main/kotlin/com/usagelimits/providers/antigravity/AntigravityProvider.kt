@@ -307,7 +307,12 @@ class AntigravityProvider(
             JsonObject.serializer(),
             buildJsonObject {
                 putJsonObject("metadata") {
-                    put("ideType", "IDE_UNSPECIFIED")
+                    // ideType selects which product's onboarding record Cloud Code returns.
+                    // IDE_UNSPECIFIED is the *Gemini Code Assist* value; sending it here
+                    // returns the Gemini view, whose project carries none of the Antigravity
+                    // quota groups. CLIProxyAPI-Quota-Inspector keeps both maps side by side
+                    // (providers.go:43-52), which is what makes the distinction unambiguous.
+                    put("ideType", "ANTIGRAVITY")
                     put("platform", "PLATFORM_UNSPECIFIED")
                     put("pluginType", "GEMINI")
                 }

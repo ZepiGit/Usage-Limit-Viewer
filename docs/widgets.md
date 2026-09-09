@@ -159,18 +159,24 @@ Glance is not Compose. It emits `RemoteViews`, so there is no measurement, no cu
 no arbitrary layout, and no access to the app's process at draw time. Four consequences are
 visible in the code:
 
-**No tintable progress primitive.** Glance's progress indicator cannot be tinted per instance
-in a way that works across launchers and API levels, and the whole point of these bars is that
-their colour carries the severity. So `UsageBar` is two nested `Box`es: a track with a
-`cornerRadius`, and inside it a filled box with the severity colour.
+**The bars use Glance's own progress indicator.** `androidx.glance.appwidget.LinearProgressIndicator`
+accepts a per-instance `color` and `backgroundColor` and fills whatever width its modifier
+gives it, which is exactly what these bars need — the colour carries the severity and the
+width has to follow the tile.
 
-**No fractional width measurement.** There is no `fillMaxWidth(fraction)` a child can resolve
-against a parent whose width Glance does not know at composition time. `UsageBar` therefore
-takes an explicit `maxWidth: Int` in dp — 62 inside a compact tile, 88 inside a detailed row —
-and computes `filled = maxWidth * fraction`, with a 4dp floor so a small non-zero value still
-shows a sliver instead of vanishing. Those two constants are the reason the row widths
-(52dp label, 42dp percent) are fixed too: everything in the row has to add up to something that
-fits without measurement.
+This was originally hand-rolled as two nested `Box`es with an explicit `maxWidth: Int` in dp,
+on the mistaken belief that Glance had no tintable primitive. That was a real defect, not just
+extra code: a compact tile is about 31dp wide at the 250dp size bucket, but the bar was told it
+had 62dp. The fill was clipped at the tile edge, so **every window above roughly half remaining
+painted as a completely full bar** — a 55 % quota looked identical to an untouched one. The
+lesson is worth keeping: in a layout system that does not measure, a hardcoded width is a
+silent wrong answer rather than a visible overflow.
+
+**No fractional width measurement.** There is still no `fillMaxWidth(fraction)` a child can
+resolve against a parent whose width Glance does not know at composition time — which is why
+the fraction has to be handed to a primitive that resolves it at inflation, rather than
+computed in the composable. Inside the detailed row the bar takes `defaultWeight()` so it
+absorbs whatever the fixed-width label and percent columns leave.
 
 **Glance cannot read the app's theme.** Composition happens for the launcher's process, so
 `MaterialTheme` and the app's `UsageColors` are not reachable. The handful of colours the

@@ -27,6 +27,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
@@ -123,44 +125,41 @@ fun UsageWindowRow(
             .fillMaxWidth()
             .semantics(mergeDescendants = true) { contentDescription = spoken },
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // Every region is proportional. Fixed widths summed to more than a 360dp phone can
+        // give, which starved the weighted bar to zero — the one element the screen exists to
+        // show. Weights keep the bar visible from the narrowest phone to a tablet.
         Text(
             text = window.label,
             style = MaterialTheme.typography.bodyMedium,
             color = UsageColors.TextSecondary,
             maxLines = 1,
-            modifier = Modifier.width(96.dp),
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(0.26f),
         )
         UsageBar(
             remainingPercent = remaining,
             severity = window.severity,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(0.24f),
         )
-        Spacer(Modifier.width(12.dp))
-        Row(
-            modifier = Modifier.width(104.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = percentText,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = SeverityPalette.barColor(remaining, window.severity),
-            )
-            Text(
-                text = qualifier,
-                style = MaterialTheme.typography.bodyMedium,
-                color = UsageColors.TextTertiary,
-                maxLines = 1,
-            )
-        }
         Text(
-            text = resetText?.removePrefix("Reset in ")?.let { "Reset $it" } ?: "—",
+            text = percentText,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = SeverityPalette.barColor(remaining, window.severity),
+            maxLines = 1,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(0.14f),
+        )
+        Text(
+            text = resetText?.removePrefix("Reset in ")?.let { "Reset $it" } ?: qualifier,
             style = MaterialTheme.typography.bodyMedium,
             color = UsageColors.TextSecondary,
             maxLines = 1,
-            modifier = Modifier.width(112.dp),
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(0.30f),
         )
     }
 }

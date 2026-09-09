@@ -12,6 +12,7 @@ import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.LinearProgressIndicator
 import androidx.compose.ui.unit.DpSize
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
@@ -32,6 +33,7 @@ import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
+import androidx.glance.unit.ColorProvider
 import com.usagelimits.MainActivity
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.time.Countdown
@@ -71,32 +73,21 @@ private object W {
 /**
  * A usage bar.
  *
- * Glance has no progress primitive that can be tinted per-item, so the bar is two nested
- * boxes with a computed width. [maxWidth] has to be supplied because Glance cannot measure a
- * fractional width at layout time.
+ * Glance's own LinearProgressIndicator fills the width it is given, so the bar is correct at
+ * every launcher grid size. The previous hand-rolled version took a fixed dp width, which was
+ * wider than a tile actually gets: the fill was clipped, and anything above roughly half
+ * remaining painted as a full bar — a confidently wrong number on the home screen.
  */
 @androidx.compose.runtime.Composable
-private fun UsageBar(row: WidgetRow, maxWidth: Int) {
-    val fraction = ((row.remainingPercent ?: 0.0) / 100.0).coerceIn(0.0, 1.0)
-    val filled = (maxWidth * fraction).toInt().coerceAtLeast(if (fraction > 0) 4 else 0)
+private fun UsageBar(row: WidgetRow, modifier: GlanceModifier = GlanceModifier) {
+    val fraction = ((row.remainingPercent ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
 
-    Box(
-        modifier = GlanceModifier
-            .width(maxWidth.dp)
-            .height(6.dp)
-            .cornerRadius(3.dp)
-            .background(W.Track),
-    ) {
-        if (filled > 0) {
-            Box(
-                modifier = GlanceModifier
-                    .width(filled.dp)
-                    .height(6.dp)
-                    .cornerRadius(3.dp)
-                    .background(W.bar(row)),
-            ) {}
-        }
-    }
+    LinearProgressIndicator(
+        progress = fraction,
+        modifier = modifier.fillMaxWidth().height(6.dp),
+        color = ColorProvider(W.bar(row)),
+        backgroundColor = ColorProvider(W.Track),
+    )
 }
 
 private fun percentText(row: WidgetRow): String =
@@ -201,7 +192,7 @@ class CompactUsageWidget : GlanceAppWidget() {
             )
             if (row != null) {
                 Spacer(GlanceModifier.height(5.dp))
-                UsageBar(row, maxWidth = 62)
+                UsageBar(row)
             }
         }
     }
@@ -360,7 +351,7 @@ class DetailedUsageWidget : GlanceAppWidget() {
                         modifier = GlanceModifier.width(52.dp),
                         maxLines = 1,
                     )
-                    UsageBar(row, maxWidth = 88)
+                    UsageBar(row, GlanceModifier.defaultWeight())
                     Spacer(GlanceModifier.width(8.dp))
                     Text(
                         text = percentText(row),
