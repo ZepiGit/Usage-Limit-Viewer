@@ -234,9 +234,11 @@ each costs:
   here rather than hidden because it is the sort of thing that only breaks in production.
 - **`/wham/usage` starts requiring the beta headers.** Usage would fail with 403 →
   "Access denied for this account". The fix is one line in `ProviderEndpoints`.
-- **Reset credits disappear or change type strings.** Cost: the Resets screen shows nothing
-  for the account. Usage is untouched, because credits are fetched inside a `runCatching` with
-  the embedded copy as a fallback.
+- **Reset credits disappear or change type strings.** Cost: the account detail screen's reset
+  credit card reads "None available" and loses its button, and the Overview card for the
+  account drops its "N available" line. The Resets screen is not involved — it lists upcoming
+  window rollover times and nothing else. Usage is untouched, because credits are fetched
+  inside a `runCatching` with the embedded copy as a fallback.
 - **Bot detection.** ChatGPT's backend sits behind the same kind of edge protection Anthropic
   uses. The app sends plain, honest HTTPS with a user agent that names it. If the edge rejects
   that, the correct outcome is a clear error, not an evasion attempt; there is no TLS
