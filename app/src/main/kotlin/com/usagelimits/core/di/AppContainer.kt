@@ -37,6 +37,8 @@ class AppContainer(context: Context) {
 
     val widgetConfigDao by lazy { database.widgetConfigDao() }
 
+    val notificationDao by lazy { database.notificationDao() }
+
     val providerRegistry: ProviderRegistry by lazy { ProviderRegistry(httpClient) }
 
     val settingsStore: SettingsStore by lazy { SettingsStore(appContext) }

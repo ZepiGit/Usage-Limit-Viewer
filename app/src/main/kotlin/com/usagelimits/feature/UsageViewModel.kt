@@ -200,8 +200,20 @@ class UsageViewModel(
         }
     }
 
-    fun setNotifyLowUsage(enabled: Boolean) {
-        viewModelScope.launch { container.settingsStore.setNotifyOnLowUsage(enabled) }
+    fun setNotifyBelow20(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setNotifyBelow20Percent(enabled) }
+    }
+
+    fun setNotifyBelow10(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setNotifyBelow10Percent(enabled) }
+    }
+
+    fun setNotifyResetApproaching(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setNotifyOnResetApproaching(enabled) }
+    }
+
+    fun setNotifyCreditExpiring(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setNotifyOnResetCreditExpiring(enabled) }
     }
 
     fun setNotifyExhausted(enabled: Boolean) {

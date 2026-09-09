@@ -37,7 +37,11 @@ class SyncWorker(
         // Widgets read the cache, so they only need waking once the cache has moved.
         WidgetUpdater.refreshAll(applicationContext)
 
-        NotificationPublisher(applicationContext, container.settingsStore)
+        NotificationPublisher(
+            applicationContext,
+            container.settingsStore,
+            container.notificationDao,
+        )
             .publishFor(container.repository.accountUsageOnce())
 
         return if (outcomes.isEmpty() || outcomes.any { it.success }) {
