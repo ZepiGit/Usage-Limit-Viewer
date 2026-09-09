@@ -58,6 +58,13 @@ data class UsageSnapshotEntity(
     val windowsJson: String,
     /** Normalised [com.usagelimits.core.model.ResetCredit] list as JSON. */
     val resetCreditsJson: String,
+    /**
+     * The count the provider reports, which is authoritative over the row count.
+     *
+     * The credit list can be truncated or filtered while the count stays exact, so gating the
+     * redeem button on the list size would hide it from a user who actually holds credits.
+     */
+    val resetCreditCount: Int? = null,
 )
 
 /**

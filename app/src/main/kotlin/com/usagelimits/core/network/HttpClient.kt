@@ -105,8 +105,13 @@ class HttpClient(
      * never traverse an unencrypted connection.
      */
     private fun requireSecure(url: String) {
-        if (url.startsWith("https://")) return
-        val isLoopback = url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1")
+        if (url.startsWith("https://", ignoreCase = true)) return
+
+        // A prefix match would have accepted http://localhost.attacker.example/ and
+        // http://127.0.0.1.evil.com/ — both are ordinary remote hosts. Compare the parsed
+        // host instead.
+        val host = runCatching { java.net.URI(url).host }.getOrNull()?.lowercase()
+        val isLoopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
         if (!isLoopback) throw ProviderException.Unexpected("refusing plaintext request")
     }
 

@@ -20,7 +20,7 @@ Four screens and two widgets, all reading the same local cache:
 
 A background pass refreshes every account on a schedule (30 minutes by default, 15 minutes
 minimum — WorkManager's floor for periodic work), and also on app start, on resume, and when
-the widget's refresh button is tapped. Pull-to-refresh, finishing a login and spending a reset
+the widget's refresh button is tapped. The refresh button, finishing a login and spending a reset
 credit refresh in the foreground immediately. Accounts refresh independently, so one expired
 token cannot stop the others, and when a refresh fails the previous numbers stay on screen with
 their real age rather than being blanked.

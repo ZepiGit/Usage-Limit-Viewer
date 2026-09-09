@@ -146,6 +146,7 @@ class UsageRepository(
                     kotlinx.serialization.builtins.ListSerializer(StoredCredit.serializer()),
                     snapshot.resetCredits.map { it.toStored() },
                 ),
+                resetCreditCount = snapshot.resetCreditCount,
             ),
         )
         if (snapshot.status != SnapshotStatus.FAILED) {
@@ -171,6 +172,7 @@ class UsageRepository(
                 errorMessage = message,
                 windowsJson = previous?.windowsJson ?: "[]",
                 resetCreditsJson = previous?.resetCreditsJson ?: "[]",
+                resetCreditCount = previous?.resetCreditCount,
             ),
         )
     }
@@ -206,6 +208,7 @@ class UsageRepository(
                 resetCreditsJson,
             ).map { it.toDomain() }
         }.getOrDefault(emptyList()),
+        resetCreditCount = resetCreditCount,
         errorMessage = errorMessage,
     )
 

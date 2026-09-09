@@ -258,10 +258,17 @@ Behaviour derived from, and re-read at, these commits:
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`
   for the `loadCodeAssist` and `retrieveUserQuotaSummary` paths, the three-host fallback
   order, and the `antigravity/cli` user-agent shape.
-- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — the finding that `retrieveUserQuotaSummary`
-  returns pre-grouped `groups[]`/`buckets[]` with a `remainingFraction`, which is what makes
-  the "never enumerate models" rule in §5 possible, and the cross-check on `bucketId`,
-  `window` and `resetTime`.
+- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — the source for the `loadCodeAssist`
+  metadata block, and the decisive one: it keeps `geminiLoadMetadata` and
+  `antigravityLoadMetadata` side by side (`providers.go:43-52`), which is how the app's
+  original use of the *Gemini* triple was identified as a copied constant rather than a
+  deliberate simplification. It does **not** cover `retrieveUserQuotaSummary` — that string
+  does not appear in the repository, and its Antigravity path uses `fetchAvailableModels` with
+  per-model `quotaInfo`. An earlier draft credited it with the `groups[]`/`buckets[]` finding,
+  which was wrong.
+
+**Single-sourced.** The `groups[]`/`buckets[]` shape the whole parser is built on rests on the
+Management Center alone.
 
 The client id and the installed-app client secret are the public values the first-party client
 ships; the secret's value is not repeated in this document, only in

@@ -107,13 +107,29 @@ class LoopbackServer(private val port: Int) : Closeable {
     private fun decode(value: String): String =
         runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
 
+    private fun escapeHtml(value: String): String = buildString(value.length) {
+        for (ch in value) {
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&#39;")
+                else -> append(ch)
+            }
+        }
+    }
+
     private fun httpResponse(result: AuthorizationResponse): String {
         val ok = result.error == null && result.code != null
         val title = if (ok) "Signed in" else "Sign-in failed"
+        // error/error_description are attacker-influenced: any local app can open
+        // http://127.0.0.1:PORT/?error=<img src=x onerror=...> while the listener is up.
+        // Interpolating them raw would execute script at this origin, so they are escaped.
         val detail = if (ok) {
             "You can close this tab and return to Usage Limits."
         } else {
-            result.errorDescription ?: result.error ?: "No authorization code was returned."
+            escapeHtml(result.errorDescription ?: result.error ?: "No authorization code was returned.")
         }
         val html = """
             <!doctype html>

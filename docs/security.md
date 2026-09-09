@@ -168,15 +168,23 @@ real login page from a fake one.
 ## Transport
 
 `HttpClient` is the only outbound HTTP path in the app and it refuses to send a plaintext
-request. The exception, and there is exactly one, is a loopback URL — `http://localhost…` or
-`http://127.0.0.1…` — which is the OAuth redirect that arrives on the app's own listening
-socket. That connection never leaves the device and cannot be given a TLS certificate anyone
+request. The exception, and there is exactly one, is a loopback host — the parsed host must be
+exactly `localhost`, `127.0.0.1` or `::1`, which is the OAuth redirect that arrives on the
+app's own listening socket. This started as a `startsWith("http://localhost")` prefix test,
+which would also have accepted `http://localhost.attacker.example/` — an ordinary remote host.
+Comparing the parsed host is the difference between a rule and the appearance of one. That connection never leaves the device and cannot be given a TLS certificate anyone
 would trust, which is why RFC 8252 §7.3 endorses it. Everything else must be `https://` or the
 request throws before a byte is sent.
 
 The `LoopbackServer` binds explicitly to `InetAddress.getByName("127.0.0.1")` with a backlog of
 one, so nothing on the network can reach it, serves exactly one request, and is closed in a
-`finally` block. It parses only the request line and answers with a small static page.
+`finally` block. It parses only the request line.
+
+The page it answers with is **not** static, and an earlier version of this document called it
+that. It interpolates the provider's `error_description`, which is attacker-influenced: any
+local app can open `http://127.0.0.1:54545/?error=<img src=x onerror=…>` while the listener is
+up and get script execution at that origin. Those values are now HTML-escaped. Response
+splitting was never possible, since `Content-Length` is computed from the rendered body.
 
 xAI is the one provider whose endpoints are discovered rather than hardcoded, via its OIDC
 discovery document. Because that document arrives over the network, both endpoints it names
@@ -288,15 +296,27 @@ Both providers pin their redirect URIs in client registration, so the app cannot
 ephemeral port; it must bind exactly what the provider will redirect to.
 
 Two consequences. First, availability: if another process holds the port, login fails.
-`LoopbackServer.start()` binds up front, before the browser is launched, so the user gets a
-clear "another app may be using this port" message instead of a browser tab that hangs.
+`LoopbackServer.start()` is called from `beginLogin`, so the port is bound *before* the
+authorization URL is handed back and the browser is launched. That ordering matters and was
+originally wrong: the browser was opened first and the socket bound afterwards, so the flow
+could mint a real authorization code and only then discover it had nowhere to land. The
+user-facing message is still weaker than this section once claimed — `ProviderException.Unexpected`
+maps through `userMessage()` to a fixed string, so the specific port text does not reach the
+snackbar. Binding early is the part that actually protects the flow.
 Second, and more interesting: while the listener is open, *any* local process could connect to
 it and deliver a fabricated `code`/`state`. The state check is what defeats that — an attacker
 would have to guess the 32-byte random state to have their code accepted — and the window is
 narrow: the socket accepts exactly one request, has a backlog of one, and is closed in a
-`finally` block. A hostile local app could also squat the port before the user logs in and
-capture the real code; but PKCE means the captured code is not redeemable without the verifier
-that never left this process.
+`finally` block.
+
+That single-accept behaviour is not purely a mitigation, and it is worth stating plainly: a
+local app that connect-polls the port can win the one `accept()` the server performs, after
+which Claude and Antigravity login can never complete while that app is installed. The failure
+is denial of login, not compromise — and the error the user sees blames the wrong thing.
+
+A hostile local app could also squat the port before the user logs in and capture the real
+code; PKCE means the captured code is not redeemable without the verifier that never left this
+process.
 
 Rejected alternatives: an ephemeral port (the provider would redirect to the registered port
 regardless, so nothing would arrive); a custom URI scheme or Android App Link (would have to be
