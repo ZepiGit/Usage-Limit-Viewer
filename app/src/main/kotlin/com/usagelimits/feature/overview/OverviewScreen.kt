@@ -105,10 +105,14 @@ fun OverviewScreen(
         }
 
         items(
-            items = state.accounts.sortedByDescending { it.snapshot?.severityAt(nowMs)?.ordinal ?: 99 },
+            items = state.accounts.sortedByDescending {
+                it.snapshot?.severityAt(nowMs, state.staleAfterMs)?.ordinal ?: 99
+            },
             key = { it.account.localId },
         ) { usage ->
-            AccountCard(usage, nowMs) { onAccountClick(usage.account.localId) }
+            AccountCard(usage, nowMs, state.staleAfterMs) {
+                onAccountClick(usage.account.localId)
+            }
         }
 
         item { AddAccountCard(onAddAccount) }
@@ -314,10 +318,11 @@ private fun headline(state: UsageUiState, nowMs: Long): String = when (
 fun AccountCard(
     usage: AccountUsage,
     nowMs: Long,
+    staleAfterMs: Long,
     onClick: () -> Unit,
 ) {
     val snapshot = usage.snapshot
-    val severity = snapshot?.severityAt(nowMs) ?: Severity.STALE
+    val severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE
 
     UsageCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

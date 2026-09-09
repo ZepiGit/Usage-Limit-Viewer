@@ -3,10 +3,12 @@ package com.usagelimits.widget
 import android.content.Context
 import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import kotlinx.coroutines.flow.first
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.updateAll
 import androidx.glance.action.ActionParameters
 import com.usagelimits.UsageLimitsApp
+import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.WidgetScope
 import com.usagelimits.core.sync.SyncWorker
 
@@ -44,12 +46,15 @@ object WidgetUpdater {
 
         val config = appWidgetId?.let { container.widgetConfigDao.get(it) }
 
+        val interval = container.settingsStore.settings.first().syncIntervalMinutes
+
         return WidgetDataBuilder.build(
             all = container.repository.accountUsageOnce(),
             nowMs = System.currentTimeMillis(),
             scope = WidgetScope.fromName(config?.scope),
             accountId = config?.accountId,
             providerId = config?.provider,
+            staleAfterMs = Severity.staleAfterMs(interval),
         )
     }
 }

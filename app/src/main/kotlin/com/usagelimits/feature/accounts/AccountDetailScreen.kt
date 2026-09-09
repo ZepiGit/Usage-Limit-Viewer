@@ -48,6 +48,7 @@ import com.usagelimits.ui.theme.UsageColors
 fun AccountDetailScreen(
     usage: AccountUsage?,
     nowMs: Long,
+    staleAfterMs: Long,
     resetInFlight: Boolean,
     supportsResetCredits: Boolean,
     onRefresh: () -> Unit,
@@ -106,7 +107,7 @@ fun AccountDetailScreen(
                         color = UsageColors.TextSecondary,
                     )
                 }
-                snapshot?.severityAt(nowMs)?.let { StatusPill(it) }
+                snapshot?.severityAt(nowMs, staleAfterMs)?.let { StatusPill(it) }
             }
         }
 

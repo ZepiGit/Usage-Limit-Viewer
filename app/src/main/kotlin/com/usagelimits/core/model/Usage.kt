@@ -119,14 +119,15 @@ data class UsageSnapshot(
      * succeeded, so day-old numbers still read "Healthy". Showing a confidently green status
      * over stale data is the exact failure this app exists to prevent.
      */
-    fun severityAt(nowMs: Long): Severity {
+    fun severityAt(nowMs: Long, staleAfterMs: Long = Severity.STALE_AFTER_MS): Severity {
         val base = severity
         if (base == Severity.ERROR) return base
         val age = nowMs - fetchedAt
-        return if (age >= Severity.STALE_AFTER_MS) Severity.STALE else base
+        return if (age >= staleAfterMs) Severity.STALE else base
     }
 
-    fun isStaleAt(nowMs: Long): Boolean = nowMs - fetchedAt >= Severity.STALE_AFTER_MS
+    fun isStaleAt(nowMs: Long, staleAfterMs: Long = Severity.STALE_AFTER_MS): Boolean =
+        nowMs - fetchedAt >= staleAfterMs
 }
 
 /**
