@@ -62,7 +62,8 @@ class CodexProvider(
         val deviceAuthId = JsonSupport.string(payload, "device_auth_id", "deviceAuthId")
             ?: throw ProviderException.MalformedPayload("device response had no device_auth_id")
 
-        val intervalSeconds = JsonSupport.long(payload, "interval") ?: DEFAULT_POLL_SECONDS
+        val intervalSeconds = JsonSupport.long(payload, "interval")
+            ?.takeIf { it >= DEFAULT_POLL_SECONDS } ?: DEFAULT_POLL_SECONDS
 
         return LoginChallenge.DeviceCode(
             // The device id is not shown to the user; it is carried through the challenge so
@@ -167,7 +168,7 @@ class CodexProvider(
                     "client_id" to Codex.CLIENT_ID,
                     "grant_type" to "refresh_token",
                     "refresh_token" to refreshToken,
-                    "scope" to Codex.SCOPE,
+                    "scope" to REFRESH_SCOPE,
                 ),
             ),
         )
@@ -190,7 +191,8 @@ class CodexProvider(
             email = JwtClaims.string(claims, "email"),
             displayName = null,
             plan = JsonSupport.string(auth, "chatgpt_plan_type"),
-            attributes = mapOf(ATTR_ACCOUNT_ID to accountId),
+            attributes = JsonSupport.string(auth, "chatgpt_account_id")
+                ?.let { mapOf(ATTR_ACCOUNT_ID to it) } ?: emptyMap(),
         )
     }
 
@@ -284,8 +286,8 @@ class CodexProvider(
         put("Content-Type", "application/json")
         put("Accept", "application/json")
         put("User-Agent", Codex.USER_AGENT)
-        val accountId = account.attributes[ATTR_ACCOUNT_ID] ?: account.externalAccountId
-        if (accountId.isNotBlank()) put(Codex.HEADER_ACCOUNT_ID, accountId)
+        val accountId = account.attributes[ATTR_ACCOUNT_ID]
+        if (!accountId.isNullOrBlank()) put(Codex.HEADER_ACCOUNT_ID, accountId)
     }
 
     private fun toCredentials(payload: JsonObject): OAuthCredentials {
@@ -308,6 +310,9 @@ class CodexProvider(
 
     companion object {
         const val ATTR_ACCOUNT_ID = "chatgpt_account_id"
+
+        // Deliberately differs from the authorize scope to match the refresh grant.
+        private const val REFRESH_SCOPE = "openid profile email"
 
         /** Packs the user code and the device id into one challenge field. */
         private const val CODE_SEPARATOR = "|"
