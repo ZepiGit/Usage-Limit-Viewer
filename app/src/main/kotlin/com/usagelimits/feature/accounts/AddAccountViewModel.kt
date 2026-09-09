@@ -13,6 +13,8 @@ import com.usagelimits.core.network.ProviderException
 import com.usagelimits.core.sync.userMessage
 import com.usagelimits.providers.LoginChallenge
 import com.usagelimits.providers.codex.CodexProvider
+import com.usagelimits.providers.xai.XaiProvider
+import com.usagelimits.widget.WidgetUpdater
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -75,10 +77,12 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
 
                 when (challenge) {
                     is LoginChallenge.DeviceCode -> {
-                        val display = if (providerId == ProviderId.CODEX) {
-                            CodexProvider.displayCode(challenge.userCode)
-                        } else {
-                            challenge.userCode.substringBefore('|')
+                        // The packed challenge carries the device code and token endpoint
+                        // alongside the user code; only the user code may ever be shown.
+                        val display = when (providerId) {
+                            ProviderId.CODEX -> CodexProvider.displayCode(challenge.userCode)
+                            ProviderId.XAI -> XaiProvider.displayCode(challenge.userCode)
+                            else -> challenge.userCode.substringBefore('|')
                         }
                         _state.value = AddAccountState.AwaitingDeviceCode(
                             provider = providerId,
@@ -112,6 +116,9 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
                 container.credentialStore.save(account.credentialReference, credentials)
 
                 container.syncEngine.syncAccount(account)
+                // A newly added account should appear on the home screen immediately, not at
+                // the next background pass.
+                WidgetUpdater.refreshAll(context.applicationContext)
 
                 _state.value = AddAccountState.Success(providerId, account.label)
             } catch (e: ProviderException) {
