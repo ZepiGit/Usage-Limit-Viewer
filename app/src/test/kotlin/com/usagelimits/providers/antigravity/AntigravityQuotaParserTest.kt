@@ -267,4 +267,57 @@ class AntigravityQuotaParserTest {
             ).isEmpty(),
         )
     }
+
+@Test
+    fun `the production quota payload carries two groups and an integer remaining fraction`() {
+        // Pins real production payload shapes captured from Antigravity against inverted consumption,
+        // integer-fraction exhaustion, collapsed groups and incorrect period categorisation.
+        // This real production payload has no ideType field anywhere; requiring it would drop valid quotas.
+        val payload = JsonSupport.parseObject(
+            """
+            { "groups": [
+               { "displayName": "Gemini Models",
+                 "buckets": [
+                   { "bucketId": "gemini-weekly", "displayName": "Weekly Limit Remaining",
+                     "window": "weekly", "resetTime": "2026-09-10T18:54:44Z",
+                     "description": "You have used some of your weekly limit.",
+                     "remainingFraction": 0.5309938 },
+                   { "bucketId": "gemini-5h", "displayName": "Five Hour Limit Remaining",
+                     "window": "5h", "resetTime": "2026-09-10T01:26:47Z",
+                     "remainingFraction": 0.9803985 } ] },
+               { "displayName": "Claude and GPT models",
+                 "buckets": [
+                   { "bucketId": "3p-weekly", "window": "weekly",
+                     "resetTime": "2026-09-16T21:14:41Z", "remainingFraction": 1 },
+                   { "bucketId": "3p-5h", "window": "5h",
+                     "resetTime": "2026-09-10T02:14:41Z", "remainingFraction": 1 } ] } ] }
+            """.trimIndent()
+        )
+
+        val windows = AntigravityQuotaParser.parse(payload, now)
+
+        assertEquals(4, windows.size)
+        assertEquals(
+            setOf("gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h"),
+            windows.map { it.id }.toSet()
+        )
+
+        val geminiWeekly = windows.single { it.id == "gemini-weekly" }
+        val geminiFiveHour = windows.single { it.id == "gemini-5h" }
+        val thirdPartyWeekly = windows.single { it.id == "3p-weekly" }
+
+        assertEquals(46.90062, geminiWeekly.usedPercent!!, 0.001)
+        assertEquals(1.96015, geminiFiveHour.usedPercent!!, 0.001)
+        assertEquals(0.0, thirdPartyWeekly.usedPercent!!, 0.001)
+        windows.forEach { assertFalse(it.exhausted) }
+
+        assertTrue(geminiWeekly.group != null)
+        assertTrue(thirdPartyWeekly.group != null)
+        assertFalse(geminiWeekly.group == thirdPartyWeekly.group)
+
+        assertEquals(WindowCategory.WEEKLY, geminiWeekly.category)
+        assertEquals(604_800L, geminiWeekly.periodSeconds!!)
+        assertEquals(WindowCategory.FIVE_HOUR, geminiFiveHour.category)
+        assertEquals(18_000L, geminiFiveHour.periodSeconds!!)
+    }
 }
