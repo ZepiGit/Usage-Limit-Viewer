@@ -243,4 +243,66 @@ class XaiBillingParserTest {
 
         assertTrue(failure.message!!.contains("device_authorization_endpoint"))
     }
+
+@Test
+    fun `the production billing payloads use enum period types and cent objects`() {
+        // Pins real production payload shapes captured from xAI against enum miscategorisation:
+        // the type is USAGE_PERIOD_TYPE_WEEKLY, never bare "weekly"; matching that literal exactly
+        // misclassifies it. The timestamp-free variant prevents a measured span from rescuing that defect.
+        // These real production shapes also pin mishandled cent objects, spurious zero-cap windows
+        // and rejection of the unknown history and productUsage arrays.
+        val creditsPayload = JsonSupport.parseObject(
+            """
+            { "config": {
+                "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                                   "start": "2026-09-03T18:32:26.743829+00:00",
+                                   "end": "2026-09-10T18:32:26.743829+00:00" },
+                "creditUsagePercent": 64.0,
+                "onDemandCap": { "val": 0 }, "onDemandUsed": { "val": 0 },
+                "isUnifiedBillingUser": true, "prepaidBalance": { "val": 659 },
+                "productUsage": [ { "product": "GrokBuild", "usagePercent": 56.0 },
+                                  { "product": "GrokVoice" } ],
+                "billingPeriodEnd": "2026-09-10T18:32:26.743829+00:00" } }
+            """.trimIndent()
+        )
+        val billingPayload = JsonSupport.parseObject(
+            """
+            { "config": { "monthlyLimit": { "val": 1000 }, "used": { "val": 341 },
+                "onDemandCap": { "val": 0 },
+                "billingPeriodStart": "2026-09-01T00:00:00+00:00",
+                "billingPeriodEnd": "2026-10-01T00:00:00+00:00",
+                "history": [ { "billingCycle": { "year": 2026, "month": 8 },
+                               "includedUsed": { "val": 0 }, "totalUsed": { "val": 0 } } ] } }
+            """.trimIndent()
+        )
+        val creditsWithoutPeriodTimestamps = JsonSupport.parseObject(
+            """
+            { "config": {
+                "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY" },
+                "creditUsagePercent": 64.0,
+                "onDemandCap": { "val": 0 }, "onDemandUsed": { "val": 0 },
+                "isUnifiedBillingUser": true, "prepaidBalance": { "val": 659 },
+                "productUsage": [ { "product": "GrokBuild", "usagePercent": 56.0 },
+                                  { "product": "GrokVoice" } ],
+                "billingPeriodEnd": "2026-09-10T18:32:26.743829+00:00" } }
+            """.trimIndent()
+        )
+
+        val creditsWindows = XaiBillingParser.parseCredits(creditsPayload, now)
+        assertEquals(1, creditsWindows.size)
+        assertEquals(64.0, creditsWindows.single().usedPercent!!, 0.001)
+        assertEquals(WindowCategory.WEEKLY, creditsWindows.single().category)
+        assertFalse(creditsWindows.any { it.id == "xai-on-demand" })
+
+        val enumOnlyWindows = XaiBillingParser.parseCredits(creditsWithoutPeriodTimestamps, now)
+        assertEquals(1, enumOnlyWindows.size)
+        assertEquals(WindowCategory.WEEKLY, enumOnlyWindows.single().category)
+        assertEquals(64.0, enumOnlyWindows.single().usedPercent!!, 0.001)
+        assertFalse(enumOnlyWindows.any { it.id == "xai-on-demand" })
+
+        val billingWindows = XaiBillingParser.parseBilling(billingPayload, now)
+        val monthly = billingWindows.single { it.id == "xai-monthly" }
+        assertEquals(34.1, monthly.usedPercent!!, 0.001)
+        assertFalse(billingWindows.any { it.id == "xai-on-demand" })
+    }
 }
