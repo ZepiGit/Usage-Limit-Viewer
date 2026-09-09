@@ -265,6 +265,7 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                     AccountDetailScreen(
                         usage = usage,
                         nowMs = nowMs,
+                        staleAfterMs = state.staleAfterMs,
                         resetInFlight = resetInFlight == accountId,
                         supportsResetCredits = supportsCredits,
                         onRefresh = { accountId?.let(viewModel::refreshAccount) },

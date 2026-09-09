@@ -128,7 +128,9 @@ fun AccountsScreen(
         }
 
         items(visible, key = { it.account.localId }) { usage ->
-            AccountCard(usage, nowMs) { onAccountClick(usage.account.localId) }
+            AccountCard(usage, nowMs, state.staleAfterMs) {
+                onAccountClick(usage.account.localId)
+            }
         }
 
         item {

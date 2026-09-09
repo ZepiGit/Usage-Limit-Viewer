@@ -65,6 +65,14 @@ object WidgetDataBuilder {
         scope: WidgetScope,
         accountId: String?,
         providerId: String?,
+        /**
+         * How old a snapshot may be before it reads as stale.
+         *
+         * Passed in rather than taken from a constant so a widget agrees with the app about
+         * what "stale" means — and so the three-hour sync interval the app offers does not
+         * grey out every tile permanently.
+         */
+        staleAfterMs: Long = Severity.STALE_AFTER_MS,
     ): WidgetSnapshot {
         val selected = when (scope) {
             WidgetScope.ACCOUNT -> all.filter { it.account.localId == accountId }
@@ -74,7 +82,7 @@ object WidgetDataBuilder {
 
         if (selected.isEmpty()) return WidgetSnapshot.Empty
 
-        val accounts = selected.map { it.toWidgetAccount(nowMs) }
+        val accounts = selected.map { it.toWidgetAccount(nowMs, staleAfterMs) }
 
         // For the auto scope, lead with whatever is closest to running out — see [criticality].
         val ordered = if (scope == WidgetScope.MOST_CRITICAL) {
@@ -135,7 +143,7 @@ object WidgetDataBuilder {
             .minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
             ?.toRow()
 
-    private fun AccountUsage.toWidgetAccount(nowMs: Long): WidgetAccount {
+    private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
 
         // Show the two horizons that matter, not every window an account reports — a widget
@@ -153,7 +161,7 @@ object WidgetDataBuilder {
             },
             subtitle = account.maskedEmail,
             rows = rows,
-            severity = snapshot?.severityAt(nowMs) ?: Severity.STALE,
+            severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE,
         )
     }
 

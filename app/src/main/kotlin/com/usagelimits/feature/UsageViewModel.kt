@@ -49,8 +49,16 @@ data class UsageUiState(
 ) {
     val accountCount: Int get() = accounts.size
 
+    /**
+     * How old a snapshot may be before this screen stops trusting it.
+     *
+     * Derived from the interval the user chose rather than fixed, because at the three-hour
+     * setting the app offers, a fixed hour marks every account stale permanently.
+     */
+    val staleAfterMs: Long get() = Severity.staleAfterMs(settings.syncIntervalMinutes)
+
     fun healthyCountAt(nowMs: Long): Int =
-        accounts.count { it.snapshot?.severityAt(nowMs) == Severity.HEALTHY }
+        accounts.count { it.snapshot?.severityAt(nowMs, staleAfterMs) == Severity.HEALTHY }
 
     /** Newest data wins for the "last updated" line — it describes the screen as a whole. */
     val lastUpdated: Long?
@@ -60,7 +68,8 @@ data class UsageUiState(
         get() = accounts.mapNotNull { it.snapshot?.nextReset }.minOrNull()
 
     fun overallSeverityAt(nowMs: Long): Severity =
-        accounts.mapNotNull { it.snapshot?.severityAt(nowMs) }.maxOrNull() ?: Severity.STALE
+        accounts.mapNotNull { it.snapshot?.severityAt(nowMs, staleAfterMs) }.maxOrNull()
+            ?: Severity.STALE
 
     /** The single most-depleted window anywhere — what the summary card leads with. */
     val mostCritical: Pair<AccountUsage, UsageWindow>?
