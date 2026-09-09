@@ -410,6 +410,64 @@ class ClaudeUsageParserTest {
     }
 
     @Test
+    fun `the plan label keeps the tier multiplier`() {
+        // Captured live: the profile reports `default_claude_max_5x`. The has_claude_max
+        // boolean cannot distinguish that from Max 20x, which is a fivefold difference in the
+        // very number this app exists to show.
+        val profile = JsonSupport.parseObject(
+            """
+            {
+              "account": { "has_claude_max": true, "has_claude_pro": false },
+              "organization": {
+                "organization_type": "claude_max",
+                "rate_limit_tier": "default_claude_max_5x",
+                "subscription_status": "active"
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals("Max 5×", ClaudeUsageParser.parsePlan(profile))
+    }
+
+    @Test
+    fun `an unrecognised tier still yields something readable`() {
+        // Anthropic adds tiers. A lookup table would render a new one as no plan at all, which
+        // reads as "not subscribed" rather than "not recognised".
+        val profile = JsonSupport.parseObject(
+            """{ "organization": { "rate_limit_tier": "default_claude_team_premium_20x" } }""",
+        )
+
+        assertEquals("Team Premium 20×", ClaudeUsageParser.parsePlan(profile))
+    }
+
+    @Test
+    fun `a tier with no multiplier reads as the plan name alone`() {
+        val profile = JsonSupport.parseObject(
+            """{ "organization": { "rate_limit_tier": "default_claude_pro" } }""",
+        )
+
+        assertEquals("Pro", ClaudeUsageParser.parsePlan(profile))
+    }
+
+    @Test
+    fun `the booleans remain the fallback when no tier is reported`() {
+        assertEquals(
+            "Max",
+            ClaudeUsageParser.parsePlan(
+                JsonSupport.parseObject("""{ "account": { "has_claude_max": true } }"""),
+            ),
+        )
+        assertEquals(
+            "Pro",
+            ClaudeUsageParser.parsePlan(
+                JsonSupport.parseObject("""{ "account": { "has_claude_pro": true } }"""),
+            ),
+        )
+        assertNull(ClaudeUsageParser.parsePlan(JsonSupport.parseObject("{}")))
+    }
+
+    @Test
     fun `an empty payload yields no windows`() {
         assertTrue(ClaudeUsageParser.parse(JsonSupport.parseObject("{}"), now).isEmpty())
     }

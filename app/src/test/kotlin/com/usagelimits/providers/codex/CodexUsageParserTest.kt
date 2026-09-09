@@ -656,6 +656,35 @@ class CodexUsageParserTest {
     }
 
     @Test
+    fun `the dedicated credits endpoint and the embedded copy carry different fields`() {
+        // Both captured live. The asymmetry is the point: reading the applicable count off
+        // whichever source answered left the redeem button ungated exactly when the
+        // authoritative call succeeded, because that endpoint does not report it at all.
+        val dedicated = JsonSupport.parseObject(
+            """
+            {
+              "credits": [],
+              "available_count": 0,
+              "total_earned_count": 0,
+              "immediate_reset_purchase_eligible": false,
+              "history_enabled": true
+            }
+            """.trimIndent(),
+        )
+        val embedded = JsonSupport.parseObject(
+            """{ "available_count": 2, "applicable_available_count": 0 }""",
+        )
+
+        assertEquals(0, CodexUsageParser.availableCreditCount(dedicated))
+        assertNull(CodexUsageParser.applicableCreditCount(dedicated))
+
+        assertEquals(2, CodexUsageParser.availableCreditCount(embedded))
+        assertEquals(0, CodexUsageParser.applicableCreditCount(embedded))
+        // No `credits` array in the embedded copy, so the rows must come from the endpoint.
+        assertTrue(CodexUsageParser.parseResetCredits(embedded).isEmpty())
+    }
+
+    @Test
     fun `an absent applicable count stays null rather than collapsing to zero`() {
         // Null means "the provider drew no distinction", which the model resolves to the held
         // count. Reading it as zero would silently disable the redeem button for every
