@@ -221,6 +221,7 @@ class CodexProvider(
                 CreditsResult(
                     credits = CodexUsageParser.parseResetCredits(embedded),
                     count = CodexUsageParser.availableCreditCount(embedded),
+                    applicable = CodexUsageParser.applicableCreditCount(embedded),
                 )
             }
 
@@ -231,10 +232,15 @@ class CodexProvider(
             windows = windows,
             resetCredits = credits.credits,
             resetCreditCount = credits.count ?: credits.credits.size,
+            applicableResetCreditCount = credits.applicable,
         )
     }
 
-    private data class CreditsResult(val credits: List<ResetCredit>, val count: Int?)
+    private data class CreditsResult(
+        val credits: List<ResetCredit>,
+        val count: Int?,
+        val applicable: Int?,
+    )
 
     private suspend fun fetchResetCredits(
         account: ProviderAccount,
@@ -248,6 +254,7 @@ class CodexProvider(
         return CreditsResult(
             credits = CodexUsageParser.parseResetCredits(payload),
             count = CodexUsageParser.availableCreditCount(payload),
+            applicable = CodexUsageParser.applicableCreditCount(payload),
         )
     }
 

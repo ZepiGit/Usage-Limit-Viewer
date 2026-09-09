@@ -95,4 +95,38 @@ class StalenessTest {
         )
         assertEquals(1, snapshot.spendableResetCredits)
     }
+
+    @Test
+    fun `credits that do not apply to the current limit are held but not spendable`() {
+        // Production reports available_count and applicable_available_count side by side. A
+        // user holding two credits that apply to nothing must still be told they hold two —
+        // and must not be offered a button the provider would refuse.
+        val snapshot = UsageSnapshot(
+            accountId = "acct",
+            fetchedAt = fetchedAt,
+            status = SnapshotStatus.OK,
+            windows = emptyList(),
+            resetCredits = emptyList(),
+            resetCreditCount = 2,
+            applicableResetCreditCount = 0,
+        )
+        assertEquals(2, snapshot.heldResetCredits)
+        assertEquals(0, snapshot.spendableResetCredits)
+    }
+
+    @Test
+    fun `an unstated applicable count leaves the held count spendable`() {
+        // Three of the four providers never report the distinction, so absent must mean
+        // "no distinction drawn", not "nothing can be spent".
+        val snapshot = UsageSnapshot(
+            accountId = "acct",
+            fetchedAt = fetchedAt,
+            status = SnapshotStatus.OK,
+            windows = emptyList(),
+            resetCredits = emptyList(),
+            resetCreditCount = 2,
+            applicableResetCreditCount = null,
+        )
+        assertEquals(2, snapshot.spendableResetCredits)
+    }
 }

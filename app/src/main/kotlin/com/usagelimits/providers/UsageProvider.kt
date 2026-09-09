@@ -26,6 +26,12 @@ data class UsageResult(
      * the count stays exact.
      */
     val resetCreditCount: Int? = null,
+    /**
+     * How many of those credits are spendable right now, when the provider distinguishes.
+     *
+     * Null means the provider does not report the distinction, not that none are spendable.
+     */
+    val applicableResetCreditCount: Int? = null,
 )
 
 /**

@@ -77,11 +77,22 @@ data class UsageSnapshot(
     val resetCredits: List<ResetCredit> = emptyList(),
     /** Provider-reported count; authoritative over [resetCredits].size when present. */
     val resetCreditCount: Int? = null,
+    /** Of [resetCreditCount], how many apply to the limit currently reached. Null if unstated. */
+    val applicableResetCreditCount: Int? = null,
     val errorMessage: String? = null,
 ) {
-    /** How many credits the user can actually spend right now. */
-    val spendableResetCredits: Int
+    /** How many credits the user holds, spendable or not — the number worth displaying. */
+    val heldResetCredits: Int
         get() = resetCreditCount ?: resetCredits.size
+
+    /**
+     * How many credits can actually be spent right now — what the redeem button is gated on.
+     *
+     * Falls back to the held count when the provider does not distinguish, so a provider that
+     * only reports one number keeps working exactly as before.
+     */
+    val spendableResetCredits: Int
+        get() = applicableResetCreditCount ?: heldResetCredits
 
     /** The window closest to running out — what the summary card leads with. */
     val mostCritical: UsageWindow?

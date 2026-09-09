@@ -65,6 +65,13 @@ data class UsageSnapshotEntity(
      * redeem button on the list size would hide it from a user who actually holds credits.
      */
     val resetCreditCount: Int? = null,
+    /**
+     * How many of those credits apply to the limit currently reached.
+     *
+     * Separate from [resetCreditCount] because the provider reports both and a zero here does
+     * not mean the user holds nothing — see CodexUsageParser.applicableCreditCount.
+     */
+    val applicableResetCreditCount: Int? = null,
 )
 
 /**

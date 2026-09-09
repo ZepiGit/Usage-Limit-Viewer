@@ -157,6 +157,7 @@ class UsageRepository(
                     snapshot.resetCredits.map { it.toStored() },
                 ),
                 resetCreditCount = snapshot.resetCreditCount,
+                applicableResetCreditCount = snapshot.applicableResetCreditCount,
             ),
         )
         if (snapshot.status != SnapshotStatus.FAILED) {
@@ -186,6 +187,7 @@ class UsageRepository(
                 windowsJson = previous?.windowsJson ?: "[]",
                 resetCreditsJson = previous?.resetCreditsJson ?: "[]",
                 resetCreditCount = previous?.resetCreditCount,
+                applicableResetCreditCount = previous?.applicableResetCreditCount,
             ),
         )
     }
@@ -222,6 +224,7 @@ class UsageRepository(
             ).map { it.toDomain() }
         }.getOrDefault(emptyList()),
         resetCreditCount = resetCreditCount,
+        applicableResetCreditCount = applicableResetCreditCount,
         errorMessage = errorMessage,
     )
 

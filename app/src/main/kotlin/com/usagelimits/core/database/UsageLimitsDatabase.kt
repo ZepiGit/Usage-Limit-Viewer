@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UsageSnapshotEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -45,11 +45,26 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the count of reset credits that apply to the limit currently reached.
+         *
+         * Additive and nullable, matching MIGRATION_1_2: a row written before the upgrade
+         * reports no distinction and falls back to the held count, which is the pre-upgrade
+         * behaviour exactly.
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE usage_snapshots ADD COLUMN applicableResetCreditCount INTEGER",
+                )
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 UsageLimitsDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(MIGRATION_1_2).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }
