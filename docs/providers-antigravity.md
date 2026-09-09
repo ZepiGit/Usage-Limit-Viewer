@@ -253,7 +253,7 @@ Behaviour derived from, and re-read at, these commits:
 
 - **CLIProxyAPI @ `7fac6b15`** (2026-09-09) — `internal/auth/antigravity/constants.go` for the
   client id, the installed-app client secret, the authorize/token/userinfo endpoints, the
-  loopback port and path, the scope list, and the `access_type=offline` +`prompt=consent`
+  loopback port and path, the scope list, and the `access_type=offline` + `prompt=consent`
   pairing.
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`
   for the `loadCodeAssist` and `retrieveUserQuotaSummary` paths, the three-host fallback
