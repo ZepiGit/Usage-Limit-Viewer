@@ -119,6 +119,24 @@ object CodexUsageParser {
     fun availableCreditCount(payload: JsonObject?): Int? =
         JsonSupport.double(payload, "available_count", "availableCount")?.toInt()
 
+    /**
+     * How many of those credits can be spent against the limit that is currently reached.
+     *
+     * Production payloads carry `available_count` and `applicable_available_count` side by
+     * side and no `credits` array at all, so these are the only two numbers there are. They
+     * are kept apart rather than collapsed because one sample cannot settle what a zero here
+     * means: it may be "you hold credits but none apply to this limit", or simply "no limit is
+     * currently reached". Under the first reading, spending the held count offers a button the
+     * server will refuse; under the second, showing only the applicable count hides credits the
+     * user really holds. Carrying both is correct under either.
+     */
+    fun applicableCreditCount(payload: JsonObject?): Int? =
+        JsonSupport.double(
+            payload,
+            "applicable_available_count",
+            "applicableAvailableCount",
+        )?.toInt()
+
     /** Reads the subscription plan, which the usage endpoint reports alongside the windows. */
     fun parsePlan(payload: JsonObject): String? =
         JsonSupport.string(payload, "plan_type", "planType")

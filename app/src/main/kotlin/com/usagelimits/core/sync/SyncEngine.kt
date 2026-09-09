@@ -75,6 +75,7 @@ class SyncEngine(
                     windows = result.windows,
                     resetCredits = result.resetCredits,
                     resetCreditCount = result.resetCreditCount,
+                    applicableResetCreditCount = result.applicableResetCreditCount,
                 ),
             )
             SyncOutcome(account.localId, success = true)

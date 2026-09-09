@@ -384,7 +384,9 @@ fun AccountCard(
             }
         }
 
-        val creditCount = snapshot?.spendableResetCredits ?: 0
+        // The summary line reports what the user holds; whether any of it can be spent right
+        // now is a detail-screen concern, where the button lives.
+        val creditCount = snapshot?.heldResetCredits ?: 0
         if (creditCount > 0) {
             HorizontalDivider(color = UsageColors.Outline, modifier = Modifier.padding(vertical = 6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
