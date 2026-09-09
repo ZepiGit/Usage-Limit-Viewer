@@ -64,6 +64,43 @@ Raw `GET /models` returns a standard OpenAI list envelope: `{"object":"list","da
 "object":"model","created":…,"owned_by":…}]}`, 6,135 bytes, 70 entries, no capability metadata —
 so model choice here is by reputation and smoke test, not by anything the gateway advertises.
 
+## Reasoning effort
+
+Set per model, sent as `reasoning_effort` on every call.
+
+| model | effort |
+|---|---|
+| `gpt-6-astra` | `high` |
+| `gpt-5.6-sol` | `max` |
+| `grok-4.6` | `xhigh` |
+| `gemini-3.8-flash` | `high` |
+
+The gateway accepts all four values without error. Whether each is honoured is another matter:
+`grok-4.6` and `gemini-3.8-flash` report non-zero `completion_tokens_details.reasoning_tokens`,
+so effort demonstrably reaches them. The two GPT ids reported **zero** reasoning tokens even at
+`xhigh` and `max`, so either they reason without reporting it or the setting is being dropped
+for them. Worth knowing before attributing an answer's quality to the setting.
+
+## Operational notes
+
+Two things about this gateway that cost a round trip to discover.
+
+**It is behind Cloudflare, and Cloudflare fingerprints the client.** Python's `urllib` gets a
+flat `403 error code: 1010` ("banned based on your browser's signature") on every call, while
+`curl` to the identical endpoint succeeds. The delegation helper therefore shells out to `curl`
+rather than using `urllib`. If a future tool starts getting 1010, that is the cause — not the
+key, not the route.
+
+**`524` is the failure to expect, not `429`.** No quota error has been seen yet. What has been
+seen is Cloudflare `524` — origin took too long — when a slower model at a high effort setting
+gets a large prompt. It is transient and another worker usually survives it, so the fallback
+treats the whole 5xx/52x family, `curl` exits and timeouts as retryable, not as a request
+defect. A malformed request, by contrast, must NOT rotate: another model will fail identically.
+
+**The key never appears in `argv`.** It goes to `curl` through a `0600 --config` file that is
+deleted after the call. Passing it as `-H` would have put it in `/proc`, readable by every
+process on the machine for the duration.
+
 ## Delegation protocol
 
 - The orchestrator (Claude, this session) plans, splits, reviews and merges. It does not run
