@@ -13,3 +13,9 @@ local.properties
 *.ap_
 *.dex
 *.class
+
+# Swift Package Manager
+ios/**/.build/
+ios/**/.swiftpm/
+*.xcuserdatad
+DerivedData/
