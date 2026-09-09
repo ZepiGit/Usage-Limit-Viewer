@@ -31,6 +31,19 @@ object SeverityPalette {
         Severity.ERROR -> UsageColors.Red
     }
 
+    /**
+     * The tone to write a status *word* in.
+     *
+     * Deliberately not [accent]: red and slate carry enough weight as a 7dp dot or a filled
+     * bar, but as small text on [container] they land under the 4.5:1 AA floor, so those two
+     * are lifted. Everything else keeps its accent, which already clears it.
+     */
+    fun textColor(severity: Severity) = when (severity) {
+        Severity.EXHAUSTED, Severity.ERROR -> UsageColors.RedText
+        Severity.STALE -> UsageColors.SlateText
+        else -> accent(severity)
+    }
+
     fun container(severity: Severity) = when (severity) {
         Severity.HEALTHY -> UsageColors.GreenSurface
         Severity.MEDIUM, Severity.LOW -> UsageColors.AmberSurface

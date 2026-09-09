@@ -131,7 +131,17 @@ class UsageRepository(
         accountDao.deleteById(localId)
     }
 
+    /**
+     * Records a successful fetch.
+     *
+     * No-ops when the account is gone. `usage_snapshots.accountId` is a foreign key onto
+     * `accounts`, so writing a snapshot for a row the user removed while the fetch was in
+     * flight raises SQLITE_CONSTRAINT_FOREIGNKEY — which Room rethrows, which escapes the
+     * sync pass, cancels the sibling accounts' writes and reaches the uncaught handler.
+     * An account that no longer exists has no usage worth recording.
+     */
     suspend fun saveSnapshot(snapshot: UsageSnapshot) {
+        if (accountDao.getById(snapshot.accountId) == null) return
         snapshotDao.upsert(
             UsageSnapshotEntity(
                 accountId = snapshot.accountId,
@@ -159,8 +169,11 @@ class UsageRepository(
      *
      * The UI keeps showing the last known usage with a staleness note, which is far more
      * useful than blanking a card because one refresh failed.
+     *
+     * No-ops for a removed account, for the same foreign-key reason as [saveSnapshot].
      */
     suspend fun saveFailure(accountId: String, message: String, nowMs: Long) {
+        if (accountDao.getById(accountId) == null) return
         val previous = snapshotDao.getForAccount(accountId)
         snapshotDao.upsert(
             UsageSnapshotEntity(

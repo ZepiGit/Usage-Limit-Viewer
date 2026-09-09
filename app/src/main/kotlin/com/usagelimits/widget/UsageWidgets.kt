@@ -57,6 +57,12 @@ private object W {
     val Red = Color(0xFFD9584F)
     val Slate = Color(0xFF6B6960)
 
+    // Text tones, mirroring UsageColors.RedText / SlateText. On [Card] the raw accents
+    // measure 4.08:1 and 2.85:1 — the status word and the percentage are both normal text
+    // and need 4.5:1, and "Stale" is the word the widget most needs a user to read.
+    val RedText = Color(0xFFE8756B)
+    val SlateText = Color(0xFFA29F94)
+
     fun accent(severity: Severity) = when (severity) {
         Severity.HEALTHY -> Green
         Severity.MEDIUM, Severity.LOW -> Amber
@@ -67,6 +73,18 @@ private object W {
     fun bar(row: WidgetRow) = when {
         row.remainingPercent != null && row.remainingPercent >= 99.5 -> Teal
         else -> accent(row.severity)
+    }
+
+    /** [accent] for bars and dots; this for anything drawn as text on [Card]. */
+    fun textColor(severity: Severity) = when (severity) {
+        Severity.EXHAUSTED, Severity.ERROR -> RedText
+        Severity.STALE -> SlateText
+        else -> accent(severity)
+    }
+
+    fun barText(row: WidgetRow) = when {
+        row.remainingPercent != null && row.remainingPercent >= 99.5 -> Teal
+        else -> textColor(row.severity)
     }
 }
 
@@ -154,7 +172,7 @@ class CompactUsageWidget : GlanceAppWidget() {
                         value = statusWord(snapshot.overallSeverity),
                         row = null,
                         modifier = GlanceModifier.defaultWeight(),
-                        accent = W.accent(snapshot.overallSeverity),
+                        accent = W.textColor(snapshot.overallSeverity),
                     )
                 }
             }
@@ -356,7 +374,7 @@ class DetailedUsageWidget : GlanceAppWidget() {
                     Text(
                         text = percentText(row),
                         style = TextStyle(
-                            color = androidx.glance.unit.ColorProvider(W.bar(row)),
+                            color = androidx.glance.unit.ColorProvider(W.barText(row)),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                         ),

@@ -47,8 +47,13 @@ class HttpClient(
                 return executeOnce(url, method, headers, body)
             } catch (e: ProviderException.RateLimited) {
                 lastError = e
-                // Honour Retry-After when the provider sent one, otherwise back off.
-                val wait = e.retryAfterMs ?: backoffMs(attempt)
+                // Honour Retry-After when the provider sent one, otherwise back off — but
+                // clamped. Providers routinely set Retry-After to the whole remaining
+                // rate-limit window (an hour is common), and this delay holds the calling
+                // coroutine: one throttled account would otherwise stall the entire sync
+                // pass, suppressing the widgets and notifications of every healthy account.
+                // A longer wait is the next scheduled pass's job, not this call's.
+                val wait = (e.retryAfterMs ?: backoffMs(attempt)).coerceIn(0L, MAX_RETRY_AFTER_MS)
                 if (attempt == retries) throw e
                 delay(wait)
             } catch (e: ProviderException.ServerError) {
@@ -84,7 +89,13 @@ class HttpClient(
                     response.code == 401 -> throw ProviderException.Unauthorized()
                     response.code == 403 -> throw ProviderException.Forbidden()
                     response.code == 429 -> throw ProviderException.RateLimited(
-                        retryAfterMs = response.header("Retry-After")?.toLongOrNull()?.times(1000),
+                        // Bound the parse before the multiply: a negative header would turn
+                        // delay() into a no-op hot retry, and a huge one overflows Long and
+                        // can come out negative too.
+                        retryAfterMs = response.header("Retry-After")
+                            ?.toLongOrNull()
+                            ?.coerceIn(0L, MAX_RETRY_AFTER_SECONDS)
+                            ?.times(1000),
                     )
                     response.code >= 500 -> throw ProviderException.ServerError(
                         response.code,
@@ -120,8 +131,13 @@ class HttpClient(
 
     companion object {
         const val DEFAULT_RETRIES = 2
+
+        /** Longest this client will sleep between attempts, Retry-After included. */
+        const val MAX_RETRY_AFTER_MS = 30_000L
+
         private const val BASE_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 8_000L
+        private const val MAX_RETRY_AFTER_SECONDS = 86_400L
 
         val JSON_MEDIA_TYPE = "application/json".toMediaType()
         val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()

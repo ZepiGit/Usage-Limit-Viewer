@@ -49,6 +49,17 @@ object UsageColors {
     val Red = Color(0xFFD9584F)
     val Slate = Color(0xFF6B6960)
 
+    /**
+     * Text tones for the two accents that are not legible as words.
+     *
+     * [Red] and [Slate] are fine as a bar or a dot, but as a status label on their own tinted
+     * container they measure 3.88:1 and 2.78:1 — the 12sp label is normal text, so WCAG AA
+     * wants 4.5:1. These are the same hues lifted until they clear it on the lightest ground
+     * either is drawn on. Pinned by StatusContrastTest.
+     */
+    val RedText = Color(0xFFE8756B)
+    val SlateText = Color(0xFFA29F94)
+
     /** Track behind every usage bar. */
     val ProgressTrack = Color(0xFF2E2D2B)
 
