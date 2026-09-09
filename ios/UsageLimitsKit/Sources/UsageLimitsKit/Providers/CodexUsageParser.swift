@@ -102,16 +102,31 @@ public enum CodexUsageParser: Sendable {
     }
 
     public static func availableCreditCount(_ payload: [String: Any]?) -> Int? {
-        guard let count = JSONSupport.double(payload, "available_count", "availableCount") else {
-            return nil
-        }
+        count(payload, "available_count", "availableCount")
+    }
+
+    /// How many of those credits can be spent against the limit that is currently reached.
+    ///
+    /// Production payloads carry `available_count` and `applicable_available_count` side by
+    /// side and no `credits` array at all, so these are the only two numbers there are. They
+    /// are kept apart rather than collapsed because one sample cannot settle what a zero here
+    /// means: it may be "you hold credits but none apply to this limit", or simply "no limit is
+    /// currently reached". Under the first reading, spending the held count offers a button the
+    /// server will refuse; under the second, showing only the applicable count hides credits the
+    /// user really holds. Carrying both is correct under either.
+    public static func applicableCreditCount(_ payload: [String: Any]?) -> Int? {
+        count(payload, "applicable_available_count", "applicableAvailableCount")
+    }
+
+    private static func count(_ payload: [String: Any]?, _ names: String...) -> Int? {
+        guard let value = JSONSupport.double(payload, names[0], names[1]) else { return nil }
 
         // Match Kotlin Double.toInt(): truncate, saturate to signed 32-bit bounds,
         // and map NaN to zero rather than trapping on Swift's numeric conversion.
-        if count.isNaN { return 0 }
-        if count >= Double(Int32.max) { return Int(Int32.max) }
-        if count <= Double(Int32.min) { return Int(Int32.min) }
-        return Int(count.rounded(.towardZero))
+        if value.isNaN { return 0 }
+        if value >= Double(Int32.max) { return Int(Int32.max) }
+        if value <= Double(Int32.min) { return Int(Int32.min) }
+        return Int(value.rounded(.towardZero))
     }
 
     public static func parsePlan(_ payload: [String: Any]) -> String? {

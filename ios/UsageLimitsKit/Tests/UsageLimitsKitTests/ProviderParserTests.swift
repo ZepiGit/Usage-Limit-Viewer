@@ -69,48 +69,151 @@ final class ClaudeUsageParserTests: XCTestCase {
         XCTAssertNil(windows[0].resetAt)
     }
 
-    func testFableLimitSupersedesTheCodenamedKey() {
-        // `iguana_necktie` is upstream's current key for the Fable weekly window. When
-        // `limits[]` describes Fable, it is the better source — and rendering both would show
-        // the same quota twice.
+    func testLimitsSupersedeTheFlatKeysEntirely() {
+        // `limits` is Anthropic's own presentation model and, on a live account, the ONLY
+        // place the Fable figure appears — the `iguana_necktie` key it belongs under was null.
+        // Reading both lists would render every quota twice.
         let windows = ClaudeUsageParser.parse(payload("""
         {
-          "iguana_necktie": { "utilization": 5.0, "resets_at": "2026-09-14T00:00:00Z" },
+          "five_hour": { "utilization": 21.0, "resets_at": "2026-09-10T01:29:59Z" },
+          "seven_day": { "utilization": 3.0,  "resets_at": "2026-09-16T19:59:59Z" },
+          "iguana_necktie": null,
           "limits": [
-            { "kind": "weekly_scoped", "percent": 12.0, "is_active": true,
+            { "kind": "session",       "group": "session", "percent": 21 },
+            { "kind": "weekly_all",    "group": "weekly",  "percent": 3 },
+            { "kind": "weekly_scoped", "group": "weekly",  "percent": 0,
               "scope": { "model": { "display_name": "Fable" } } }
           ]
         }
         """), now: now)
 
-        XCTAssertEqual(windows.count, 1)
-        XCTAssertEqual(windows[0].usedPercent, 12.0)
+        XCTAssertEqual(windows.map(\.id), ["five-hour", "seven-day", "seven-day-fable"])
+        XCTAssertEqual(windows.map(\.label), ["5h limit", "Weekly", "Weekly (Fable)"])
+        // Production sends integer percents, not decimals.
+        XCTAssertEqual(windows[0].usedPercent, 21.0)
+        XCTAssertEqual(windows[0].periodSeconds, 18_000)
+        XCTAssertEqual(windows[1].periodSeconds, 604_800)
     }
 
-    func testCodenamedKeySurvivesWhenLimitsHasNoFableEntry() {
+    func testAnUnrecognisedLimitKindIsKeptWithTheDurationItsGroupImplies() {
+        // A new `kind` must cost a label, not a whole quota.
+        let windows = ClaudeUsageParser.parse(payload("""
+        { "limits": [
+            { "kind": "weekly_cowork",   "group": "weekly", "percent": 44 },
+            { "kind": "brand_new_thing", "group": "something_else", "percent": 12 } ] }
+        """), now: now)
+
+        let cowork = windows.first { $0.id == "weekly-cowork" }
+        XCTAssertEqual(cowork?.periodSeconds, 604_800)
+        XCTAssertEqual(cowork?.label, "Weekly Cowork")
+        // No group we know: `.other` states the duration is unknown rather than guessing.
+        let unknown = windows.first { $0.id == "brand-new-thing" }
+        XCTAssertNil(unknown?.periodSeconds ?? nil)
+        XCTAssertEqual(unknown?.category, .other)
+    }
+
+    func testTwoScopedLimitsForDifferentModelsDoNotCollide() {
+        let windows = ClaudeUsageParser.parse(payload("""
+        { "limits": [
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 10,
+              "scope": { "model": { "display_name": "Fable" } } },
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 20,
+              "scope": { "model": { "display_name": "Opus" } } } ] }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["seven-day-fable", "seven-day-opus"])
+        XCTAssertEqual(windows.map(\.label), ["Weekly (Fable)", "Weekly (Opus)"])
+    }
+
+    func testAnEmptyLimitsArrayFallsBackToTheFlatKeys() {
+        // An array that yields nothing is no better than an absent one, and silently rendering
+        // an empty screen would be the worst of the three outcomes.
         let windows = ClaudeUsageParser.parse(payload("""
         {
           "iguana_necktie": { "utilization": 5.0, "resets_at": "2026-09-14T00:00:00Z" },
-          "limits": [
-            { "kind": "weekly_scoped", "percent": 12.0,
-              "scope": { "model": { "display_name": "Sonnet" } } }
-          ]
+          "limits": [ { "kind": "weekly_scoped", "percent": "unavailable",
+                        "scope": { "model": { "display_name": "Fable" } } } ]
         }
         """), now: now)
 
         XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0].id, "iguana-necktie")
         XCTAssertEqual(windows[0].usedPercent, 5.0)
     }
 
-    func testUnknownTopLevelKeysAreIgnored() {
+    func testAnUndocumentedKeyWithRealConsumptionIsSurfaced() {
+        // Anthropic ships new windows under rotating codenames; a fixed key list loses the
+        // quota the moment one appears, and the number on screen goes quietly wrong.
         let windows = ClaudeUsageParser.parse(payload("""
         {
-          "five_hour": { "utilization": 1.0 },
-          "some_future_window": { "utilization": 99.0 }
+          "five_hour": { "utilization": 3.0, "resets_at": "2026-09-09T17:30:00Z" },
+          "thirty_day_quokka": { "utilization": 99.0, "resets_at": "2026-10-01T00:00:00Z" }
         }
         """), now: now)
 
-        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(Set(windows.map(\.id)), ["five-hour", "thirty-day-quokka"])
+        let found = windows.first { $0.id == "thirty-day-quokka" }
+        XCTAssertEqual(found?.label, "Thirty Day Quokka")
+        XCTAssertEqual(found?.usedPercent, 99.0)
+        XCTAssertNil(found?.periodSeconds ?? nil)
+        XCTAssertEqual(found?.category, .other)
+    }
+
+    func testAnUntouchedCodenameSlotIsNotSurfaced() {
+        // `nimbus_quill` sits at 0 % on a live account. A screen meant to be read in three
+        // seconds does not need a row for a placeholder nobody is consuming.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": { "utilization": 3.0, "resets_at": "2026-09-09T17:30:00Z" },
+          "nimbus_quill": { "utilization": 0.0, "resets_at": null, "locked_reason": null }
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["five-hour"])
+    }
+
+    func testACreditBalanceIsNotMistakenForAUsageWindow() {
+        // `extra_usage` carries a `utilization` too, but it is a credit balance, not a rate
+        // limit. Account severity is a MAX over the windows, so folding it in would grade an
+        // account by money spent rather than quota consumed. It declares no `resets_at`, and
+        // that is the discriminator.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": { "utilization": 3.0, "resets_at": "2026-09-09T17:30:00Z" },
+          "extra_usage": { "is_enabled": false, "monthly_limit": null, "utilization": 87.0 }
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["five-hour"])
+    }
+
+    func testAScalarOrNonWindowObjectIsNeverPromoted() {
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": { "utilization": 1.0, "resets_at": null },
+          "organization": { "uuid": "11111111-2222-3333-4444-555555555555" },
+          "member_dashboard_available": false,
+          "unexpected_scalar": 7
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["five-hour"])
+    }
+
+    func testAnExplicitlyNullWindowKeyYieldsNoRow() {
+        // Live payloads null out every window the plan does not grant. A nil usedPercent
+        // resolves to .error and account severity is a MAX, so emitting these would mark a
+        // perfectly healthy account as failed.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": { "utilization": 42.5, "resets_at": "2026-09-09T17:30:00Z" },
+          "seven_day": null,
+          "seven_day_opus": null
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["five-hour"])
+        XCTAssertFalse(windows.contains { $0.severity == .error })
     }
 
     func testEmptyPayloadYieldsNoWindows() {
