@@ -7,15 +7,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import com.usagelimits.core.sync.SyncWorker
 import com.usagelimits.navigation.UsageLimitsNavigation
 import com.usagelimits.ui.theme.UsageLimitsTheme
 
 class MainActivity : ComponentActivity() {
 
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* optional */ }
 
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -29,8 +33,11 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
+            // Recomputed on every configuration change, so unfolding a foldable, entering
+            // split-screen or resizing a freeform window re-lays-out the shell immediately.
+            val windowSizeClass = calculateWindowSizeClass(this)
             UsageLimitsTheme {
-                UsageLimitsNavigation(container)
+                UsageLimitsNavigation(container, windowSizeClass)
             }
         }
     }

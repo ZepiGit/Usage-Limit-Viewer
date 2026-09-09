@@ -66,7 +66,7 @@ class CodexUsageParserTest {
     }
 
     @Test
-    fun `slot position does not decide the category — declared seconds do`() {
+    fun `slot position does not decide the category, declared seconds do`() {
         // The five-hour window arrives second and the weekly one first, the reverse of the
         // usual layout. Trusting the slot would label a week as five hours.
         val payload = JsonSupport.parseObject(
