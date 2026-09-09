@@ -117,6 +117,13 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         self.errorMessage = errorMessage
     }
 
+    /// Whether the last fetch failed.
+    ///
+    /// A named property rather than a status comparison at each call site, because "did this
+    /// refresh work" is asked from several places and each one spelling it out invites one of
+    /// them to spell it differently.
+    public var failed: Bool { status == .failed }
+
     /// How many credits the user can actually spend right now.
     public var spendableResetCredits: Int { resetCreditCount ?? resetCredits.count }
 
