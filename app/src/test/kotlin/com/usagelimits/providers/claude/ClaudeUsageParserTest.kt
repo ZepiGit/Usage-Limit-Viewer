@@ -1,5 +1,6 @@
 package com.usagelimits.providers.claude
 
+import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.WindowCategory
 import com.usagelimits.core.network.JsonSupport
 import org.junit.Assert.assertEquals
@@ -174,5 +175,82 @@ class ClaudeUsageParserTest {
         assertTrue(windows.getValue("five-hour").exhausted)
         assertEquals(0.0, windows.getValue("five-hour").remainingPercent!!, 0.0001)
         assertFalse(windows.getValue("seven-day").exhausted)
+    }
+
+    @Test
+    fun `a window object without utilization yields no row while its siblings parse`() {
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "five_hour": { "utilization": 42.5, "resets_at": "2026-09-09T17:30:00Z" },
+              "seven_day": { "resets_at": "2026-09-14T00:00:00Z" },
+              "seven_day_opus": { "utilization": 10.0, "resets_at": "2026-09-14T00:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        assertEquals(listOf("five-hour", "seven-day-opus"), windows.map { it.id })
+        assertEquals(42.5, windows.first().usedPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `a non numeric utilization yields no row while its siblings parse`() {
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "five_hour": { "utilization": "unavailable", "resets_at": "2026-09-09T17:30:00Z" },
+              "seven_day": { "utilization": null, "resets_at": "2026-09-14T00:00:00Z" },
+              "seven_day_opus": { "utilization": "10.0", "resets_at": "2026-09-14T00:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        // A numeric string is still usable; only the unreadable ones are dropped.
+        assertEquals(listOf("seven-day-opus"), windows.map { it.id })
+        assertEquals(10.0, windows.single().usedPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `a skipped window leaves every surviving window with a usable usedPercent`() {
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "five_hour": { "utilization": 42.5, "resets_at": "2026-09-09T17:30:00Z" },
+              "seven_day": { "utilization": "n/a", "resets_at": "2026-09-14T00:00:00Z" },
+              "seven_day_opus": { "resets_at": "2026-09-14T00:00:00Z" },
+              "seven_day_sonnet": { "utilization": 10.0, "resets_at": "2026-09-14T00:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        // A null usedPercent resolves to Severity.ERROR, and account severity is a MAX over the
+        // windows, so a single unreadable field would otherwise mark the whole account failed.
+        assertTrue(windows.isNotEmpty())
+        assertTrue(windows.all { it.usedPercent != null })
+        assertFalse(windows.any { it.severity == Severity.ERROR })
+    }
+
+    @Test
+    fun `a limits entry with an unreadable percent falls back to the iguana_necktie window`() {
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "iguana_necktie": { "utilization": 5.0, "resets_at": "2026-09-14T00:00:00Z" },
+              "limits": [ { "kind": "weekly_scoped", "percent": "unavailable", "is_active": true,
+                            "scope": { "model": { "display_name": "Fable" } } } ]
+            }
+            """.trimIndent(),
+        )
+
+        val window = ClaudeUsageParser.parse(payload, now).single()
+
+        assertEquals("iguana-necktie", window.id)
+        assertEquals(5.0, window.usedPercent!!, 0.0001)
     }
 }

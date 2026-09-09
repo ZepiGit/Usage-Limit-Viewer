@@ -194,9 +194,26 @@ is what stops `notx.ai` and `x.ai.example.com` from passing. Without this check,
 to influence that document — a compromised CDN, a captive portal, a poisoned cache — could
 name its own `token_endpoint` and the app would post a refresh token straight to it.
 
-No certificate pinning is implemented. The platform trust store is used as-is. Pinning four
-providers' certificate chains would create an outage every time one of them rotates, and the
-value against a device-local attacker who can already install a CA is limited.
+No certificate pinning is implemented; the platform trust store is used as-is. An earlier
+version of this document justified that by saying pinning buys little against an attacker who
+can install a CA. That reasoning was wrong, because the threat it names does not reach this
+app. There is no `network_security_config`, and `targetSdk` is 35, so the default policy for
+API 24 and above applies: only the **system** CA store is trusted. A CA the user adds — or is
+socially engineered into adding — is already not trusted for these connections, pinned or not.
+
+The case pinning would genuinely address is a CA in the *system* store: an MDM-managed device
+whose administrator installed one, or a rooted device where that store can be written. That is
+precisely the "rooted device, or a compromised OS" row of the threat model above, which this
+app explicitly does not take on. Someone who can add a system CA can equally ask the Keystore
+to decrypt on the app's behalf, so a pin is not what would be standing between them and the
+tokens.
+
+What is left is cost, and it is real. Four providers' chains rotate independently on schedules
+none of them publish, all but the OAuth token endpoints are undocumented internal APIs, and
+there is no channel to ship a new pin faster than a store release. A stale pin is a total,
+self-inflicted outage for that provider, indistinguishable to the user from the provider being
+down. Not pinning four undocumented, independently-rotating endpoints with no rotation channel
+is the right call.
 
 ## Concurrency and credential lifecycle
 

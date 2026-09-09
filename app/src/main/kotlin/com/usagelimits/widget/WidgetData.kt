@@ -76,9 +76,11 @@ object WidgetDataBuilder {
 
         val accounts = selected.map { it.toWidgetAccount(nowMs) }
 
-        // For the auto scope, lead with whatever is closest to running out.
+        // For the auto scope, lead with whatever is closest to running out — see [criticality].
         val ordered = if (scope == WidgetScope.MOST_CRITICAL) {
-            accounts.sortedByDescending { it.severity.ordinal }
+            accounts.sortedWith(
+                compareBy({ criticality(it.severity) }, { it.tightestRemaining() }),
+            )
         } else {
             accounts
         }
@@ -97,6 +99,35 @@ object WidgetDataBuilder {
                 ?: headline(allWindows, WindowCategory.MONTHLY),
         )
     }
+
+    /**
+     * Rank for the auto scope, lowest first.
+     *
+     * Deliberately not [Severity.ordinal]. That enum is ordered best-to-worst so `maxOf` finds
+     * an account's worst window, which puts STALE and ERROR *after* EXHAUSTED — so ranking by
+     * the ordinal led with an account the app merely failed to read, above one the user has
+     * genuinely run out on.
+     *
+     * A widget is read at a glance, so it leads with limits that are real: EXHAUSTED first,
+     * then ERROR and STALE together (both mean "the app cannot currently tell you"), then the
+     * merely-getting-low ones.
+     */
+    private fun criticality(severity: Severity): Int = when (severity) {
+        Severity.EXHAUSTED -> 0
+        Severity.ERROR, Severity.STALE -> 1
+        Severity.LOW -> 2
+        Severity.MEDIUM -> 3
+        Severity.HEALTHY -> 4
+    }
+
+    /**
+     * Tie-break within one rank: the tightest number the card actually shows, ascending.
+     *
+     * An account with no readable number sorts last inside its rank — there is nothing to
+     * compare, and a known percentage is the more useful thing to put first.
+     */
+    private fun WidgetAccount.tightestRemaining(): Double =
+        rows.mapNotNull { it.remainingPercent }.minOrNull() ?: Double.MAX_VALUE
 
     /** The tightest window of a category — the number worth surfacing in one tile. */
     private fun headline(windows: List<UsageWindow>, category: WindowCategory): WidgetRow? =

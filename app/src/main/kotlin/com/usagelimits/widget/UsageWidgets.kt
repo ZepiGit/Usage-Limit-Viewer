@@ -46,8 +46,8 @@ import com.usagelimits.core.time.Countdown
  * is still a single edit on each side.
  */
 private object W {
-    val Background = Color(0xFF141413)
-    val Card = Color(0xFF242322)
+    val Background = Color(0xFF0F0F0E)
+    val Card = Color(0xFF1A1918)
     val Track = Color(0xFF2E2D2B)
     val TextPrimary = Color(0xFFF0EEE6)
     val TextSecondary = Color(0xFFB4B2A9)
@@ -58,8 +58,9 @@ private object W {
     val Slate = Color(0xFF6B6960)
 
     // Text tones, mirroring UsageColors.RedText / SlateText. On [Card] the raw accents
-    // measure 4.08:1 and 2.85:1 — the status word and the percentage are both normal text
-    // and need 4.5:1, and "Stale" is the word the widget most needs a user to read.
+    // measure 4.56:1 and 3.19:1 — the status word and the percentage are both normal text
+    // and need 4.5:1, so Slate misses outright and Red only just clears; "Stale" is the word
+    // the widget most needs a user to read.
     val RedText = Color(0xFFE8756B)
     val SlateText = Color(0xFFA29F94)
 
@@ -317,24 +318,34 @@ class DetailedUsageWidget : GlanceAppWidget() {
                     fontSize = 11.sp,
                 ),
             )
-            Spacer(GlanceModifier.width(8.dp))
             // Triggers the same background sync the app uses; it never touches credentials
             // here, it only asks WorkManager to run a pass.
+            //
+            // The clickable box is 48dp — the platform minimum touch target — while the chip
+            // inside stays 26dp, so the control is reachable on a home screen without the
+            // header reading as a button bar. Its transparent margin also supplies the gap to
+            // the freshness label, which is why no spacer precedes it.
             Box(
                 modifier = GlanceModifier
-                    .size(26.dp)
-                    .cornerRadius(13.dp)
-                    .background(W.Card)
+                    .size(48.dp)
                     .clickable(actionRunCallback<RefreshWidgetAction>()),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "↻",
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                        fontSize = 14.sp,
-                    ),
-                )
+                Box(
+                    modifier = GlanceModifier
+                        .size(26.dp)
+                        .cornerRadius(13.dp)
+                        .background(W.Card),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "↻",
+                        style = TextStyle(
+                            color = androidx.glance.unit.ColorProvider(W.TextPrimary),
+                            fontSize = 14.sp,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -357,6 +368,18 @@ class DetailedUsageWidget : GlanceAppWidget() {
                 ),
                 maxLines = 1,
             )
+            // Provider and plan are not unique: two accounts on the same plan render an
+            // identical title, and the masked address is the only thing that tells them apart.
+            account.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
+                Text(
+                    text = subtitle,
+                    style = TextStyle(
+                        color = androidx.glance.unit.ColorProvider(W.TextSecondary),
+                        fontSize = 11.sp,
+                    ),
+                    maxLines = 1,
+                )
+            }
             account.rows.forEach { row ->
                 Spacer(GlanceModifier.height(5.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -180,7 +180,7 @@ a restore anyway, and the usage cache is re-derived on the next sync.
    |   - failure keeps previous numbers             |      +--------------------------+
    +----------------------+------------------------+
                           |  UsageSnapshot            SyncEngine is the ONLY
-                          v                           caller of core/auth
+                          v                           reader of a credential
    +-----------------------------------------------+
    |  core/database/UsageRepository  (Room)         |  holds no tokens, only a
    |  accounts | usage_snapshots | widget_configs   |  credential *reference*
@@ -196,6 +196,20 @@ a restore anyway, and the usage cache is re-derived on the next sync.
                                        |  refresh tap enqueues
    core/sync/SyncWorker  (WorkManager) -+  a normal sync pass
 ```
+
+**Who touches `core/auth`, and why it is three callers rather than one.**
+`SyncEngine.validCredentials` is the only code that *loads* a credential. Every request-time
+use of a token goes through it — including the reset-credit spend, where
+`UsageViewModel.consumeResetCredit` asks the engine for credentials rather than the store, and
+so inherits the per-reference refresh mutex along with them.
+
+The other two callers are account lifecycle, not request time, and they only write.
+`AddAccountViewModel` calls `credentialStore.save` once, after a login has produced an account
+row; `UsageViewModel.removeAccount` calls `credentialStore.delete` once, before the row it
+belongs to goes. Those two cannot live in the engine: a login and a logout are the moments a
+credential starts and stops existing, which is a lifecycle event rather than a sync, and the
+ordering against the account row is the whole correctness argument. `docs/security.md` sets
+out both orderings and why they are deliberately opposite.
 
 `SyncEngine` is reached two ways, and the distinction is worth knowing.
 

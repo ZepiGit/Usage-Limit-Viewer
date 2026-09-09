@@ -35,21 +35,27 @@ object ClaudeUsageParser {
         val windows = Claude.USAGE_WINDOW_KEYS.mapNotNull { (key, label) ->
             if (key == FABLE_WINDOW_KEY && fable != null) return@mapNotNull null
             val window = JsonSupport.obj(payload, key) ?: return@mapNotNull null
+            // A window with no usable `utilization` is dropped rather than emitted with a null
+            // usedPercent: null resolves to Severity.ERROR and snapshot severity is a MAX over
+            // the windows, so one renamed upstream field would mark the whole account as failed
+            // while that same row sorts last in mostCritical — red with nothing visibly wrong.
+            val used = JsonSupport.double(window, "utilization") ?: return@mapNotNull null
             toWindow(
                 id = key.replace('_', '-'),
                 label = label,
                 key = key,
-                usedPercent = JsonSupport.double(window, "utilization"),
+                usedPercent = used,
                 resetsAt = JsonSupport.string(window, "resets_at", "resetsAt"),
             )
         }
 
         val fableWindow = fable?.let { limit ->
+            val percent = JsonSupport.double(limit, "percent") ?: return@let null
             toWindow(
                 id = "seven-day-fable",
                 label = "Weekly (Fable)",
                 key = FABLE_WINDOW_KEY,
-                usedPercent = JsonSupport.double(limit, "percent"),
+                usedPercent = percent,
                 resetsAt = JsonSupport.string(limit, "resets_at", "resetsAt"),
             )
         }
@@ -95,7 +101,7 @@ object ClaudeUsageParser {
         id: String,
         label: String,
         key: String,
-        usedPercent: Double?,
+        usedPercent: Double,
         resetsAt: String?,
     ): UsageWindow {
         // Only `five_hour` is a rolling five-hour window; every other key Anthropic exposes is
@@ -110,7 +116,7 @@ object ClaudeUsageParser {
             usedPercent = usedPercent,
             periodSeconds = periodSeconds,
             resetAt = Instants.parse(resetsAt),
-            exhausted = usedPercent != null && usedPercent >= 100.0,
+            exhausted = usedPercent >= 100.0,
         )
     }
 }
