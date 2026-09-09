@@ -11,6 +11,10 @@ import UsageLimitsKit
 final class UsageStore: ObservableObject {
 
     @Published private(set) var accounts: [AccountUsage] = []
+
+    /// Writable, because the settings screen binds straight to it. Persisting it belongs to a
+    /// store this class will own once there is anything to persist.
+    @Published var settings = AppSettings()
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
 
@@ -36,6 +40,9 @@ final class UsageStore: ObservableObject {
     var glance: GlanceSnapshot {
         GlanceModel.build(accounts, now: now, scope: .mostCritical)
     }
+
+    /// One account, reduced for the notification evaluator.
+    var summaries: [AccountSummary] { accounts.map(AccountSummary.init) }
 
     /// Every window that has a reset time, soonest first — the Resets screen.
     var upcomingResets: [(account: ProviderAccount, window: UsageWindow)] {

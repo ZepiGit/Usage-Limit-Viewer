@@ -54,18 +54,25 @@ jobs:
   app-ios:
     name: iOS app (real SDK)
     runs-on: macos-latest
-    # Only meaningful once the Xcode project exists; until then a missing project should not
-    # report the whole workflow red.
-    if: ${{ hashFiles('ios/UsageLimits/**/*.xcodeproj/project.pbxproj') != '' }}
+    # The project is generated from project.yml rather than committed: a .pbxproj conflicts on
+    # every branch and nobody can review a diff of one. This job is the only place the SwiftUI
+    # and WidgetKit code is compiled at all, since the environment it was written in has no
+    # Apple SDK — so a failure here is the real signal, not a formality.
+    if: ${{ hashFiles('ios/UsageLimits/project.yml') != '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Show toolchain
         run: xcodebuild -version && xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the project
+        working-directory: ios/UsageLimits
+        run: xcodegen generate
       - name: Build for simulator
         working-directory: ios/UsageLimits
         run: |
+          set -o pipefail
           xcodebuild build \
             -scheme UsageLimits \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcpretty && exit ${PIPESTATUS[0]}
+            CODE_SIGNING_ALLOWED=NO

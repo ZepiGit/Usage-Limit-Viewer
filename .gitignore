@@ -19,3 +19,6 @@ ios/**/.build/
 ios/**/.swiftpm/
 *.xcuserdatad
 DerivedData/
+
+# Generated from ios/UsageLimits/project.yml by XcodeGen; never committed.
+ios/UsageLimits/*.xcodeproj/

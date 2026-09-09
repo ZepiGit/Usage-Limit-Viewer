@@ -1,0 +1,78 @@
+# XcodeGen spec for the iOS app.
+#
+# A readable spec rather than a committed .pbxproj, for two reasons. A pbxproj is a generated
+# file with unstable ordering, so it conflicts on every branch and nobody can review a diff of
+# it. And this project cannot be opened in Xcode from the environment it was written in, so a
+# hand-maintained one would be a file nobody could check — whereas CI regenerates from this and
+# either compiles or does not.
+#
+#   brew install xcodegen && xcodegen generate
+name: UsageLimits
+options:
+  bundleIdPrefix: com.usagelimits
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  UsageLimitsKit:
+    path: ../UsageLimitsKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # Strict concurrency across the app too, not only the package. The kit is already clean, and
+    # letting the app lag behind is how a @MainActor violation reaches a user as a crash on a
+    # slow network rather than as a compile error here.
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGNING_ALLOWED: NO
+
+targets:
+  UsageLimits:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+        excludes:
+          - Widget/**
+    dependencies:
+      - package: UsageLimitsKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        # Dark-only by design: a half-finished light palette would look worse than a deliberate
+        # dark one, and the reference design is dark.
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  UsageLimitsWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Widget
+      - path: Sources/Theme
+    dependencies:
+      - package: UsageLimitsKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.widget
+        INFOPLIST_KEY_CFBundleDisplayName: Usage Limits
+        INFOPLIST_KEY_NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+schemes:
+  UsageLimits:
+    build:
+      targets:
+        UsageLimits: all
+        UsageLimitsWidget: all
+    run:
+      config: Debug
+    test:
+      config: Debug
