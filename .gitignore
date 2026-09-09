@@ -22,3 +22,7 @@ DerivedData/
 
 # Generated from ios/UsageLimits/project.yml by XcodeGen; never committed.
 ios/UsageLimits/*.xcodeproj/
+
+# Kotlin daemon crash logs. Build noise, and they embed this machine's proxy and
+# truststore paths, so they are not something to put in a public repository.
+.kotlin/
