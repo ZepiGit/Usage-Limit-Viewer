@@ -8,6 +8,7 @@ import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.providers.ProviderRegistry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -78,13 +79,30 @@ class SyncEngine(
             )
             SyncOutcome(account.localId, success = true)
         } catch (e: ProviderException) {
-            repository.saveFailure(account.localId, e.userMessage(), nowMs())
+            recordFailure(account.localId, e.userMessage())
             SyncOutcome(account.localId, success = false, message = e.userMessage())
         } catch (e: Exception) {
             // A provider bug must not take the whole sync pass down with it.
             val message = "Unexpected error while refreshing"
-            repository.saveFailure(account.localId, message, nowMs())
+            recordFailure(account.localId, message)
             SyncOutcome(account.localId, success = false, message = message)
+        }
+    }
+
+    /**
+     * Best-effort persistence of a failure.
+     *
+     * These calls sit in catch blocks, outside any try. A throw from here would leave
+     * [syncAccount] — documented as never throwing — and cancel the sibling accounts sharing
+     * the [syncAll] scope, discarding their freshly fetched numbers.
+     */
+    private suspend fun recordFailure(accountId: String, message: String) {
+        try {
+            repository.saveFailure(accountId, message, nowMs())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Nothing further to do: the error is already reflected in the returned outcome.
         }
     }
 
@@ -111,7 +129,13 @@ class SyncEngine(
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
 
             val refreshed = provider.refresh(latest)
-            credentialStore.save(reference, refreshed)
+            // The account can be removed while the refresh round-trip is in flight. Saving
+            // unconditionally would put a live, freshly rotated refresh token back into the
+            // store under a reference no account row names any more — nothing reads it and
+            // nothing ever deletes it, so it would outlive the account the user removed.
+            if (credentialStore.load(reference) != null) {
+                credentialStore.save(reference, refreshed)
+            }
             refreshed
         }
     }

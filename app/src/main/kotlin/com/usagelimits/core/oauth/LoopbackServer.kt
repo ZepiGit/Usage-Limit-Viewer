@@ -2,13 +2,15 @@ package com.usagelimits.core.oauth
 
 import com.usagelimits.core.network.ProviderException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedReader
 import java.io.Closeable
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.net.URLDecoder
 
 /** Query parameters returned by an authorization server on the redirect. */
@@ -53,29 +55,49 @@ class LoopbackServer(private val port: Int) : Closeable {
      *
      * Answers the browser with a small page either way, so the user sees a result instead of
      * a connection error, then closes.
+     *
+     * The wait polls a short SO_TIMEOUT rather than blocking in one open-ended `accept()`.
+     * That is not a style choice: `ServerSocket.accept()` ignores `Thread.interrupt()`, so
+     * neither `withTimeout` nor job cancellation could ever unblock it — only closing the
+     * socket can, and the close lives in the caller's `finally`, downstream of this call. An
+     * abandoned login therefore parked an IO thread forever and left the pinned port bound
+     * for the life of the process, so every later login on that provider failed to bind.
      */
     suspend fun awaitRedirect(timeoutMs: Long): AuthorizationResponse = withContext(Dispatchers.IO) {
         val socket = serverSocket ?: throw ProviderException.Unexpected("server not started")
+        socket.soTimeout = ACCEPT_POLL_MS
 
-        val response = withTimeoutOrNull(timeoutMs) {
-            runInterruptible {
-                socket.accept().use { client ->
-                    val reader = BufferedReader(InputStreamReader(client.getInputStream()))
-                    val requestLine = reader.readLine().orEmpty()
-                    val parsed = parseRequestLine(requestLine)
-                    client.getOutputStream().write(httpResponse(parsed).toByteArray(Charsets.UTF_8))
-                    client.getOutputStream().flush()
-                    parsed
-                }
+        val deadline = System.nanoTime() + timeoutMs * NANOS_PER_MS
+        var response: AuthorizationResponse? = null
+        while (response == null) {
+            ensureActive()
+            if (System.nanoTime() - deadline >= 0) {
+                throw ProviderException.LoginCancelled("Login timed out")
             }
-        } ?: throw ProviderException.LoginCancelled("Login timed out")
-
+            response = acceptOnce(socket)
+        }
         response
     }
 
-    /** Runs a blocking accept() in a way that cancellation can interrupt. */
-    private suspend fun <T> runInterruptible(block: () -> T): T =
-        kotlinx.coroutines.runInterruptible(Dispatchers.IO) { block() }
+    /** One bounded accept. Null when the poll window elapsed with nothing connecting. */
+    private fun acceptOnce(socket: ServerSocket): AuthorizationResponse? {
+        val client = try {
+            socket.accept()
+        } catch (e: SocketTimeoutException) {
+            return null
+        } catch (e: IOException) {
+            // close() from another thread is the normal way this ends early.
+            throw ProviderException.LoginCancelled("Login was interrupted")
+        }
+        return client.use { connection ->
+            val reader = BufferedReader(InputStreamReader(connection.getInputStream()))
+            val requestLine = reader.readLine().orEmpty()
+            val parsed = parseRequestLine(requestLine)
+            connection.getOutputStream().write(httpResponse(parsed).toByteArray(Charsets.UTF_8))
+            connection.getOutputStream().flush()
+            parsed
+        }
+    }
 
     override fun close() {
         runCatching { serverSocket?.close() }
@@ -151,5 +173,11 @@ class LoopbackServer(private val port: Int) : Closeable {
             append("Connection: close\r\n\r\n")
             append(html)
         }
+    }
+
+    private companion object {
+        /** How long one accept() blocks before cancellation and the deadline are re-checked. */
+        const val ACCEPT_POLL_MS = 200
+        const val NANOS_PER_MS = 1_000_000L
     }
 }

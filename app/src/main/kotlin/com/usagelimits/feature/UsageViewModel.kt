@@ -27,6 +27,14 @@ data class UpcomingReset(
     val accountId: String,
     val accountLabel: String,
     val provider: ProviderId,
+    /**
+     * The originating window's id, not its label.
+     *
+     * Labels are provider display text and repeat freely — Antigravity names a bucket
+     * "Weekly" once per quota group — so accountId + label + resetAt is not unique and made a
+     * duplicate LazyColumn key, which Compose throws on. Ids are unique per account.
+     */
+    val windowId: String,
     val windowLabel: String,
     val resetAt: Long,
     val severity: Severity,
@@ -70,6 +78,7 @@ data class UsageUiState(
                     accountId = usage.account.localId,
                     accountLabel = usage.account.label,
                     provider = usage.account.provider,
+                    windowId = window.id,
                     windowLabel = window.label,
                     resetAt = resetAt,
                     severity = window.severity,

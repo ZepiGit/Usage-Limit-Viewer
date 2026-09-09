@@ -91,7 +91,8 @@ fun StatusPill(severity: Severity, modifier: Modifier = Modifier) {
         Text(
             text = SeverityPalette.label(severity),
             style = MaterialTheme.typography.labelMedium,
-            color = SeverityPalette.accent(severity),
+            // textColor, not accent: the dot can be the raw accent, the word cannot.
+            color = SeverityPalette.textColor(severity),
         )
     }
 }
