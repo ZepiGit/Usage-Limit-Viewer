@@ -119,9 +119,7 @@ object WidgetDataBuilder {
             // below stops letting rowless accounts occupy a two-slot widget.
             overallSeverity = ordered.maxOfOrNull { it.severity } ?: Severity.STALE,
             headlineShort = lead?.rows?.firstOrNull { it.category == WindowCategory.FIVE_HOUR },
-            headlineLong = lead?.rows?.firstOrNull {
-                it.category == WindowCategory.WEEKLY || it.category == WindowCategory.MONTHLY
-            },
+            headlineLong = lead?.rows?.firstOrNull { it.category != WindowCategory.FIVE_HOUR },
         )
     }
 
@@ -187,9 +185,15 @@ object WidgetDataBuilder {
 
         // Show the two horizons that matter, not every window an account reports — a widget
         // has room for about two rows before it stops being glanceable.
+        //
+        // OTHER is the last resort for the long slot. A window whose duration no provider
+        // documents still counts against the account, and leaving the slot empty would hide a
+        // limit the app knows is being consumed while showing a healthier one beside it.
         val rows = listOfNotNull(
             headline(windows, WindowCategory.FIVE_HOUR),
-            headline(windows, WindowCategory.WEEKLY) ?: headline(windows, WindowCategory.MONTHLY),
+            headline(windows, WindowCategory.WEEKLY)
+                ?: headline(windows, WindowCategory.MONTHLY)
+                ?: headline(windows, WindowCategory.OTHER),
         )
 
         return WidgetAccount(

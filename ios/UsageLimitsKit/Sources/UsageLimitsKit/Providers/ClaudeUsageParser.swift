@@ -39,12 +39,53 @@ public enum ClaudeUsageParser {
     private static let fiveHourID = "five-hour"
     private static let sevenDayID = "seven-day"
 
+    /// Top-level objects that look like windows but are not.
+    ///
+    /// The discovery gate asks whether a key declares `resets_at`, and `extra_usage` is one
+    /// field away from passing it — it already carries a `utilization`. It is a CREDIT BALANCE:
+    /// folding it in would grade an account by money spent, and spending credits would trip an
+    /// exhaustion alert. Named explicitly rather than inferred, because the shape that
+    /// distinguishes them today is one upstream field away from being ambiguous.
+    private static let nonWindowKeys: Set<String> = [
+        "extra_usage", "spend", "seven_day_breakdown", "limits", "organization", "account",
+    ]
+
+    /// A label is a row on a phone, and a server-supplied key has no length limit.
+    private static let maximumLabelLength = 48
+
+    /// A `utilization` of 21.0 means 21 % consumed, not 21 % of one.
+    ///
+    /// Worth stating because the field is named `utilization` rather than `percent`, and a
+    /// fractional reading would put every fallback number out by a factor of a hundred while
+    /// still looking like a number. A live account settles it: `five_hour.utilization` was 21.0
+    /// and the `limits` entry for the same quota reported `percent: 21`.
     public static func parse(_ payload: [String: Any], now _: Date) -> [UsageWindow] {
         // `now` is part of the shared parser surface, but this payload carries absolute
         // `resets_at` timestamps, so nothing here needs the clock.
-        let fromLimits = parseLimits(payload)
-        let primary = fromLimits.isEmpty ? parseFlatWindows(payload) : fromLimits
-        return primary + discoverUnknownWindows(payload, known: primary)
+        let primary = parseLimits(payload)
+
+        // Everything `limits` did not already account for. `limits` is upstream's own view and
+        // has been complete on every payload seen, but "has been complete" is not a guarantee:
+        // a partial one would silently hide live windows, and treating it as all-or-nothing
+        // made that unrecoverable.
+        let supplemental = (parseFlatWindows(payload) + discoverUnknownWindows(payload))
+            .filter { candidate in
+                // Same id is the same quota by construction; so is the same reset instant, when
+                // one is stated. Two windows that both report no reset are not thereby the same
+                // window, so an absent instant never merges anything.
+                !primary.contains { $0.id == candidate.id }
+                    && !(candidate.resetAt != nil
+                         && primary.contains { $0.resetAt == candidate.resetAt })
+            }
+
+        let windows = primary + supplemental.filter { ($0.usedPercent ?? 0) > 0 }
+        if !windows.isEmpty { return windows }
+
+        // Untouched codename slots are noise on a screen meant to be read in three seconds —
+        // unless they are all an account has. Dropping them unconditionally turned a healthy,
+        // completely unused account into zero windows, which resolves to `.error`: the app
+        // reporting a fault where the real answer was "nothing used yet".
+        return supplemental
     }
 
     /// Reads the plan label the profile endpoint reports, for the account subtitle.
@@ -118,14 +159,28 @@ public enum ClaudeUsageParser {
                 JSONSupport.object(JSONSupport.object(limit, "scope"), "model"),
                 "display_name", "displayName")
 
-            let id: String
+            // Identity prefers the model's own id: two display names that differ only in
+            // punctuation ("Sonnet 4.5" and "sonnet-4.5") slug identically, and the loser was
+            // silently dropped — the user then read one model's figure as the other's.
+            let modelKey = JSONSupport.string(
+                JSONSupport.object(JSONSupport.object(limit, "scope"), "model"), "id") ?? model
+
+            let baseID: String
             switch kind {
-            case "session": id = fiveHourID
-            case "weekly_all": id = sevenDayID
-            case "weekly_scoped": id = "\(sevenDayID)-\(slug(model ?? String(index)))"
-            default: id = slug(kind ?? "limit-\(index)")
+            case "session": baseID = fiveHourID
+            case "weekly_all": baseID = sevenDayID
+            case "weekly_scoped": baseID = "\(sevenDayID)-\(slug(modelKey ?? "scoped"))"
+            default: baseID = slug(kind ?? "limit")
             }
-            guard seen.insert(id).inserted else { continue }
+            // A collision suffixes rather than drops. Array position is deliberately not part
+            // of identity: reordering `limits` would then rename every window, detaching
+            // anything keyed by it — a notification's deduplication record, for one.
+            var id = baseID
+            var suffix = 2
+            while !seen.insert(id).inserted {
+                id = "\(baseID)-\(suffix)"
+                suffix += 1
+            }
 
             let periodSeconds: Int64?
             if kind == "session" || group == "session" {
@@ -141,7 +196,8 @@ public enum ClaudeUsageParser {
             case "session": label = "5h limit"
             case "weekly_all": label = "Weekly"
             case "weekly_scoped": label = model.map { "Weekly (\($0))" } ?? "Weekly (scoped)"
-            default: label = humanize(kind ?? "Limit \(index + 1)")
+            default: label = String(humanize(kind ?? "Limit \(index + 1)")
+                .prefix(maximumLabelLength))
             }
 
             windows.append(window(
@@ -195,30 +251,30 @@ public enum ClaudeUsageParser {
     /// under a different `kind` — that would render one quota twice. The trade is deliberate:
     /// a duplicated row is visible and obviously wrong, while a hidden quota is invisible and
     /// makes the number on screen wrong with nothing to notice.
-    private static func discoverUnknownWindows(
-        _ payload: [String: Any],
-        known: [UsageWindow]
-    ) -> [UsageWindow] {
+    private static func discoverUnknownWindows(_ payload: [String: Any]) -> [UsageWindow] {
         let knownKeys = Set(usageWindowKeys.map(\.key))
-        let knownIDs = Set(known.map(\.id))
 
         return payload.compactMap { (key, value) -> UsageWindow? in
-            guard !knownKeys.contains(key) else { return nil }
+            guard !knownKeys.contains(key), !nonWindowKeys.contains(key) else { return nil }
             guard let entry = value as? [String: Any] else { return nil }
             guard entry.keys.contains("resets_at") || entry.keys.contains("resetsAt") else {
                 return nil
             }
-            guard let used = JSONSupport.double(entry, "utilization"), used > 0 else { return nil }
+            guard let used = JSONSupport.double(entry, "utilization") else { return nil }
 
-            let id = key.replacingOccurrences(of: "_", with: "-")
-            guard !knownIDs.contains(id) else { return nil }
+            let id = key
+                .replacingOccurrences(of: "_", with: "-")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            guard !id.isEmpty else { return nil }
 
             return window(
                 id: id,
-                label: humanize(key),
+                label: String(humanize(key).prefix(maximumLabelLength)),
                 usedPercent: used,
                 // The duration of a window nobody has documented is unknown, and `.other` says
-                // so. Guessing seven days would put a wrong countdown on the Resets screen.
+                // so. It cannot be inferred from the time left before its reset either: a
+                // weekly window observed two hours before it rolls over would infer two hours,
+                // which is a confidently wrong category rather than an honest unknown.
                 periodSeconds: nil,
                 resetsAt: JSONSupport.string(entry, "resets_at", "resetsAt"))
         }
