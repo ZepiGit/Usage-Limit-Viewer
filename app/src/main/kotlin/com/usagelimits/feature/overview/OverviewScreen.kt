@@ -105,7 +105,7 @@ fun OverviewScreen(
         }
 
         items(
-            items = state.accounts.sortedByDescending { it.snapshot?.severity?.ordinal ?: 99 },
+            items = state.accounts.sortedByDescending { it.snapshot?.severityAt(nowMs)?.ordinal ?: 99 },
             key = { it.account.localId },
         ) { usage ->
             AccountCard(usage, nowMs) { onAccountClick(usage.account.localId) }
@@ -174,7 +174,7 @@ private fun OverviewHeader(state: UsageUiState, nowMs: Long, onRefresh: () -> Un
  */
 @Composable
 private fun SummaryCard(state: UsageUiState, nowMs: Long) {
-    val severity = state.overallSeverity
+    val severity = state.overallSeverityAt(nowMs)
     val critical = state.mostCritical
 
     UsageCard(borderColor = SeverityPalette.container(severity)) {
@@ -192,7 +192,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "${state.healthyCount}/${state.accountCount}",
+                            text = "${state.healthyCountAt(nowMs)}/${state.accountCount}",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = SeverityPalette.accent(severity),
@@ -201,7 +201,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = headline(state),
+                            text = headline(state, nowMs),
                             style = MaterialTheme.typography.titleMedium,
                             color = UsageColors.TextPrimary,
                         )
@@ -291,11 +291,15 @@ private fun SummaryStat(
     }
 }
 
-private fun headline(state: UsageUiState): String = when {
-    state.accounts.isEmpty() -> "No accounts yet"
-    state.overallSeverity == Severity.HEALTHY -> "All systems good"
-    state.overallSeverity == Severity.EXHAUSTED -> "A limit is exhausted"
-    state.overallSeverity == Severity.ERROR -> "Needs attention"
+private fun headline(state: UsageUiState, nowMs: Long): String = when (
+    if (state.accounts.isEmpty()) null else state.overallSeverityAt(nowMs)
+) {
+    null -> "No accounts yet"
+    Severity.HEALTHY -> "All systems good"
+    Severity.EXHAUSTED -> "A limit is exhausted"
+    Severity.ERROR -> "Needs attention"
+    // Age is its own headline: green over day-old numbers is the failure this app prevents.
+    Severity.STALE -> "Data may be out of date"
     else -> "Running low"
 }
 
@@ -313,7 +317,7 @@ fun AccountCard(
     onClick: () -> Unit,
 ) {
     val snapshot = usage.snapshot
-    val severity = snapshot?.severity ?: Severity.STALE
+    val severity = snapshot?.severityAt(nowMs) ?: Severity.STALE
 
     UsageCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -380,8 +384,8 @@ fun AccountCard(
             }
         }
 
-        val credits = snapshot?.resetCredits.orEmpty()
-        if (credits.isNotEmpty()) {
+        val creditCount = snapshot?.spendableResetCredits ?: 0
+        if (creditCount > 0) {
             HorizontalDivider(color = UsageColors.Outline, modifier = Modifier.padding(vertical = 6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -391,7 +395,7 @@ fun AccountCard(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "${credits.size} available",
+                    text = "$creditCount available",
                     style = MaterialTheme.typography.labelLarge,
                     color = UsageColors.Terracotta,
                 )

@@ -3,6 +3,7 @@ package com.usagelimits.providers.codex
 import com.usagelimits.core.auth.OAuthCredentials
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
+import com.usagelimits.core.model.ResetCredit
 import com.usagelimits.core.network.HttpClient
 import com.usagelimits.core.network.JsonSupport
 import com.usagelimits.core.network.ProviderEndpoints.Codex
@@ -207,20 +208,46 @@ class CodexProvider(
         val windows = CodexUsageParser.parse(payload, now)
 
         // The dedicated endpoint is authoritative but optional: a failure there should cost
-        // the reset-credit row, not the entire usage refresh.
+        // the reset-credit row, not the entire usage refresh. The usage payload carries a copy.
+        val embedded = JsonSupport.obj(
+            payload,
+            "rate_limit_reset_credits",
+            "rateLimitResetCredits",
+        )
         val credits = runCatching { fetchResetCredits(account, credentials) }
-            .getOrElse { CodexUsageParser.parseEmbeddedResetCredits(payload) }
+            .getOrElse {
+                CreditsResult(
+                    credits = CodexUsageParser.parseResetCredits(embedded),
+                    count = CodexUsageParser.availableCreditCount(embedded),
+                )
+            }
 
-        return UsageResult(windows = windows, resetCredits = credits)
+        // The reported count wins over the row count. The list can be truncated or filtered
+        // while the count stays exact, and gating the redeem button on the rows would hide it
+        // from someone who actually holds credits.
+        return UsageResult(
+            windows = windows,
+            resetCredits = credits.credits,
+            resetCreditCount = credits.count ?: credits.credits.size,
+        )
     }
+
+    private data class CreditsResult(val credits: List<ResetCredit>, val count: Int?)
 
     private suspend fun fetchResetCredits(
         account: ProviderAccount,
         credentials: OAuthCredentials,
-    ) = http.request(
-        url = Codex.RESET_CREDITS_URL,
-        headers = usageHeaders(account, credentials) + Codex.RESET_CREDIT_HEADERS,
-    ).let { CodexUsageParser.parseResetCredits(JsonSupport.parseObject(it.body)) }
+    ): CreditsResult {
+        val response = http.request(
+            url = Codex.RESET_CREDITS_URL,
+            headers = usageHeaders(account, credentials) + Codex.RESET_CREDIT_HEADERS,
+        )
+        val payload = JsonSupport.parseObject(response.body)
+        return CreditsResult(
+            credits = CodexUsageParser.parseResetCredits(payload),
+            count = CodexUsageParser.availableCreditCount(payload),
+        )
+    }
 
     /**
      * Spends one reset credit.

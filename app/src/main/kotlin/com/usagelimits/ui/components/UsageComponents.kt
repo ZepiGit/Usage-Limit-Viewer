@@ -153,7 +153,10 @@ fun UsageWindowRow(
             modifier = Modifier.weight(0.14f),
         )
         Text(
-            text = resetText?.removePrefix("Reset in ")?.let { "Reset $it" } ?: qualifier,
+            // Countdown.resetLabel already returns a complete phrase ("Reset in 1h 16m" or
+            // "Reset due"); rewriting it here produced "Reset Reset due" once an instant had
+            // passed, which is reachable whenever a stale snapshot is on screen.
+            text = resetText ?: qualifier,
             style = MaterialTheme.typography.bodyMedium,
             color = UsageColors.TextSecondary,
             maxLines = 1,

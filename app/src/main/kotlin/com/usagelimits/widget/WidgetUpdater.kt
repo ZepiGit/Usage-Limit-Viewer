@@ -46,6 +46,7 @@ object WidgetUpdater {
 
         return WidgetDataBuilder.build(
             all = container.repository.accountUsageOnce(),
+            nowMs = System.currentTimeMillis(),
             scope = WidgetScope.fromName(config?.scope),
             accountId = config?.accountId,
             providerId = config?.provider,

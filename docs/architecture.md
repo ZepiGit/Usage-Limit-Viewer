@@ -205,17 +205,17 @@ widget's refresh button. That work is unique with `ExistingWorkPolicy.KEEP`, so 
 triggers in a row collapse into one pass, and every request carries a
 `NetworkType.CONNECTED` constraint.
 
-The foreground actions — pull-to-refresh, a single account's refresh button, the sync that
+The foreground actions — the refresh button, a single account's refresh button, the sync that
 follows a login, and the re-sync after a reset credit is spent — call `SyncEngine` directly
 from the ViewModel's scope instead. That is right for a user-initiated action, which should
 run now and report its own outcome rather than being queued behind a constraint, and these
 calls still inherit isolation and the refresh mutex because they go through the same engine.
-Two consequences follow, and neither is currently handled: a foreground refresh does not wait
-for connectivity (it fails fast and shows the error, which is arguably what the user wants),
-and — less defensibly — it does **not** refresh the widgets, because `WidgetUpdater.refreshAll`
-is called only from `SyncWorker.doWork`. Pull-to-refresh in the app therefore leaves the home
-screen showing the older numbers until the next worker pass. Calling `refreshAll` after a
-foreground sync, or routing these through the worker, would close that.
+One consequence is deliberate and one was a defect. The deliberate one: a foreground refresh
+does not wait for connectivity — it fails fast and shows the error, which is what someone who
+just tapped refresh wants. The defect: `WidgetUpdater.refreshAll` was originally reachable only
+from `SyncWorker.doWork`, so the in-app refresh button left the home screen on older numbers
+until the next worker pass. Every foreground path — the refresh button, a per-account refresh,
+a completed login, a spent reset credit, a removed account — now calls `refreshAll` itself.
 
 **Per-account isolation.** `syncAll()` launches one coroutine per account and awaits them all;
 `syncAccount()` catches `ProviderException` *and* every other exception, records the failure
@@ -229,7 +229,7 @@ request rate.
 **The refresh mutex.** Token refresh is serialised per `credentialReference` through a map of
 mutexes, and — importantly — the expiry is re-checked *inside* the lock. The race this
 prevents is specific and nasty. Providers rotate refresh tokens: presenting one invalidates it
-and returns a new one. Suppose the periodic pass and a pull-to-refresh both notice the access
+and returns a new one. Suppose the periodic pass and a the refresh button both notice the access
 token is near expiry at the same moment. Both call `refresh()` with refresh token `A`. One of
 them wins, gets `B`, and stores it. The other's request either fails, or succeeds and stores a
 result derived from an already-spent token; either way the last writer can leave the store

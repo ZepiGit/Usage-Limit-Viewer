@@ -263,8 +263,15 @@ Behaviour derived from, and re-read at, these commits:
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`
   for the two billing URLs, `/v1/me`, the `x-xai-token-auth` and `x-grok-client-version`
   headers and the client version string.
-- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — cross-check on the billing payload field
-  names, the two-view split, and the finding that all monetary amounts are integer cents.
+- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — *not a source for this provider.* The
+  repository contains no xAI or Grok code at all. An earlier draft cited it as a cross-check
+  on the billing field names and the integer-cents representation, which was wrong.
+
+**Single-sourced, and it already cost something.** The billing payload shape rests on the
+Management Center alone. Two details were originally missed and only found by re-reading it:
+the `config` envelope both endpoints wrap their body in, and that money fields arrive either
+as a bare number or as `{"val": 10000}`. Together those produced zero windows against a real
+payload while every hand-written test passed.
 
 The client id is the public identifier the first-party CLI ships; there is no client secret in
 this provider. No credential material, captured payload or account identifier from any real

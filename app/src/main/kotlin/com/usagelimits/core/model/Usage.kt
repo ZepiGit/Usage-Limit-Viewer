@@ -75,8 +75,14 @@ data class UsageSnapshot(
     val status: SnapshotStatus,
     val windows: List<UsageWindow>,
     val resetCredits: List<ResetCredit> = emptyList(),
+    /** Provider-reported count; authoritative over [resetCredits].size when present. */
+    val resetCreditCount: Int? = null,
     val errorMessage: String? = null,
 ) {
+    /** How many credits the user can actually spend right now. */
+    val spendableResetCredits: Int
+        get() = resetCreditCount ?: resetCredits.size
+
     /** The window closest to running out — what the summary card leads with. */
     val mostCritical: UsageWindow?
         get() = windows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
@@ -85,18 +91,38 @@ data class UsageSnapshot(
     val nextReset: Long?
         get() = windows.mapNotNull { it.resetAt }.minOrNull()
 
+    /**
+     * Severity ignoring age. Prefer [severityAt] wherever a clock is available.
+     */
     val severity: Severity
         get() = when (status) {
             SnapshotStatus.FAILED -> Severity.ERROR
             else -> windows.maxOfOrNull { it.severity } ?: Severity.ERROR
         }
+
+    /**
+     * Severity including staleness.
+     *
+     * Age has to be part of the verdict. Without it, a snapshot that stopped refreshing —
+     * doze, no network, an OEM battery manager — keeps whatever pill it had when it last
+     * succeeded, so day-old numbers still read "Healthy". Showing a confidently green status
+     * over stale data is the exact failure this app exists to prevent.
+     */
+    fun severityAt(nowMs: Long): Severity {
+        val base = severity
+        if (base == Severity.ERROR) return base
+        val age = nowMs - fetchedAt
+        return if (age >= Severity.STALE_AFTER_MS) Severity.STALE else base
+    }
+
+    fun isStaleAt(nowMs: Long): Boolean = nowMs - fetchedAt >= Severity.STALE_AFTER_MS
 }
 
 /**
  * A Codex rate-limit reset credit.
  *
  * Only credits the provider reports as available *and* of the Codex rate-limit type are
- * modelled; see CodexResetCreditParser for the filtering rules.
+ * modelled; see CodexUsageParser.parseResetCredits for the filtering rules.
  */
 data class ResetCredit(
     val id: String,

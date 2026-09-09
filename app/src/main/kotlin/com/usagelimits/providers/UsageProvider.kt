@@ -19,6 +19,13 @@ data class ProviderProfile(
 data class UsageResult(
     val windows: List<UsageWindow>,
     val resetCredits: List<ResetCredit> = emptyList(),
+    /**
+     * Provider-reported credit count, when it gives one.
+     *
+     * Authoritative over [resetCredits].size: the row list can be truncated or filtered while
+     * the count stays exact.
+     */
+    val resetCreditCount: Int? = null,
 )
 
 /**

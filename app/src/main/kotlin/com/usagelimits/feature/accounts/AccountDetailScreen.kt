@@ -106,7 +106,7 @@ fun AccountDetailScreen(
                         color = UsageColors.TextSecondary,
                     )
                 }
-                snapshot?.severity?.let { StatusPill(it) }
+                snapshot?.severityAt(nowMs)?.let { StatusPill(it) }
             }
         }
 
@@ -172,7 +172,7 @@ fun AccountDetailScreen(
             item { SectionHeader("Reset credits") }
             item {
                 ResetCreditCard(
-                    creditCount = snapshot?.resetCredits?.size ?: 0,
+                    creditCount = snapshot?.spendableResetCredits ?: 0,
                     expiresAt = snapshot?.resetCredits?.mapNotNull { it.expiresAt }?.minOrNull(),
                     nowMs = nowMs,
                     inFlight = resetInFlight,

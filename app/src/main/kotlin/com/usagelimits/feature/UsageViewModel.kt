@@ -10,6 +10,7 @@ import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.settings.AppSettings
+import com.usagelimits.core.sync.SyncWorker
 import com.usagelimits.core.sync.userMessage
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.widget.WidgetUpdater
@@ -40,8 +41,8 @@ data class UsageUiState(
 ) {
     val accountCount: Int get() = accounts.size
 
-    val healthyCount: Int
-        get() = accounts.count { it.snapshot?.severity == Severity.HEALTHY }
+    fun healthyCountAt(nowMs: Long): Int =
+        accounts.count { it.snapshot?.severityAt(nowMs) == Severity.HEALTHY }
 
     /** Newest data wins for the "last updated" line — it describes the screen as a whole. */
     val lastUpdated: Long?
@@ -50,8 +51,8 @@ data class UsageUiState(
     val nextReset: Long?
         get() = accounts.mapNotNull { it.snapshot?.nextReset }.minOrNull()
 
-    val overallSeverity: Severity
-        get() = accounts.mapNotNull { it.snapshot?.severity }.maxOrNull() ?: Severity.STALE
+    fun overallSeverityAt(nowMs: Long): Severity =
+        accounts.mapNotNull { it.snapshot?.severityAt(nowMs) }.maxOrNull() ?: Severity.STALE
 
     /** The single most-depleted window anywhere — what the summary card leads with. */
     val mostCritical: Pair<AccountUsage, UsageWindow>?
@@ -181,7 +182,13 @@ class UsageViewModel(
     }
 
     fun setSyncInterval(minutes: Int) {
-        viewModelScope.launch { container.settingsStore.setSyncInterval(minutes) }
+        viewModelScope.launch {
+            container.settingsStore.setSyncInterval(minutes)
+            // Writing the preference alone changed nothing: schedulePeriodic is otherwise
+            // called once at process start, so a new interval only took effect after the app
+            // was killed. UPDATE keeps the existing schedule rather than firing immediately.
+            SyncWorker.schedulePeriodic(appContext, minutes)
+        }
     }
 
     fun setNotifyLowUsage(enabled: Boolean) {

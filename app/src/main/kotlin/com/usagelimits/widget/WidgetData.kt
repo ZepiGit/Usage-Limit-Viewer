@@ -61,6 +61,7 @@ object WidgetDataBuilder {
 
     fun build(
         all: List<AccountUsage>,
+        nowMs: Long,
         scope: WidgetScope,
         accountId: String?,
         providerId: String?,
@@ -73,7 +74,7 @@ object WidgetDataBuilder {
 
         if (selected.isEmpty()) return WidgetSnapshot.Empty
 
-        val accounts = selected.map { it.toWidgetAccount() }
+        val accounts = selected.map { it.toWidgetAccount(nowMs) }
 
         // For the auto scope, lead with whatever is closest to running out.
         val ordered = if (scope == WidgetScope.MOST_CRITICAL) {
@@ -103,7 +104,7 @@ object WidgetDataBuilder {
             .minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
             ?.toRow()
 
-    private fun AccountUsage.toWidgetAccount(): WidgetAccount {
+    private fun AccountUsage.toWidgetAccount(nowMs: Long): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
 
         // Show the two horizons that matter, not every window an account reports — a widget
@@ -121,7 +122,7 @@ object WidgetDataBuilder {
             },
             subtitle = account.maskedEmail,
             rows = rows,
-            severity = snapshot?.severity ?: Severity.STALE,
+            severity = snapshot?.severityAt(nowMs) ?: Severity.STALE,
         )
     }
 

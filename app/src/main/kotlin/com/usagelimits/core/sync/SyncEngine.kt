@@ -73,6 +73,7 @@ class SyncEngine(
                     status = SnapshotStatus.OK,
                     windows = result.windows,
                     resetCredits = result.resetCredits,
+                    resetCreditCount = result.resetCreditCount,
                 ),
             )
             SyncOutcome(account.localId, success = true)
