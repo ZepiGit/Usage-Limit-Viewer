@@ -236,6 +236,30 @@ final class ClaudeUsageParserTests: XCTestCase {
             ClaudeUsageParser.parsePlan(payload(#"{"account":{"has_claude_pro":true}}"#)), "Pro")
         XCTAssertNil(ClaudeUsageParser.parsePlan(payload(#"{"account":{}}"#)))
     }
+
+    func testPlanLabelKeepsTheTierMultiplier() {
+        // Captured live: the profile reports `default_claude_max_5x` while `has_claude_max` is
+        // merely true. Max 5× versus Max 20× is a fivefold difference in the very number this
+        // app exists to show.
+        XCTAssertEqual(
+            ClaudeUsageParser.parsePlan(payload(
+                #"{"account":{"has_claude_max":true},"#
+                + #""organization":{"rate_limit_tier":"default_claude_max_5x"}}"#)),
+            "Max 5×")
+    }
+
+    func testAnUnrecognisedTierStillYieldsSomethingReadable() {
+        // Anthropic adds tiers. A lookup table would render a new one as no plan at all, which
+        // reads as "not subscribed" rather than "not recognised".
+        XCTAssertEqual(
+            ClaudeUsageParser.parsePlan(payload(
+                #"{"organization":{"rate_limit_tier":"default_claude_team_premium_20x"}}"#)),
+            "Team Premium 20×")
+        XCTAssertEqual(
+            ClaudeUsageParser.parsePlan(payload(
+                #"{"organization":{"rate_limit_tier":"default_claude_pro"}}"#)),
+            "Pro")
+    }
 }
 
 final class AntigravityQuotaParserTests: XCTestCase {
