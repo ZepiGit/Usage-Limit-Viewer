@@ -48,11 +48,53 @@ public enum ClaudeUsageParser {
     }
 
     /// Reads the plan label the profile endpoint reports, for the account subtitle.
+    ///
+    /// `organization.rate_limit_tier` is preferred over the `has_claude_max` boolean because the
+    /// boolean cannot tell a Max 5× subscription from a Max 20× one — a fivefold difference in
+    /// the very quantity this app exists to show. A live profile reports
+    /// `default_claude_max_5x`, so the multiplier is right there; the booleans are the fallback
+    /// for a payload that omits the tier.
     public static func parsePlan(_ profile: [String: Any]) -> String? {
+        let organization = JSONSupport.object(profile, "organization")
+        if let plan = planFromTier(
+            JSONSupport.string(organization, "rate_limit_tier", "rateLimitTier")) {
+            return plan
+        }
+
         guard let account = JSONSupport.object(profile, "account") else { return nil }
         if JSONSupport.bool(account, "has_claude_max", "hasClaudeMax") == true { return "Max" }
         if JSONSupport.bool(account, "has_claude_pro", "hasClaudePro") == true { return "Pro" }
         return nil
+    }
+
+    /// Turns `default_claude_max_5x` into `Max 5×`.
+    ///
+    /// Read structurally rather than from a table of known tiers: Anthropic adds tiers, and a
+    /// table would render a new one as no plan at all. An unrecognised tier still yields
+    /// something readable, which beats a blank subtitle.
+    private static func planFromTier(_ tier: String?) -> String? {
+        var raw = tier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        for prefix in ["default_", "claude_"] where raw.hasPrefix(prefix) {
+            raw.removeFirst(prefix.count)
+        }
+        guard !raw.isEmpty else { return nil }
+
+        var multiplier: String?
+        if let last = raw.split(separator: "_").last,
+           last.hasSuffix("x"),
+           case let digits = String(last.dropLast()),
+           !digits.isEmpty,
+           digits.allSatisfy(\.isNumber) {
+            multiplier = digits
+            raw.removeLast(last.count + 1)
+        }
+
+        let name = raw.split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+        guard !name.isEmpty else { return nil }
+
+        return multiplier.map { "\(name) \($0)×" } ?? name
     }
 
     /// Maps the `limits` array one entry to one window.
