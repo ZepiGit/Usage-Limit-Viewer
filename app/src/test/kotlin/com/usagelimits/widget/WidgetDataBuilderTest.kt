@@ -38,7 +38,7 @@ class WidgetDataBuilderTest {
     private fun usage(
         id: String,
         provider: ProviderId,
-        usedPercent: Double,
+        usedPercent: Double?,
         fetchedAt: Long = now,
         status: SnapshotStatus = SnapshotStatus.OK,
     ) = AccountUsage(
@@ -116,10 +116,26 @@ class WidgetDataBuilderTest {
 
         // Ranking by Severity.ordinal descending put ERROR, then STALE, then EXHAUSTED — so
         // this used to lead with "error", an account whose quota may be perfectly fine.
-        assertEquals(
-            listOf("out", "stale", "error"),
-            snapshot.accounts.map { it.accountId },
+        assertEquals("out", snapshot.accounts.first().accountId)
+    }
+
+    @Test
+    fun `accounts with no numbers do not displace accounts with numbers`() {
+        // A two-tile widget has two slots. A never-fetched or failed account has no rows to
+        // show, so ranking it above a real one filled the tile with blank cards and pushed the
+        // account at 3% off the screen entirely.
+        val mixed = listOf(
+            usage("never-fetched", ProviderId.CODEX, usedPercent = null),
+            usage("failed", ProviderId.CLAUDE, usedPercent = null, status = SnapshotStatus.FAILED),
+            usage("tight", ProviderId.XAI, usedPercent = 97.0),
         )
+
+        val snapshot = WidgetDataBuilder.build(mixed, now, WidgetScope.MOST_CRITICAL, null, null)
+
+        assertEquals("tight", snapshot.accounts.first().accountId)
+        // The unreadable accounts still reach the user, through the one signal that is not
+        // slot-limited.
+        assertEquals(Severity.ERROR, snapshot.overallSeverity)
     }
 
     @Test
@@ -155,7 +171,7 @@ class WidgetDataBuilderTest {
         val snapshot = WidgetDataBuilder.build(ramp, now, WidgetScope.MOST_CRITICAL, null, null)
 
         assertEquals(
-            listOf("exhausted", "stale", "error", "low", "medium", "healthy"),
+            listOf("exhausted", "low", "medium", "healthy", "error", "stale"),
             snapshot.accounts.map { it.accountId },
         )
     }
@@ -167,10 +183,127 @@ class WidgetDataBuilderTest {
     }
 
     @Test
-    fun `headline picks the tightest window of each horizon`() {
-        val snapshot = WidgetDataBuilder.build(all, now, WidgetScope.ALL_ACCOUNTS, null, null)
+    fun `the headline belongs to the leading account`() {
+        // Not a pooled minimum. On a tile showing two of six accounts, a pooled figure could be
+        // the sixth account's window — a number the reader cannot locate anywhere on screen.
+        val snapshot = WidgetDataBuilder.build(all, now, WidgetScope.MOST_CRITICAL, null, null)
+
+        assertEquals("b", snapshot.accounts.first().accountId)
         assertEquals(10.0, snapshot.headlineShort!!.remainingPercent!!, 0.001)
         assertEquals(10.0, snapshot.headlineLong!!.remainingPercent!!, 0.001)
+        // And it is the same row the leading card itself shows.
+        assertEquals(
+            snapshot.accounts.first().rows.first { it.category == WindowCategory.FIVE_HOUR },
+            snapshot.headlineShort,
+        )
+    }
+
+    @Test
+    fun `one account's weekly window does not suppress another's monthly one`() {
+        // Applying `weekly ?: monthly` to the pool meant any single weekly window hid every
+        // monthly one, so the headline could read 80% while a visible row read 3%.
+        val monthlyOnly = AccountUsage(
+            account = account("monthly", ProviderId.XAI),
+            snapshot = UsageSnapshot(
+                accountId = "monthly",
+                fetchedAt = now,
+                status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow(
+                        id = "mo",
+                        label = "Monthly",
+                        category = WindowCategory.MONTHLY,
+                        usedPercent = 97.0,
+                        periodSeconds = 2_592_000,
+                        resetAt = null,
+                        exhausted = false,
+                    ),
+                ),
+            ),
+        )
+        val weeklyOnly = usage("weekly", ProviderId.CLAUDE, usedPercent = 20.0)
+
+        val snapshot = WidgetDataBuilder.build(
+            listOf(weeklyOnly, monthlyOnly), now, WidgetScope.MOST_CRITICAL, null, null,
+        )
+
+        assertEquals("monthly", snapshot.accounts.first().accountId)
+        assertEquals(WindowCategory.MONTHLY, snapshot.headlineLong!!.category)
+        assertEquals(3.0, snapshot.headlineLong!!.remainingPercent!!, 0.001)
+    }
+
+    @Test
+    fun `the next reset belongs to the account the headline describes`() {
+        // Taken across every account this paired the headline state with an unrelated clock:
+        // "0% left, resets in 12m", where the twelve minutes belonged to a healthy account's
+        // five-hour window. Healthy five-hour windows reset constantly, so it was the common
+        // case rather than an edge.
+        val spentSoon = AccountUsage(
+            account = account("spent", ProviderId.CODEX),
+            snapshot = UsageSnapshot(
+                accountId = "spent",
+                fetchedAt = now,
+                status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow(
+                        id = "mo",
+                        label = "Monthly",
+                        category = WindowCategory.MONTHLY,
+                        usedPercent = 100.0,
+                        periodSeconds = 2_592_000,
+                        resetAt = now + 20 * 86_400_000L,
+                        exhausted = true,
+                    ),
+                ),
+            ),
+        )
+        val healthySoon = AccountUsage(
+            account = account("healthy", ProviderId.CLAUDE),
+            snapshot = UsageSnapshot(
+                accountId = "healthy",
+                fetchedAt = now,
+                status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow(
+                        id = "5h",
+                        label = "5h limit",
+                        category = WindowCategory.FIVE_HOUR,
+                        usedPercent = 5.0,
+                        periodSeconds = 18_000,
+                        resetAt = now + 12 * 60_000L,
+                        exhausted = false,
+                    ),
+                ),
+            ),
+        )
+
+        val snapshot = WidgetDataBuilder.build(
+            listOf(healthySoon, spentSoon), now, WidgetScope.MOST_CRITICAL, null, null,
+        )
+
+        assertEquals("spent", snapshot.accounts.first().accountId)
+        assertEquals(now + 20 * 86_400_000L, snapshot.nextResetAt)
+    }
+
+    @Test
+    fun `sub-point drift does not reorder the tiles`() {
+        // Two healthy accounts drifting 47.2 to 46.8 and 46.9 to 47.1 swapped on every refresh.
+        // On a home screen that means the reader re-scans from scratch each time.
+        val before = listOf(
+            usage("a", ProviderId.CODEX, usedPercent = 52.8),
+            usage("b", ProviderId.CLAUDE, usedPercent = 53.1),
+        )
+        val after = listOf(
+            usage("a", ProviderId.CODEX, usedPercent = 53.2),
+            usage("b", ProviderId.CLAUDE, usedPercent = 52.9),
+        )
+
+        assertEquals(
+            WidgetDataBuilder.build(before, now, WidgetScope.MOST_CRITICAL, null, null)
+                .accounts.map { it.accountId },
+            WidgetDataBuilder.build(after, now, WidgetScope.MOST_CRITICAL, null, null)
+                .accounts.map { it.accountId },
+        )
     }
 
     @Test
