@@ -1,0 +1,469 @@
+import Foundation
+
+// MARK: - Snapshot model
+
+/// Extra quota the provider has granted but the user has not yet claimed.
+/// One account, reduced to what the evaluator needs.
+///
+/// Deliberately not `AccountUsage`: the evaluator has no business knowing about credential
+/// references or provider ids, and keeping the input this narrow is what stops a notification
+/// ever interpolating something that should not appear on a lock screen. `label` is already
+/// the masked form.
+public struct AccountSummary: Sendable, Equatable {
+    public let accountId: String
+    public let label: String
+    public let snapshot: UsageSnapshot?
+
+    public init(accountId: String, label: String, snapshot: UsageSnapshot?) {
+        self.accountId = accountId
+        self.label = label
+        self.snapshot = snapshot
+    }
+
+    public init(_ usage: AccountUsage) {
+        self.init(
+            accountId: usage.account.id,
+            label: usage.account.label,
+            snapshot: usage.snapshot)
+    }
+}
+
+public struct NotificationSettings: Equatable, Sendable {
+    public var notifyBelow20Percent = true
+    public var notifyBelow10Percent = true
+    public var notifyOnExhausted = true
+    public var notifyOnResetCreditAvailable = true
+    public var notifyOnAuthExpired = true
+    public var notifyOnResetApproaching = false
+    public var notifyOnResetCreditExpiring = true
+    public var resetApproachingMinutes = 30
+    public var resetCreditExpiryLeadMinutes = 1440
+
+    public init() {}
+}
+
+// MARK: - Evaluator
+
+/// Derives edge-triggered notifications from usage snapshots.
+///
+/// A snapshot can only state what is true now; a notification must state what *became* true
+/// since the last look. The evaluator therefore takes prior per-account state in and hands
+/// the updated state back, so its caller persists the state between syncs and feeds it in
+/// again. Every edge carries a stable key: the caller remembers the keys it has already
+/// acted on and swallows repeats. That memory is what lets the evaluator re-state a
+/// still-true condition without notifying twice, and what lets an intentionally blank line
+/// consume a key so a threshold cannot re-fire later within the same episode.
+public enum NotificationEvaluator {
+
+    /// Remaining percentage strictly below which the warning tier applies.
+    public static let warningPercent = 20.0
+
+    /// Remaining percentage strictly below which the critical tier applies.
+    public static let criticalPercent = 10.0
+
+    /// What the evaluator remembers between syncs — deliberately minimal, since anything
+    /// richer drifts out of step with the snapshot history it summarises.
+    public struct AccountState: Sendable, Equatable {
+        public let accountId: String
+
+        /// Numbers each dip below the warning threshold. Quota keys embed it, so a fresh
+        /// episode mints fresh keys whose tiers may fairly re-fire, whilst a continuing
+        /// episode reuses its keys and the caller's key memory keeps it quiet.
+        public var lowQuotaEpisode: Int = 0
+
+        /// True from the first below-threshold snapshot until a fully healthy one arrives.
+        /// Without it the episode counter would advance on every sync whilst low, and every
+        /// sync would look like a brand-new dip.
+        public var lowQuotaActive: Bool = false
+
+        /// The `fetchedAt` of the newest snapshot whose edges have fired. Server time, not
+        /// local receive time, so a re-delivered or out-of-order snapshot is recognisable
+        /// and cannot re-fire its edges.
+        public var lastProcessedFetchedAt: Date? = nil
+
+        public init(
+            accountId: String,
+            lowQuotaEpisode: Int = 0,
+            lowQuotaActive: Bool = false,
+            lastProcessedFetchedAt: Date? = nil
+        ) {
+            self.accountId = accountId
+            self.lowQuotaEpisode = lowQuotaEpisode
+            self.lowQuotaActive = lowQuotaActive
+            self.lastProcessedFetchedAt = lastProcessedFetchedAt
+        }
+    }
+
+    /// One edge that became true during this evaluation.
+    ///
+    /// `key` is the caller's de-duplication handle. `line` is empty when the key must still
+    /// be consumed — a superseded tier, a disabled setting, or a credit already counted — so
+    /// that nothing is said now and nothing can be said later for the same key. `accountId`
+    /// is carried separately so consumers never have to parse it back out of the key.
+    public struct Event: Sendable, Equatable {
+        public let accountId: String
+        public let key: String
+        public let line: String
+
+        public init(accountId: String, key: String, line: String) {
+            self.accountId = accountId
+            self.key = key
+            self.line = line
+        }
+    }
+
+    /// The result of one pass: updated state to persist, edges to consider, and still-true
+    /// facts to display.
+    ///
+    /// `states` covers every account processed this pass plus any carried over from before,
+    /// sorted by account id because dictionary order is unstable. `events` follow the
+    /// supplied account order, each account contributing its quota tiers, then
+    /// reset-approaching, then credit-expiring edges. `standingFindings` state levels, not
+    /// transitions, so the caller renders them rather than notifying them.
+    public struct Outcome: Sendable, Equatable {
+        public let states: [AccountState]
+        public let events: [Event]
+        public let standingFindings: [String]
+
+        public init(states: [AccountState], events: [Event], standingFindings: [String]) {
+            self.states = states
+            self.events = events
+            self.standingFindings = standingFindings
+        }
+    }
+
+    /// Evaluates one sync.
+    ///
+    /// Failed and missing snapshots are transparent: state rides through untouched and no
+    /// events fire, so a network blip can neither end a low-quota episode nor manufacture an
+    /// edge. A snapshot no newer than the last one processed is a replay and is equally
+    /// silent. Standing findings survive both guards because they state present facts, not
+    /// transitions, and a fact half-mentioned looks like it stopped being true.
+    public static func evaluate(
+        accounts: [AccountSummary],
+        settings: NotificationSettings,
+        states: [String: AccountState],
+        now: Date
+    ) -> Outcome {
+        var carried = states
+        var events: [Event] = []
+        var findings: [String] = []
+
+        for account in accounts {
+            let id = account.accountId
+            var state = carried[id] ?? AccountState(accountId: id)
+
+            guard let snapshot = account.snapshot else {
+                // No data at all, so no conclusions: the account is neither better nor worse.
+                continue
+            }
+
+            if snapshot.failed {
+                // The payload of a failed fetch cannot be trusted for positive findings,
+                // so only the failure itself is interpreted. Expired credentials are the
+                // one failure the user must personally fix, and that is a standing fact.
+                if settings.notifyOnAuthExpired,
+                    let message = snapshot.errorMessage,
+                    message.lowercased().contains("expired")
+                {
+                    // No separator, unlike every other line: this one reads as a sentence, and
+                    // it is worded identically on Android. Two platforms phrasing the same
+                    // condition differently is the divergence this shared kit exists to stop.
+                    findings.append("\(account.label) needs to be reconnected")
+                }
+                continue
+            }
+
+            if let lastProcessed = state.lastProcessedFetchedAt,
+               snapshot.fetchedAt <= lastProcessed {
+                // Already fired once: re-delivering the same snapshot must not repeat its
+                // edges, but the facts it states are as true as they were.
+                appendCreditsAvailableFinding(
+                    accountLabel: account.label,
+                    settings: settings,
+                    snapshot: snapshot,
+                    into: &findings
+                )
+                continue
+            }
+
+            let windows = snapshot.windows
+            let exhaustedWindow = windows.first { $0.exhausted }
+            let worst = windows
+                .filter { $0.remainingPercent != nil }
+                .min { ($0.remainingPercent ?? 0) < ($1.remainingPercent ?? 0) }
+            let lowestKnownRemaining = worst?.remainingPercent
+
+            // Recovery is decided BEFORE any tier is emitted, and short-circuits. Emitting
+            // first and then closing the episode would re-announce a threshold on the very
+            // sync that reports the account healthy again.
+            if hasRecovered(windows) {
+                state.lowQuotaActive = false
+            } else {
+                let belowThreshold = exhaustedWindow != nil
+                    || (lowestKnownRemaining.map { $0 < warningPercent } ?? false)
+
+                if belowThreshold {
+                    if !state.lowQuotaActive {
+                        state.lowQuotaEpisode += 1
+                        state.lowQuotaActive = true
+                    }
+                    appendQuotaEvents(
+                        accountId: id,
+                        accountLabel: account.label,
+                        episode: state.lowQuotaEpisode,
+                        exhaustedLabel: exhaustedWindow?.label,
+                        worstLabel: worst?.label,
+                        lowestKnownRemaining: lowestKnownRemaining,
+                        settings: settings,
+                        into: &events
+                    )
+                }
+            }
+
+            appendResetApproachingEvents(
+                accountId: id,
+                accountLabel: account.label,
+                windows: windows,
+                settings: settings,
+                now: now,
+                into: &events
+            )
+
+            appendCreditExpiringEvents(
+                accountId: id,
+                accountLabel: account.label,
+                snapshot: snapshot,
+                settings: settings,
+                now: now,
+                into: &events
+            )
+
+            appendCreditsAvailableFinding(
+                accountLabel: account.label,
+                settings: settings,
+                snapshot: snapshot,
+                into: &findings
+            )
+
+            state.lastProcessedFetchedAt = snapshot.fetchedAt
+            carried[id] = state
+        }
+
+        let orderedStates = carried.values.sorted { $0.accountId < $1.accountId }
+        return Outcome(states: orderedStates, events: events, standingFindings: findings)
+    }
+
+    // MARK: Quota tiers
+
+    /// The three low-quota tiers.
+    ///
+    /// A tier is a deduplication key, not a message. Whether the user hears anything depends
+    /// on their settings; *what* they hear describes the condition actually reached, so an
+    /// exhausted limit is never announced as "less than 20 % remaining".
+    private enum Tier: CaseIterable {
+        case warning, critical, exhausted
+
+        var key: String {
+            switch self {
+            case .warning: return "warning"
+            case .critical: return "critical"
+            case .exhausted: return "exhausted"
+            }
+        }
+
+        func enabled(_ settings: NotificationSettings) -> Bool {
+            switch self {
+            case .warning: return settings.notifyBelow20Percent
+            case .critical: return settings.notifyBelow10Percent
+            case .exhausted: return settings.notifyOnExhausted
+            }
+        }
+
+        func message(_ name: String, _ label: String) -> String {
+            switch self {
+            case .warning: return "\(name) · \(label): less than 20% remaining"
+            case .critical: return "\(name) · \(label): less than 10% remaining"
+            case .exhausted: return "\(name) · \(label) exhausted"
+            }
+        }
+    }
+
+    /// Emits the quota-tier edges for one active episode.
+    ///
+    /// Reaching a tier consumes every weaker one too, so a fast burn produces one line rather
+    /// than a stack of them, and a later partial recovery cannot warn about a limit the user
+    /// has already watched run out.
+    ///
+    /// Two rules here exist because getting them wrong produced silence, which is the worst
+    /// failure a quota alert can have. Both were found by auditing the Kotlin original against
+    /// settings combinations rather than the happy path.
+    ///
+    /// The message describes the strongest tier REACHED and is spoken if ANY reached tier is
+    /// enabled. Routing each message to its own tier's setting instead meant a user with only
+    /// the 20 % alert on heard nothing when quota crashed straight past 10 % — the urgent case
+    /// was the silent one — and a user with the exhausted alert off heard nothing at all when
+    /// a limit ran out.
+    ///
+    /// Every reached tier is always claimed, even when nothing is spoken. Dropping the claim
+    /// would deliver a stale alert the moment the setting was switched on, which is the
+    /// backlog this design exists to prevent.
+    private static func appendQuotaEvents(
+        accountId: String,
+        accountLabel: String,
+        episode: Int,
+        exhaustedLabel: String?,
+        worstLabel: String?,
+        lowestKnownRemaining: Double?,
+        settings: NotificationSettings,
+        into events: inout [Event]
+    ) {
+        let reached: [Tier]
+        if exhaustedLabel != nil {
+            reached = [.warning, .critical, .exhausted]
+        } else if let remaining = lowestKnownRemaining, remaining < criticalPercent {
+            reached = [.warning, .critical]
+        } else if let remaining = lowestKnownRemaining, remaining < warningPercent {
+            reached = [.warning]
+        } else {
+            reached = []
+        }
+
+        guard let condition = reached.last, let label = exhaustedLabel ?? worstLabel else { return }
+
+        let line = reached.contains(where: { $0.enabled(settings) })
+            ? condition.message(accountLabel, label)
+            : ""
+
+        for tier in reached {
+            events.append(Event(
+                accountId: accountId,
+                key: "\(accountId)|\(episode)|\(tier.key)",
+                // Only the strongest reached tier carries the text: the weaker ones exist to be
+                // consumed so a later dip cannot re-announce a threshold already passed.
+                line: tier == condition ? line : ""))
+        }
+    }
+
+    /// Whether the account has climbed back out of its low-quota episode.
+    ///
+    /// An unknown percentage does not block recovery. Treating it as low did, in the Kotlin
+    /// original: one window whose figure the provider stopped reporting vetoed recovery for
+    /// good, so the episode never ended and the account never alerted again. Unknown is an
+    /// absence of evidence, and such an account already reads as an error on screen — adding
+    /// permanent silence on top of that helps nobody.
+    ///
+    /// `allSatisfy` over an empty list is true, which is the same judgement: an account
+    /// reporting no windows is not an account known to be low.
+    private static func hasRecovered(_ windows: [UsageWindow]) -> Bool {
+        guard !windows.contains(where: { $0.exhausted }) else { return false }
+        return windows.allSatisfy { ($0.remainingPercent ?? warningPercent) >= warningPercent }
+    }
+
+    // MARK: Resets and credits
+
+    /// Emits reset-approaching edges.
+    ///
+    /// Keyed on the reset timestamp, because that is the only cycle identifier the providers
+    /// give. A provider correcting the timestamp therefore looks like a new cycle and can
+    /// notify twice — the honest limit of what these payloads support, and better than keying
+    /// on the window alone, which would go silent for every later reset.
+    ///
+    /// Claimed even while the setting is off, so switching it on delivers what happens next
+    /// rather than a heads-up for a reset that has been approaching since the last sync. Only
+    /// the text is withheld.
+    ///
+    /// The lead interval is measured against `now`, not the snapshot's own `fetchedAt`. When
+    /// evaluation runs late those diverge, and reading from `fetchedAt` would announce "resets
+    /// in about 20 minutes" for a reset that happened an hour ago. A heads-up that arrives
+    /// late and wrong is worse than one that does not arrive.
+    private static func appendResetApproachingEvents(
+        accountId: String,
+        accountLabel: String,
+        windows: [UsageWindow],
+        settings: NotificationSettings,
+        now: Date,
+        into events: inout [Event]
+    ) {
+        let lead = TimeInterval(settings.resetApproachingMinutes) * 60
+
+        for window in windows {
+            guard let resetAt = window.resetAt else { continue }
+            let remaining = resetAt.timeIntervalSince(now)
+            guard remaining > 0, remaining <= lead else { continue }
+
+            let minutes = Int(ceil(remaining / 60))
+            events.append(Event(
+                accountId: accountId,
+                key: "\(accountId)|\(window.category.rawValue):\(window.label)"
+                    + "|reset-approaching|\(resetAt.timeIntervalSince1970)",
+                line: settings.notifyOnResetApproaching
+                    ? "\(accountLabel) · \(window.label) resets in about \(minutes) minutes"
+                    : ""))
+        }
+    }
+
+    /// Emits one edge per reset credit about to lapse, each naming its own deadline.
+    ///
+    /// A counted summary cannot be made exactly-once by a pure evaluator. Hanging it on the
+    /// first expiring credit meant a second credit entering the window later found that key
+    /// already claimed, so the only line carrying text was discarded and the new credit lapsed
+    /// in silence. Keying it by the whole set instead re-announces the moment the set shrinks.
+    /// A credit's own id is the only key meaning exactly "this credit, once".
+    ///
+    /// The cost is two lines when two credits lapse together, and they are not redundant: they
+    /// carry different deadlines, which is the fact the user needs in order to act.
+    ///
+    /// Only credits with a real expiry and an available status qualify. A count without rows
+    /// cannot support this at all — a number says nothing about when anything expires, and
+    /// guessing would put a deadline on screen the provider never stated.
+    private static func appendCreditExpiringEvents(
+        accountId: String,
+        accountLabel: String,
+        snapshot: UsageSnapshot,
+        settings: NotificationSettings,
+        now: Date,
+        into events: inout [Event]
+    ) {
+        let lead = TimeInterval(settings.resetCreditExpiryLeadMinutes) * 60
+
+        let expiring = snapshot.resetCredits.filter { credit in
+            guard let expiresAt = credit.expiresAt else { return false }
+            let remaining = expiresAt.timeIntervalSince(now)
+            guard remaining > 0, remaining <= lead else { return false }
+            guard credit.status.lowercased() == "available" else { return false }
+            if let grantedAt = credit.grantedAt, grantedAt > now { return false }
+            return true
+        }
+
+        for credit in expiring.sorted(by: { ($0.expiresAt ?? now) < ($1.expiresAt ?? now) }) {
+            let remaining = (credit.expiresAt ?? now).timeIntervalSince(now)
+            events.append(Event(
+                accountId: accountId,
+                key: "\(accountId)|\(credit.id)|credit-expiring",
+                line: settings.notifyOnResetCreditExpiring
+                    ? "\(accountLabel) · a reset credit expires in "
+                        + Countdown.format(seconds: Int(remaining))
+                    : ""))
+        }
+    }
+
+    /// A still-true fact rather than an edge.
+    ///
+    /// It repeats on every sync by design: "you hold two credits" stays true until one is
+    /// spent, and the notification is replaced rather than stacked, so a standing fact stays
+    /// visible without alerting again.
+    private static func appendCreditsAvailableFinding(
+        accountLabel: String,
+        settings: NotificationSettings,
+        snapshot: UsageSnapshot,
+        into findings: inout [String]
+    ) {
+        guard settings.notifyOnResetCreditAvailable else { return }
+        let count = snapshot.resetCredits.filter { $0.status.lowercased() == "available" }.count
+        guard count > 0 else { return }
+
+        let noun = count == 1 ? "reset credit" : "reset credits"
+        findings.append("\(accountLabel) · \(count) \(noun) available")
+    }
+}
