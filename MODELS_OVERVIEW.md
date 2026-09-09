@@ -26,6 +26,12 @@ would add a network hop and a second quota pool for no gain in capability.
 | `gpt-5.6-sol` | OpenAI GPT-5.6 | fast, solid on well-specified single-file work | **PRIMARY_WORKER 2** — mechanical and localised edits |
 | `grok-4.6` | xAI Grok 4.6 | reasoning model — spent 53 reasoning tokens on a two-word reply, so it deliberates before answering | **PRIMARY_WORKER 3** — analysis, review passes, and the independent third opinion |
 | `gemini-3.8-flash` | Google Gemini 3.8 | fast and cheap | **LOW_RISK_WORKER** — only for tasks where a mistake is cheap and obvious: comment wording, doc typos, formatting, mechanical renames. Never for logic, parsing or auth. |
+| `z-ai/glm-5.3-free` | Z.ai GLM 5.3 (second gateway) | strong on long-running coding work; deliberately slow | **BACKGROUND_WORKER** — large self-contained jobs nothing is waiting on: whole test suites, broad refactors. Never on the critical path. |
+
+`z-ai/glm-5.3-free` is served by a **separate gateway** (`$TOKENROUTER_BASE_URL`, its own key),
+not by CLIProxyAPI. The delegation helper maps each model id to its gateway, so a task is routed
+by capability without the caller knowing which endpoint answers. That gateway currently exposes
+exactly one model.
 
 All four smoke-tested with a minimal `chat/completions` call: HTTP 200, correct reply, usage
 reported. None needed the Responses API.
@@ -74,12 +80,31 @@ Set per model, sent as `reasoning_effort` on every call.
 | `gpt-5.6-sol` | `max` |
 | `grok-4.6` | `xhigh` |
 | `gemini-3.8-flash` | `high` |
+| `z-ai/glm-5.3-free` | `max` |
 
-The gateway accepts all four values without error. Whether each is honoured is another matter:
-`grok-4.6` and `gemini-3.8-flash` report non-zero `completion_tokens_details.reasoning_tokens`,
-so effort demonstrably reaches them. The two GPT ids reported **zero** reasoning tokens even at
-`xhigh` and `max`, so either they reason without reporting it or the setting is being dropped
-for them. Worth knowing before attributing an answer's quality to the setting.
+The gateways accept every one of these values without error. Whether each is honoured is another matter:
+`grok-4.6`, `gemini-3.8-flash` and `z-ai/glm-5.3-free` report non-zero
+`completion_tokens_details.reasoning_tokens` — GLM spent 66 of them on a two-word reply — so
+effort demonstrably reaches those three. The two GPT ids reported **zero** reasoning tokens on a
+trivial prompt even at `xhigh` and `max`, but 280–311 on real work, so they report reasoning
+only when they actually do some. Worth knowing before attributing an answer's quality to a
+setting.
+
+## Observed capability, not advertised
+
+The gateways publish no capability metadata, so this is what the work actually showed.
+
+| model | measured | verdict |
+|---|---|---|
+| `gpt-6-astra` | 3 tasks, 3 successes, 74–116s, 280–311 reasoning tokens | The workhorse. On the Codex task it inferred a companion change the brief never named — that `attributes` must store only the genuine `chatgpt_account_id`, or the header it was told to fix inherits the `sub` fallback through the back door. That is reasoning about consequences, not pattern-matching, and it is why Astra gets anything where being *almost* right is expensive. |
+| `gpt-5.6-sol` | 1 timeout (524) on a 10 KB prompt at `max` | Not yet proven here. The one failure was a gateway timeout, not a wrong answer, and `max` effort on a large prompt is the likely cause. Keep it on genuinely small inputs. |
+| `grok-4.6` | 1 success (trivial), 1 timeout (524) on an 11 KB analysis prompt | Same pattern as Sol: fine on small inputs, times out on large ones. The reasoning-token accounting is real, so it is worth keeping for judgement calls — just not for big prompts. |
+| `gemini-3.8-flash` | 1 success (trivial), 1 unexplained failure | Held to low-risk work regardless of how it performs. The point is not its accuracy; it is that a wrong answer must be caught by a compile, a test, or a glance at the diff. |
+| `z-ai/glm-5.3-free` | smoke test only; 8s for a two-word reply at `max` | Reserved for large background jobs. Its latency is the constraint, so nothing on the critical path waits on it. |
+
+**The pattern worth acting on: prompt size predicts failure better than model choice.** Both 524s
+came from prompts over 10 KB. Large context goes to Astra or GLM; the others get small, sharply
+scoped inputs.
 
 ## Operational notes
 
