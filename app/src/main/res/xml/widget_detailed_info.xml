@@ -13,4 +13,6 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:description="@string/widget_detailed_description"
-    android:initialLayout="@layout/glance_default_loading_layout" />
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:configure="com.usagelimits.widget.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />
