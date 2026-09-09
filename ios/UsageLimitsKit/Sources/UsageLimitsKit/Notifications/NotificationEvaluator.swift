@@ -28,7 +28,7 @@ public struct AccountSummary: Sendable, Equatable {
     }
 }
 
-public struct NotificationSettings: Equatable, Sendable {
+public struct NotificationSettings: Equatable, Sendable, Codable {
     public var notifyBelow20Percent = true
     public var notifyBelow10Percent = true
     public var notifyOnExhausted = true
