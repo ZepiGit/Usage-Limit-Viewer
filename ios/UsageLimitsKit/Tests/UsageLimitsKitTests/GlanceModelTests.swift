@@ -29,7 +29,7 @@ final class GlanceModelTests: XCTestCase {
     private func usage(
         _ id: String,
         _ provider: ProviderID,
-        usedPercent: Double,
+        usedPercent: Double?,
         fetchedAt: Date? = nil,
         status: SnapshotStatus = .ok
     ) -> AccountUsage {
@@ -109,7 +109,25 @@ final class GlanceModelTests: XCTestCase {
 
         // Ranking by the Severity case order put error, then stale, then exhausted — so this
         // used to lead with an account whose quota may be perfectly fine.
-        XCTAssertEqual(snapshot.accounts.map(\.id), ["out", "stale", "error"])
+        XCTAssertEqual(snapshot.accounts.first?.id, "out")
+    }
+
+    func testAccountsWithNoNumbersDoNotDisplaceAccountsWithNumbers() {
+        // A two-tile widget has two slots. A never-fetched or failed account has no rows to
+        // show, so ranking it above a real one filled the tile with blank cards and pushed the
+        // account at 3 % off the screen entirely.
+        let mixed = [
+            usage("never-fetched", .codex, usedPercent: nil),
+            usage("failed", .claude, usedPercent: nil, status: .failed),
+            usage("tight", .xai, usedPercent: 97),
+        ]
+
+        let snapshot = GlanceModel.build(mixed, now: now, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.id, "tight")
+        // The unreadable accounts still reach the user, through the one signal that is not
+        // slot-limited.
+        XCTAssertEqual(snapshot.overallSeverity, Severity.error)
     }
 
     func testOneSeverityBandIsOrderedByRemainingAscending() {
@@ -140,7 +158,7 @@ final class GlanceModelTests: XCTestCase {
 
         XCTAssertEqual(
             snapshot.accounts.map(\.id),
-            ["exhausted", "stale", "error", "low", "medium", "healthy"])
+            ["exhausted", "low", "medium", "healthy", "error", "stale"])
     }
 
     func testOrderingIsStableForAccountsThatCannotBeSeparated() {
@@ -155,11 +173,121 @@ final class GlanceModelTests: XCTestCase {
 
     // MARK: - Headlines and staleness
 
-    func testHeadlinePicksTheTightestWindowOfEachHorizon() throws {
-        let snapshot = GlanceModel.build(all, now: now, scope: .allAccounts)
+    func testTheHeadlineBelongsToTheLeadingAccount() throws {
+        // Not a pooled minimum. On a tile showing two of six accounts, a pooled figure could be
+        // the sixth account's window — a number the reader cannot locate anywhere on screen.
+        let snapshot = GlanceModel.build(all, now: now, scope: .mostCritical)
 
+        let lead = try XCTUnwrap(snapshot.accounts.first)
+        XCTAssertEqual(lead.id, "b")
         XCTAssertEqual(try XCTUnwrap(snapshot.headlineShort?.remainingPercent), 10, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(snapshot.headlineLong?.remainingPercent), 10, accuracy: 0.001)
+        // And it is the same row the leading card itself shows.
+        XCTAssertEqual(snapshot.headlineShort, lead.rows.first { $0.category == .fiveHour })
+    }
+
+    func testOneAccountsWeeklyWindowDoesNotSuppressAnothersMonthlyOne() throws {
+        // Applying `weekly ?? monthly` to the pool meant any single weekly window hid every
+        // monthly one, so the headline could read 80 % while a visible row read 3 %.
+        let weeklyOnly = usage("weekly", .claude, usedPercent: 20)
+        let monthlyOnly = AccountUsage(
+            account: account("monthly", .xai),
+            snapshot: UsageSnapshot(
+                accountID: "monthly", fetchedAt: now, status: .ok,
+                windows: [
+                    UsageWindow(id: "mo", label: "Monthly", category: .monthly,
+                                usedPercent: 97, periodSeconds: 2_592_000,
+                                resetAt: nil, exhausted: false),
+                ]))
+
+        let snapshot = GlanceModel.build(
+            [weeklyOnly, monthlyOnly], now: now, scope: .mostCritical)
+
+        // The monthly-only account leads on 3 % remaining, and the headline is ITS window.
+        XCTAssertEqual(snapshot.accounts.first?.id, "monthly")
+        XCTAssertEqual(snapshot.headlineLong?.category, .monthly)
+        XCTAssertEqual(try XCTUnwrap(snapshot.headlineLong?.remainingPercent), 3, accuracy: 0.001)
+    }
+
+    func testTheNextResetBelongsToTheAccountTheHeadlineDescribes() throws {
+        // Taken across every account this paired the headline state with an unrelated clock:
+        // "0 % left · resets in 12m", where the twelve minutes belonged to a healthy account's
+        // five-hour window. Healthy five-hour windows reset constantly, so it was the common
+        // case rather than an edge.
+        let spentSoon = AccountUsage(
+            account: account("spent", .codex),
+            snapshot: UsageSnapshot(
+                accountID: "spent", fetchedAt: now, status: .ok,
+                windows: [
+                    UsageWindow(id: "mo", label: "Monthly", category: .monthly,
+                                usedPercent: 100, periodSeconds: 2_592_000,
+                                resetAt: now.addingTimeInterval(20 * 86_400), exhausted: true),
+                ]))
+        let healthySoon = AccountUsage(
+            account: account("healthy", .claude),
+            snapshot: UsageSnapshot(
+                accountID: "healthy", fetchedAt: now, status: .ok,
+                windows: [
+                    UsageWindow(id: "5h", label: "5h limit", category: .fiveHour,
+                                usedPercent: 5, periodSeconds: 18_000,
+                                resetAt: now.addingTimeInterval(12 * 60), exhausted: false),
+                ]))
+
+        let snapshot = GlanceModel.build(
+            [healthySoon, spentSoon], now: now, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.id, "spent")
+        XCTAssertEqual(snapshot.nextResetAt, now.addingTimeInterval(20 * 86_400))
+    }
+
+    func testAnUnknownPercentageIsTheMostUrgentHeadlineNotTheLeast() throws {
+        // A nil percentage resolves to `.error`. Treating it as the largest possible number
+        // made the one window the app could not read the last one it would ever show.
+        let unreadable = AccountUsage(
+            account: account("mixed", .codex),
+            snapshot: UsageSnapshot(
+                accountID: "mixed", fetchedAt: now, status: .ok,
+                windows: [
+                    UsageWindow(id: "a", label: "5h limit", category: .fiveHour,
+                                usedPercent: nil, periodSeconds: 18_000,
+                                resetAt: nil, exhausted: false),
+                    UsageWindow(id: "b", label: "5h limit", category: .fiveHour,
+                                usedPercent: 10, periodSeconds: 18_000,
+                                resetAt: nil, exhausted: false),
+                ]))
+
+        let snapshot = GlanceModel.build([unreadable], now: now, scope: .mostCritical)
+
+        XCTAssertNil(snapshot.headlineShort?.remainingPercent ?? nil)
+        XCTAssertEqual(snapshot.headlineShort?.severity, .error)
+    }
+
+    func testSubPointDriftDoesNotReorderTheTiles() {
+        // Two healthy accounts drifting 47.2 to 46.8 and 46.9 to 47.1 swapped on every refresh.
+        // On a home screen that means the reader re-scans from scratch each time.
+        let before = [
+            usage("a", .codex, usedPercent: 52.8),
+            usage("b", .claude, usedPercent: 53.1),
+        ]
+        let after = [
+            usage("a", .codex, usedPercent: 53.2),
+            usage("b", .claude, usedPercent: 52.9),
+        ]
+
+        XCTAssertEqual(
+            GlanceModel.build(before, now: now, scope: .mostCritical).accounts.map(\.id),
+            GlanceModel.build(after, now: now, scope: .mostCritical).accounts.map(\.id))
+    }
+
+    func testAMeaningfulDifferenceStillReorders() {
+        let band = [
+            usage("roomy", .codex, usedPercent: 55),
+            usage("tight", .claude, usedPercent: 70),
+        ]
+
+        XCTAssertEqual(
+            GlanceModel.build(band, now: now, scope: .mostCritical).accounts.map(\.id),
+            ["tight", "roomy"])
     }
 
     func testAMonthlyWindowStandsInForTheLongHorizon() throws {

@@ -15,12 +15,21 @@ public enum GlanceScope: String, Sendable, Codable {
 /// One bar.
 public struct GlanceRow: Sendable, Equatable {
     public let label: String
+    /// Carried so a headline can be chosen by horizon rather than by position in `rows`.
+    public let category: WindowCategory
     public let remainingPercent: Double?
     public let resetAt: Date?
     public let severity: Severity
 
-    public init(label: String, remainingPercent: Double?, resetAt: Date?, severity: Severity) {
+    public init(
+        label: String,
+        category: WindowCategory,
+        remainingPercent: Double?,
+        resetAt: Date?,
+        severity: Severity
+    ) {
         self.label = label
+        self.category = category
         self.remainingPercent = remainingPercent
         self.resetAt = resetAt
         self.severity = severity
@@ -103,33 +112,57 @@ public enum GlanceModel {
 
         let accounts = selected.map { glanceAccount($0, now: now) }
         let ordered = scope == .mostCritical ? sortedByUrgency(accounts) : accounts
-        let allWindows = selected.flatMap { $0.snapshot?.windows ?? [] }
+
+        // The headline belongs to ONE account — the one leading the list — not to a pool.
+        //
+        // Reducing across every account produced a number attributed to nobody. On a tile
+        // showing two of six accounts, "5h: 3 %" could be the sixth account's window, so the
+        // user read a figure they could not locate. Worse, `weekly ?? monthly` applied to the
+        // pool meant any one account having a weekly window suppressed every monthly one, so
+        // the headline could read 80 % while a visible row read 3 %.
+        let lead = ordered.first
 
         return GlanceSnapshot(
             accounts: ordered,
             accountCount: selected.count,
             updatedAt: selected.compactMap { $0.snapshot?.fetchedAt }.max(),
-            nextResetAt: allWindows.compactMap(\.resetAt).min(),
+            // The soonest reset OF THE LEADING ACCOUNT. Taken across all accounts it paired the
+            // headline state with an unrelated account's clock: "0 % left · resets in 12m",
+            // where the twelve minutes belonged to a healthy account's five-hour window. And
+            // because healthy five-hour windows reset constantly, that was the common case.
+            nextResetAt: lead?.rows.compactMap(\.resetAt).min(),
+            // Deliberately NOT the leading account's severity. This answers "is anything wrong
+            // anywhere", which is a different question from "what should I look at first" —
+            // and it is the only thing that still surfaces a broken account once the ordering
+            // below stops letting rowless accounts occupy a two-slot widget.
             overallSeverity: ordered.map(\.severity).max() ?? .stale,
-            headlineShort: headline(allWindows, .fiveHour),
-            // A monthly window stands in for the long horizon when a plan has no weekly one.
-            headlineLong: headline(allWindows, .weekly) ?? headline(allWindows, .monthly))
+            headlineShort: lead?.rows.first { $0.category == .fiveHour },
+            headlineLong: lead?.rows.first { $0.category == .weekly || $0.category == .monthly })
     }
 
-    /// Worst first, with the tightest number breaking a tie.
+    /// Worst first, with the tightest number breaking a tie — coarsely.
     ///
-    /// The sort is stable on the urgency rank and then on the number, so two accounts in the
-    /// same band never swap places between refreshes for no reason a user could see.
+    /// The number is compared in five-point bands rather than exactly. Two healthy accounts
+    /// drifting 47.2 to 46.8 and 46.9 to 47.1 swapped places on every refresh, which on a home
+    /// screen means the reader re-scans from scratch each time and stops trusting the position
+    /// of anything. Within a band the original order holds, so a tile only moves when something
+    /// meaningful changed.
     private static func sortedByUrgency(_ accounts: [GlanceAccount]) -> [GlanceAccount] {
         accounts.enumerated()
             .sorted { lhs, rhs in
                 let l = urgency(lhs.element.severity), r = urgency(rhs.element.severity)
                 if l != r { return l < r }
-                let lt = lhs.element.tightestRemaining, rt = rhs.element.tightestRemaining
-                if lt != rt { return lt < rt }
+                let lb = band(lhs.element.tightestRemaining)
+                let rb = band(rhs.element.tightestRemaining)
+                if lb != rb { return lb < rb }
                 return lhs.offset < rhs.offset
             }
             .map(\.element)
+    }
+
+    /// Five-point buckets, so sub-point drift cannot reorder a home screen.
+    private static func band(_ remaining: Double) -> Int {
+        remaining >= .greatestFiniteMagnitude ? Int.max : Int(remaining / 5)
     }
 
     /// Rank for the automatic scope, lowest first.
@@ -139,27 +172,36 @@ public enum GlanceModel {
     /// it led with an account the app merely failed to read, above one the user has genuinely
     /// run out on.
     ///
-    /// A glance surface leads with limits that are real: exhausted first, then error and stale
-    /// together (both mean "the app cannot currently tell you"), then the merely-getting-low.
+    /// Error and stale then sort LAST, below healthy, which reads wrong until you count the
+    /// slots. Both states are rowless — a never-fetched or failed account has no windows to
+    /// show — so ranking them highly filled a two-tile widget with blank cards and pushed an
+    /// account at 3 % off the screen entirely. A blank tile answers nothing; the account with a
+    /// real number does. That an account is unreadable still reaches the user through
+    /// `overallSeverity` and through the app's own list, neither of which is slot-limited.
     private static func urgency(_ severity: Severity) -> Int {
         switch severity {
         case .exhausted: return 0
-        case .error, .stale: return 1
-        case .low: return 2
-        case .medium: return 3
-        case .healthy: return 4
+        case .low: return 1
+        case .medium: return 2
+        case .healthy: return 3
+        case .error: return 4
+        case .stale: return 5
         }
     }
 
-    /// The tightest window of a category — the number worth surfacing in one tile.
+    /// The tightest window of a category — the number worth surfacing in one row.
+    ///
+    /// An unknown percentage sorts as MOST urgent, not least. It resolves to `.error`, so
+    /// treating it as the largest possible number made the one window the app could not read
+    /// the last one it would ever show — and when every window of a category was unknown, the
+    /// comparison never fired and an arbitrary one was kept.
     private static func headline(
         _ windows: [UsageWindow],
         _ category: WindowCategory
     ) -> GlanceRow? {
         windows
             .filter { $0.category == category }
-            .min { ($0.remainingPercent ?? .greatestFiniteMagnitude)
-                 < ($1.remainingPercent ?? .greatestFiniteMagnitude) }
+            .min { ($0.remainingPercent ?? -1) < ($1.remainingPercent ?? -1) }
             .map(row)
     }
 
@@ -198,6 +240,7 @@ public enum GlanceModel {
 
         return GlanceRow(
             label: label,
+            category: window.category,
             remainingPercent: window.remainingPercent,
             resetAt: window.resetAt,
             severity: window.severity)
