@@ -6,6 +6,7 @@ import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.settings.AppSettings
+import com.usagelimits.core.time.Countdown
 import kotlin.math.ceil
 
 /**
@@ -81,7 +82,11 @@ object NotificationEvaluator {
         states: Map<String, AccountState>,
         nowMs: Long,
     ): Outcome {
-        val newStates = mutableListOf<AccountState>()
+        // Seeded with every state we were given, not only the accounts in this sync. A provider
+        // that returns a partial response would otherwise drop an account's state, restart its
+        // episode numbering at 1, and collide with keys episode 1 already claimed — leaving
+        // that account permanently silent. Evicting state is the caller's job, on deletion.
+        val newStates = LinkedHashMap(states)
         val events = mutableListOf<Event>()
         val standing = mutableListOf<String>()
 
@@ -93,7 +98,7 @@ object NotificationEvaluator {
             // A failed refresh proves nothing about quota. Advancing state on one would let a
             // network blip end a low-quota episode and re-arm the warning for the next sync.
             if (snapshot == null || snapshot.status == SnapshotStatus.FAILED) {
-                newStates += previous
+                newStates[id] = previous
                 standing += authFinding(usage, snapshot, settings)
                 continue
             }
@@ -103,18 +108,18 @@ object NotificationEvaluator {
             if (previous.lastProcessedFetchedAt != null &&
                 snapshot.fetchedAt <= previous.lastProcessedFetchedAt
             ) {
-                newStates += previous
+                newStates[id] = previous
                 standing += standingFindings(usage, snapshot, settings)
                 continue
             }
 
             val (state, accountEvents) = evaluateAccount(usage, snapshot, settings, previous, nowMs)
-            newStates += state
+            newStates[id] = state
             events += accountEvents
             standing += standingFindings(usage, snapshot, settings)
         }
 
-        return Outcome(newStates, events, standing)
+        return Outcome(newStates.values.toList(), events, standing)
     }
 
     private fun evaluateAccount(
@@ -136,12 +141,52 @@ object NotificationEvaluator {
     }
 
     /**
-     * The two low-quota tiers, as one episode with two one-shot bits.
+     * The three low-quota tiers.
+     *
+     * A tier is a deduplication key, not a message. Whether the user hears anything depends on
+     * their settings; *what* they hear describes the condition that was actually reached, so
+     * an exhausted limit is never announced as "less than 20 % remaining".
+     */
+    private enum class Tier(val key: String) {
+        WARNING("warning"),
+        CRITICAL("critical"),
+        EXHAUSTED("exhausted"),
+        ;
+
+        fun enabled(settings: AppSettings): Boolean = when (this) {
+            WARNING -> settings.notifyBelow20Percent
+            CRITICAL -> settings.notifyBelow10Percent
+            EXHAUSTED -> settings.notifyOnExhausted
+        }
+
+        fun message(name: String, label: String): String = when (this) {
+            WARNING -> "$name · $label: less than 20% remaining"
+            CRITICAL -> "$name · $label: less than 10% remaining"
+            EXHAUSTED -> "$name · $label exhausted"
+        }
+    }
+
+    /**
+     * The low-quota tiers, as one episode with one-shot keys.
      *
      * A single adjustable threshold cannot express this: the point of the second tier is that
-     * an account already warned at 18 % should still say something when it reaches 8 %, and
-     * exactly once. Falling straight past both consumes both keys but emits only the stronger
-     * line, so a fast burn does not produce two notifications a second apart.
+     * an account already warned at 18 % should still say something at 8 %, and exactly once.
+     * Reaching a tier consumes every weaker one too, so a fast burn produces one line rather
+     * than a stack of them, and a later partial recovery cannot warn about a limit the user
+     * has already watched run out.
+     *
+     * Two rules here exist because getting them wrong produced silence, which is the worst
+     * failure a quota alert can have:
+     *
+     * The message describes the strongest tier REACHED, and is spoken if any reached tier is
+     * enabled. Routing the message to its own tier's setting instead meant a user with only
+     * the 20 % alert on heard nothing when quota crashed straight past 10 % — the urgent case
+     * was the silent one — and a user with the exhausted alert off heard nothing at all when a
+     * limit ran out.
+     *
+     * Every reached tier is always claimed, even when nothing is spoken. Dropping the claim
+     * instead would deliver a stale alert the moment the setting was turned on, which is the
+     * backlog this design exists to prevent.
      */
     private fun evaluateLowQuota(
         name: String,
@@ -153,27 +198,34 @@ object NotificationEvaluator {
         val worst = windows.filter { it.remainingPercent != null }
             .minByOrNull { it.remainingPercent!! }
         val remaining = worst?.remainingPercent
-        val exhausted = windows.any { it.severity == Severity.EXHAUSTED }
+        val exhaustedWindow = windows.firstOrNull { it.severity == Severity.EXHAUSTED }
 
-        // Recovery: every window is known, healthy and unspent. Only then may the next dip
-        // warn again. An unknown percentage is not recovery, it is an absence of evidence.
-        val recovered = windows.isNotEmpty() &&
-            !exhausted &&
-            windows.all { (it.remainingPercent ?: -1.0) >= WARNING_PERCENT }
+        // An unknown percentage does not block recovery. Treating it as low did: one window
+        // whose figure the provider stopped reporting vetoed recovery for good, so the episode
+        // never ended and the account never alerted again. Unknown is an absence of evidence,
+        // and the account already reads as ERROR on screen — adding permanent silence on top
+        // of that helps nobody. `all` over an empty list is true, which is the same judgement:
+        // an account reporting nothing is not an account known to be low.
+        val recovered = exhaustedWindow == null &&
+            windows.all { (it.remainingPercent ?: WARNING_PERCENT) >= WARNING_PERCENT }
 
         if (recovered) {
             return previous.copy(lowQuotaActive = false) to emptyList()
         }
 
-        val belowWarning = remaining != null && remaining > 0.0 && remaining < WARNING_PERCENT
-        val belowCritical = remaining != null && remaining > 0.0 && remaining < CRITICAL_PERCENT
+        val belowWarning = remaining != null && remaining < WARNING_PERCENT
+        val belowCritical = remaining != null && remaining < CRITICAL_PERCENT
 
-        if (!exhausted && !belowWarning) {
-            return previous to emptyList()
+        val reached = when {
+            exhaustedWindow != null -> listOf(Tier.WARNING, Tier.CRITICAL, Tier.EXHAUSTED)
+            belowCritical -> listOf(Tier.WARNING, Tier.CRITICAL)
+            belowWarning -> listOf(Tier.WARNING)
+            else -> emptyList()
         }
+        if (reached.isEmpty()) return previous to emptyList()
 
-        // An episode is the unit of deduplication. Starting one here — rather than on the
-        // first notification — means the keys stay stable even when the setting is off.
+        // An episode is the unit of deduplication. Starting one here — rather than at the first
+        // notification — keeps the keys stable even while every setting is off.
         val state = if (previous.lowQuotaActive) {
             previous
         } else {
@@ -182,48 +234,23 @@ object NotificationEvaluator {
         val episode = state.lowQuotaEpisode
         val account = snapshot.accountId
 
-        // Exhaustion supersedes both tiers. Consuming their keys anyway is what stops a
-        // recovery from 0 % to 15 % producing a "less than 20 % left" line for a limit the
-        // user has already watched run out.
-        if (exhausted) {
-            val label = windows.first { it.severity == Severity.EXHAUSTED }.label
-            return state to listOf(
-                Event(account, key(account, episode, "exhausted"), "$name · $label exhausted")
-                    .takeIf { settings.notifyOnExhausted },
-                Event(account, key(account, episode, "warning"), ""),
-                Event(account, key(account, episode, "critical"), ""),
-            ).filterNotNull()
-        }
-
-        val label = worst?.label ?: return state to emptyList()
-        val claims = mutableListOf<Event>()
-
-        // The stronger tier is emitted and the weaker one is consumed silently, so a drop
-        // straight from 40 % to 8 % says "less than 10 %" once rather than both lines at once.
-        if (belowCritical) {
-            claims += Event(account, key(account, episode, "warning"), "")
-            claims += Event(
-                account,
-                key(account, episode, "critical"),
-                if (settings.notifyBelow10Percent) {
-                    "$name · $label: less than 10% remaining"
-                } else {
-                    ""
-                },
-            )
+        val condition = reached.last()
+        val label = (exhaustedWindow ?: worst)?.label ?: return state to emptyList()
+        val line = if (reached.any { it.enabled(settings) }) {
+            condition.message(name, label)
         } else {
-            claims += Event(
-                account,
-                key(account, episode, "warning"),
-                if (settings.notifyBelow20Percent) {
-                    "$name · $label: less than 20% remaining"
-                } else {
-                    ""
-                },
-            )
+            ""
         }
 
-        return state to claims
+        return state to reached.map { tier ->
+            Event(
+                account,
+                key(account, episode, tier.key),
+                // Only the strongest reached tier carries the text: the weaker ones exist to be
+                // consumed so a later dip cannot re-announce a threshold already passed.
+                if (tier == condition) line else "",
+            )
+        }
     }
 
     /**
@@ -233,6 +260,13 @@ object NotificationEvaluator {
      * providers give. A provider correcting the timestamp therefore looks like a new cycle and
      * can notify twice — which is the honest limit of what these payloads support, and better
      * than keying on the window alone, which would go silent for every later reset.
+     *
+     * The lead interval is measured against [nowMs], deliberately, not against the snapshot's
+     * own `fetchedAt`. When evaluation runs late — a queued retry, a deferred worker — those
+     * two diverge, and reading from `fetchedAt` would announce "resets in about 20 minutes"
+     * for a reset that happened an hour ago. A heads-up that arrives late and wrong is worse
+     * than one that does not arrive: this notification is a claim about the future, so it is
+     * measured from the present.
      */
     private fun evaluateResetApproaching(
         name: String,
@@ -240,7 +274,9 @@ object NotificationEvaluator {
         settings: AppSettings,
         nowMs: Long,
     ): List<Event> {
-        if (!settings.notifyOnResetApproaching) return emptyList()
+        // Claimed even while the setting is off, so switching it on delivers what happens next
+        // rather than a heads-up for a reset that has been approaching since yesterday. Only
+        // the text is withheld.
         val leadMs = settings.resetApproachingMinutes.toLong() * MINUTE_MS
 
         return snapshot.windows.mapNotNull { window ->
@@ -253,7 +289,11 @@ object NotificationEvaluator {
             Event(
                 snapshot.accountId,
                 key(snapshot.accountId, windowKey(window), "reset-approaching", resetAt.toString()),
-                "$name · ${window.label} resets in about $minutes minutes",
+                if (settings.notifyOnResetApproaching) {
+                    "$name · ${window.label} resets in about $minutes minutes"
+                } else {
+                    ""
+                },
             )
         }
     }
@@ -271,7 +311,7 @@ object NotificationEvaluator {
         settings: AppSettings,
         nowMs: Long,
     ): List<Event> {
-        if (!settings.notifyOnResetCreditExpiring) return emptyList()
+        // Same reasoning as the reset heads-up: claimed while off, text withheld.
         val leadMs = settings.resetCreditExpiryLeadMinutes.toLong() * MINUTE_MS
 
         val expiring = snapshot.resetCredits.filter { credit ->
@@ -284,21 +324,29 @@ object NotificationEvaluator {
         }
         if (expiring.isEmpty()) return emptyList()
 
-        // One line per account, but one claim per credit: two credits lapsing on different days
-        // should notify twice, while two lapsing together should not produce two lines.
         val name = usage.account.label
-        val hours = settings.resetCreditExpiryLeadMinutes / 60
-        val within = if (hours >= 1) "$hours hours" else "${settings.resetCreditExpiryLeadMinutes} minutes"
-        val noun = if (expiring.size == 1) "credit expires" else "credits expire"
-        val line = "$name · ${expiring.size} reset $noun within $within"
 
-        return expiring.mapIndexed { index, credit ->
+        // One line per credit, each naming its own deadline, rather than one counted summary.
+        //
+        // A summary cannot be made exactly-once by a pure evaluator. Hanging it on the first
+        // credit meant a second credit entering the window later found that key claimed, so
+        // the only line carrying text was discarded and the new credit lapsed in silence.
+        // Keying it by the whole set instead re-announces the moment the set shrinks — spend
+        // one of two credits and the remaining one is announced again as though it were new.
+        //
+        // A credit's own id is the only key that means exactly "this credit, once". The cost is
+        // two lines when two credits lapse together, and they are not redundant: they carry
+        // different deadlines, which is the fact the user needs in order to act.
+        return expiring.sortedBy { it.expiresAt }.map { credit ->
+            val remainingMs = (credit.expiresAt ?: nowMs) - nowMs
             Event(
                 snapshot.accountId,
                 key(snapshot.accountId, credit.id, "credit-expiring"),
-                // Only the first claim carries the text, so the group renders as one line even
-                // when several credits are claimed at once.
-                if (index == 0) line else "",
+                if (settings.notifyOnResetCreditExpiring) {
+                    "$name · a reset credit expires in ${Countdown.format(remainingMs)}"
+                } else {
+                    ""
+                },
             )
         }
     }

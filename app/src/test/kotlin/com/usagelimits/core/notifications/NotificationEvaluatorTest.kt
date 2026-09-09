@@ -228,12 +228,97 @@ class NotificationEvaluatorTest {
     }
 
     @Test
-    fun `an unknown remaining percentage is not treated as recovery`() {
+    fun `an unknown percentage does not block recovery for ever`() {
+        // Treating unknown as "still low" looked cautious and was the opposite. One window
+        // whose figure the provider stopped reporting vetoed recovery permanently, so the
+        // episode never ended and the account never alerted again — silence, which is the
+        // worst failure a quota alert can have. The account already reads as ERROR on screen;
+        // there is nothing to gain by muting it as well.
         val first = run(listOf(usage(remaining = 8.0)), emptyMap())
         val unknown = run(listOf(usage(remaining = null, fetchedAt = now + 1)), first.stateMap())
 
-        // Absence of evidence must not end the episode and rearm both tiers.
-        assertTrue(unknown.stateMap().getValue("acct").lowQuotaActive)
+        assertFalse(unknown.stateMap().getValue("acct").lowQuotaActive)
+
+        // And the next readable dip is heard, rather than swallowed by the old episode.
+        val publisher = publisher()
+        publisher.sync(listOf(usage(remaining = 8.0)), settings, now)
+        publisher.sync(listOf(usage(remaining = null, fetchedAt = now + 1)), settings, now)
+        assertEquals(
+            listOf("Account acct · 5h limit: less than 10% remaining"),
+            publisher.sync(listOf(usage(remaining = 5.0, fetchedAt = now + 2)), settings, now),
+        )
+    }
+
+    @Test
+    fun `an account missing from one sync keeps its episode`() {
+        // A partial provider response dropped the account's state, restarting its episode at 1
+        // and colliding with keys episode 1 had already claimed — after which that account was
+        // permanently silent.
+        val publisher = publisher()
+        publisher.sync(listOf(usage(remaining = 8.0)), settings, now)
+
+        // A sync that simply does not mention it.
+        publisher.sync(emptyList(), settings, now)
+
+        // Recover, then dip again: this must be audible, which it cannot be if the episode
+        // number was reset and the old keys were reused.
+        publisher.sync(listOf(usage(remaining = 90.0, fetchedAt = now + 2)), settings, now)
+        assertEquals(
+            listOf("Account acct · 5h limit: less than 20% remaining"),
+            publisher.sync(listOf(usage(remaining = 18.0, fetchedAt = now + 3)), settings, now),
+        )
+    }
+
+    @Test
+    fun `a crash past ten percent is heard by someone who enabled only the twenty tier`() {
+        // The urgent case was the silent one: the warning line was hard-blanked whenever the
+        // critical tier was reached, and the critical line was withheld because its own
+        // setting was off, so a drop from 40 % to 8 % produced nothing at all.
+        val onlyWarning = settings.copy(notifyBelow10Percent = false)
+        val publisher = publisher()
+
+        assertEquals(
+            listOf("Account acct · 5h limit: less than 10% remaining"),
+            publisher.sync(listOf(usage(remaining = 8.0)), onlyWarning, now),
+        )
+    }
+
+    @Test
+    fun `an exhausted limit is heard by someone who disabled only the exhausted alert`() {
+        val noExhausted = settings.copy(notifyOnExhausted = false)
+        val publisher = publisher()
+
+        // The message still describes what actually happened rather than understating it as a
+        // low-quota warning.
+        assertEquals(
+            listOf("Account acct · 5h limit exhausted"),
+            publisher.sync(
+                listOf(usage(remaining = 0.0, exhausted = true)), noExhausted, now,
+            ),
+        )
+    }
+
+    @Test
+    fun `an exhausted limit with every alert off is silent and stays silent`() {
+        val allOff = settings.copy(
+            notifyOnExhausted = false,
+            notifyBelow20Percent = false,
+            notifyBelow10Percent = false,
+        )
+        val publisher = publisher()
+
+        assertTrue(
+            publisher.sync(listOf(usage(remaining = 0.0, exhausted = true)), allOff, now).isEmpty(),
+        )
+        // Turning the alerts on must not then deliver the exhaustion that happened while they
+        // were off. The claim was dropped rather than consumed, so it used to.
+        assertTrue(
+            publisher.sync(
+                listOf(usage(remaining = 0.0, exhausted = true, fetchedAt = now + 1)),
+                settings,
+                now,
+            ).isEmpty(),
+        )
     }
 
     @Test
@@ -332,10 +417,24 @@ class NotificationEvaluatorTest {
     }
 
     @Test
-    fun `reset approaching is off unless asked for`() {
-        val outcome = run(listOf(usage(remaining = 80.0, resetAt = now + 60_000L)), emptyMap())
+    fun `reset approaching says nothing unless asked for, but still consumes the key`() {
+        val publisher = publisher()
+        val resetAt = now + 10 * 60_000L
 
-        assertTrue(outcome.events.isEmpty())
+        assertTrue(
+            publisher.sync(listOf(usage(remaining = 80.0, resetAt = resetAt)), settings, now)
+                .isEmpty(),
+        )
+        // Switching it on delivers what happens next, not a heads-up for a reset that has been
+        // approaching since the last sync.
+        val enabled = settings.copy(notifyOnResetApproaching = true)
+        assertTrue(
+            publisher.sync(
+                listOf(usage(remaining = 80.0, resetAt = resetAt, fetchedAt = now + 1)),
+                enabled,
+                now,
+            ).isEmpty(),
+        )
     }
 
     // endregion
@@ -343,24 +442,73 @@ class NotificationEvaluatorTest {
     // region expiring reset credits
 
     @Test
-    fun `a credit lapsing inside the lead window notifies once`() {
+    fun `a credit lapsing inside the lead window notifies once, with its own deadline`() {
         val credit = ResetCredit("c1", now - 1000, now + 3_600_000, "available")
-        val outcome = run(listOf(usage(remaining = 80.0, credits = listOf(credit))), emptyMap())
+        val publisher = publisher()
 
-        assertTrue(outcome.lines().any { it.contains("1 reset credit expires within 24 hours") })
+        // The deadline is an event and fires once; the inventory line is a standing fact and
+        // repeats, because "you hold one credit" stays true until it is spent.
+        assertEquals(
+            listOf(
+                "Account acct · a reset credit expires in 1h",
+                "Account acct · 1 reset credit available",
+            ),
+            publisher.sync(listOf(usage(remaining = 80.0, credits = listOf(credit))), settings, now),
+        )
+        assertEquals(
+            listOf("Account acct · 1 reset credit available"),
+            publisher.sync(
+                listOf(usage(remaining = 80.0, credits = listOf(credit), fetchedAt = now + 1)),
+                settings,
+                now,
+            ),
+        )
     }
 
     @Test
-    fun `several credits lapsing together produce one line but one claim each`() {
+    fun `a credit entering the window later is announced rather than swallowed`() {
+        // The defect: a counted summary line was hung on the first expiring credit, so a second
+        // credit arriving later found that key already claimed. The only line carrying text was
+        // discarded and the new credit lapsed in silence.
+        val first = ResetCredit("c1", now - 1000, now + 3_600_000, "available")
+        val second = ResetCredit("c2", now - 1000, now + 7_200_000, "available")
+        val publisher = publisher()
+
+        publisher.sync(listOf(usage(remaining = 80.0, credits = listOf(first))), settings, now)
+
+        assertEquals(
+            listOf(
+                "Account acct · a reset credit expires in 2h",
+                "Account acct · 2 reset credits available",
+            ),
+            publisher.sync(
+                listOf(
+                    usage(remaining = 80.0, credits = listOf(first, second), fetchedAt = now + 1),
+                ),
+                settings,
+                now,
+            ),
+        )
+    }
+
+    @Test
+    fun `two credits lapsing together each carry their own deadline`() {
+        // Two lines rather than one counted summary, and they are not redundant: the deadlines
+        // differ, which is the fact the user needs in order to act.
         val credits = listOf(
             ResetCredit("c1", now - 1000, now + 3_600_000, "available"),
             ResetCredit("c2", now - 1000, now + 7_200_000, "available"),
         )
-        val outcome = run(listOf(usage(remaining = 80.0, credits = credits)), emptyMap())
+        val publisher = publisher()
 
-        assertEquals(1, outcome.lines().count { it.contains("expire") })
-        assertTrue(outcome.lines().any { it.contains("2 reset credits expire") })
-        assertEquals(2, outcome.events.count { it.key.endsWith("credit-expiring") })
+        assertEquals(
+            listOf(
+                "Account acct · a reset credit expires in 1h",
+                "Account acct · a reset credit expires in 2h",
+                "Account acct · 2 reset credits available",
+            ),
+            publisher.sync(listOf(usage(remaining = 80.0, credits = credits)), settings, now),
+        )
     }
 
     @Test
