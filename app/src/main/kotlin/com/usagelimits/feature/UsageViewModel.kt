@@ -1,5 +1,6 @@
 package com.usagelimits.feature
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,7 @@ import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.settings.AppSettings
 import com.usagelimits.core.sync.userMessage
 import com.usagelimits.core.network.ProviderException
+import com.usagelimits.widget.WidgetUpdater
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -82,7 +84,10 @@ data class UsageUiState(
  * would mean four collectors over the same Flow and four ways for them to disagree about
  * refresh state.
  */
-class UsageViewModel(private val container: AppContainer) : ViewModel() {
+class UsageViewModel(
+    private val container: AppContainer,
+    private val appContext: Context,
+) : ViewModel() {
 
     private val refreshing = MutableStateFlow(false)
     private val transientMessage = MutableStateFlow<String?>(null)
@@ -114,6 +119,7 @@ class UsageViewModel(private val container: AppContainer) : ViewModel() {
                     failures == outcomes.size -> "Refresh failed"
                     else -> "$failures of ${outcomes.size} accounts failed to refresh"
                 }
+                WidgetUpdater.refreshAll(appContext)
             } finally {
                 refreshing.value = false
             }
@@ -125,6 +131,7 @@ class UsageViewModel(private val container: AppContainer) : ViewModel() {
             refreshing.value = true
             try {
                 container.syncEngine.syncAccount(accountId)
+                WidgetUpdater.refreshAll(appContext)
             } finally {
                 refreshing.value = false
             }
@@ -150,6 +157,7 @@ class UsageViewModel(private val container: AppContainer) : ViewModel() {
                 provider.consumeResetCredit(account, credentials)
 
                 container.syncEngine.syncAccount(account)
+                WidgetUpdater.refreshAll(appContext)
                 transientMessage.value = "Limit reset applied"
             } catch (e: ProviderException) {
                 transientMessage.value = e.userMessage()
@@ -168,6 +176,7 @@ class UsageViewModel(private val container: AppContainer) : ViewModel() {
             // is recoverable, an orphaned credential is not visible to the user at all.
             container.credentialStore.delete(account.credentialReference)
             container.repository.deleteAccount(accountId)
+            WidgetUpdater.refreshAll(appContext)
         }
     }
 
@@ -195,9 +204,12 @@ class UsageViewModel(private val container: AppContainer) : ViewModel() {
         transientMessage.value = null
     }
 
-    class Factory(private val container: AppContainer) : ViewModelProvider.Factory {
+    class Factory(
+        private val container: AppContainer,
+        private val appContext: Context,
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            UsageViewModel(container) as T
+            UsageViewModel(container, appContext) as T
     }
 }

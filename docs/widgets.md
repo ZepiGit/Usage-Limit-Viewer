@@ -146,7 +146,10 @@ the worker calls `WidgetUpdater.refreshAll` after the cache moves, every placed 
 from one pass rather than each fetching for itself.
 
 The visible cost is that the refresh is not instant and the button has no spinner: the widget
-keeps showing the old numbers until the pass lands, then repaints. A progress state in the
+keeps showing the old numbers until the pass lands, then repaints. There is a related gap in
+the other direction — `WidgetUpdater.refreshAll` is called only from `SyncWorker.doWork`, so a
+*foreground* refresh inside the app (pull-to-refresh, or the sync that follows a login) updates
+the screens but leaves the widgets on their previous numbers until the next worker pass. A progress state in the
 header would be an improvement, and would need a small piece of transient state the widget can
 read — which today would mean another Room write.
 

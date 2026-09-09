@@ -19,9 +19,11 @@ Four screens and two widgets, all reading the same local cache:
 - **Settings** controls the sync interval and which notifications fire.
 
 A background pass refreshes every account on a schedule (30 minutes by default, 15 minutes
-minimum — WorkManager's floor for periodic work), and additionally on app start, on resume, on
-pull-to-refresh, right after a login, and after a reset credit is spent. When a refresh fails,
-the previous numbers stay on screen with their real age rather than being blanked.
+minimum — WorkManager's floor for periodic work), and also on app start, on resume, and when
+the widget's refresh button is tapped. Pull-to-refresh, finishing a login and spending a reset
+credit refresh in the foreground immediately. Accounts refresh independently, so one expired
+token cannot stop the others, and when a refresh fails the previous numbers stay on screen with
+their real age rather than being blanked.
 
 ## Non-goals
 
@@ -116,7 +118,7 @@ addresses. There is no instrumented (`androidTest`) source set.
 | [docs/compatibility.md](docs/compatibility.md) | Android version floor, foldables, window size classes, RTL and accessibility |
 | [docs/provider-auth-research.md](docs/provider-auth-research.md) | Phase 0: the feasibility matrix, why each login flow was chosen for Android, and the three corrections reading the current upstream code forced |
 | [docs/release.md](docs/release.md) | Building, testing, signing a real release, and what must be reviewed before any public distribution |
-| `docs/providers-*.md` | One document per provider: the exact flow, payload shapes, corrections to the original research, and what remains unverified |
+| [docs/providers-codex.md](docs/providers-codex.md) · [claude](docs/providers-claude.md) · [antigravity](docs/providers-antigravity.md) · [xai](docs/providers-xai.md) | One document per provider: the exact flow, payload shapes, corrections to the original research, and what remains unverified |
 
 ## Legal and stability
 

@@ -178,12 +178,12 @@ a restore anyway, and the usage cache is re-derived on the next sync.
    |   - one coroutine per account (isolated)       | creds|  KeystoreCredentialStore |
    |   - per-reference refresh mutex                |      |  AES-GCM, Android Keystore|
    |   - failure keeps previous numbers             |      +--------------------------+
-   +----------------------+------------------------+                  ^
-                          |  UsageSnapshot                            |  never reached
-                          v                                           |  from below
-   +-----------------------------------------------+                  |
-   |  core/database/UsageRepository  (Room)         |                  |
-   |  accounts | usage_snapshots | widget_configs   |  no tokens ------+
+   +----------------------+------------------------+
+                          |  UsageSnapshot            SyncEngine is the ONLY
+                          v                           caller of core/auth
+   +-----------------------------------------------+
+   |  core/database/UsageRepository  (Room)         |  holds no tokens, only a
+   |  accounts | usage_snapshots | widget_configs   |  credential *reference*
    +------+----------------------------+-----------+
           |  Flow<List<AccountUsage>>  |  accountUsageOnce()
           v                            v
@@ -197,11 +197,25 @@ a restore anyway, and the usage cache is re-derived on the next sync.
    core/sync/SyncWorker  (WorkManager) -+  a normal sync pass
 ```
 
-`SyncWorker` is the only scheduler. It runs periodically (the user's interval, floored at 15
-minutes), and one-shot passes are enqueued on app start, on `onResume`, on pull-to-refresh,
-after a login, after a reset credit is spent, and from the widget's refresh button. The
-one-shot work is unique with `ExistingWorkPolicy.KEEP`, so five triggers in a row collapse
-into one pass. Every request requires `NetworkType.CONNECTED`.
+`SyncEngine` is reached two ways, and the distinction is worth knowing.
+
+`SyncWorker` (WorkManager) runs the periodic pass at the user's interval, floored at 15
+minutes, and enqueues a one-shot pass on app start, on `MainActivity.onResume`, and from the
+widget's refresh button. That work is unique with `ExistingWorkPolicy.KEEP`, so several
+triggers in a row collapse into one pass, and every request carries a
+`NetworkType.CONNECTED` constraint.
+
+The foreground actions — pull-to-refresh, a single account's refresh button, the sync that
+follows a login, and the re-sync after a reset credit is spent — call `SyncEngine` directly
+from the ViewModel's scope instead. That is right for a user-initiated action, which should
+run now and report its own outcome rather than being queued behind a constraint, and these
+calls still inherit isolation and the refresh mutex because they go through the same engine.
+Two consequences follow, and neither is currently handled: a foreground refresh does not wait
+for connectivity (it fails fast and shows the error, which is arguably what the user wants),
+and — less defensibly — it does **not** refresh the widgets, because `WidgetUpdater.refreshAll`
+is called only from `SyncWorker.doWork`. Pull-to-refresh in the app therefore leaves the home
+screen showing the older numbers until the next worker pass. Calling `refreshAll` after a
+foreground sync, or routing these through the worker, would close that.
 
 **Per-account isolation.** `syncAll()` launches one coroutine per account and awaits them all;
 `syncAccount()` catches `ProviderException` *and* every other exception, records the failure

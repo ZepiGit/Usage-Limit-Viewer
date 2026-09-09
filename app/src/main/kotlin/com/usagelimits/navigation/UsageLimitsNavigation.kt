@@ -84,7 +84,9 @@ private val TABS = listOf(
 @Composable
 fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeClass) {
     val navController = rememberNavController()
-    val viewModel: UsageViewModel = viewModel(factory = UsageViewModel.Factory(container))
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val viewModel: UsageViewModel =
+        viewModel(factory = UsageViewModel.Factory(container, appContext))
     val state by viewModel.state.collectAsState()
     val resetInFlight by viewModel.resetCreditInFlight.collectAsState()
 

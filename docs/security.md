@@ -43,9 +43,13 @@ server-side copy of anything, and no analytics identity.
 
 `KeystoreCredentialStore` is the only thing that ever writes a token to disk.
 
-An AES-256 key is generated on first use in the `AndroidKeyStore` provider under the alias
+An AES key is generated on first use in the `AndroidKeyStore` provider under the alias
 `usage_limits_credentials_v1`, with `BLOCK_MODE_GCM`, `ENCRYPTION_PADDING_NONE` and
-`setRandomizedEncryptionRequired(true)`. The key material never enters the app's address
+`setRandomizedEncryptionRequired(true)`. `setKeySize` is not called, so the key is the platform
+default of **128 bits** — AES-128-GCM, a perfectly sound AEAD choice, but worth stating rather
+than letting a reader assume 256. Raising it means `.setKeySize(256)` under a new alias, since
+an existing key cannot be resized, plus a migration for anyone already logged in; that
+migration is the only reason it has not been done already. The key material never enters the app's address
 space — encryption and decryption happen inside the Keystore, and on devices with a secure
 element or TEE the key is hardware-bound. It cannot be exported by the app, by root-level file
 access, or by a backup.
@@ -131,9 +135,10 @@ Each entry below is a structural property, not a rule someone has to remember.
   device transfer. Keystore-wrapped ciphertext would be undecryptable after a restore anyway;
   disabling backup means it is not copied around in the first place.
 - **User-visible error messages.** Every `ProviderException` is mapped through
-  `userMessage()` before it reaches the UI, which returns one of eight fixed strings. Neither a
-  raw provider body, nor a URL, nor a header, nor a token can reach a snackbar or a
-  notification, even if a provider echoes something sensitive in an error body.
+  `userMessage()` before it reaches the UI, which returns one of eight fixed strings — the only
+  variable part in any of them is an HTTP status code. Neither a raw provider body, nor a URL,
+  nor a header, nor a token can reach a snackbar or a notification, even if a provider echoes
+  something sensitive in an error body.
 - **`Bundle`s, `Intent`s and saved state.** Credentials are only ever passed as function
   parameters between `SyncEngine` and a provider. Nothing puts one in a navigation argument,
   a `SavedStateHandle`, or a `PendingIntent`.
