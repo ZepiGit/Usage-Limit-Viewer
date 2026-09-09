@@ -137,7 +137,7 @@ public enum GlanceModel {
             // below stops letting rowless accounts occupy a two-slot widget.
             overallSeverity: ordered.map(\.severity).max() ?? .stale,
             headlineShort: lead?.rows.first { $0.category == .fiveHour },
-            headlineLong: lead?.rows.first { $0.category == .weekly || $0.category == .monthly })
+            headlineLong: lead?.rows.first { $0.category != .fiveHour })
     }
 
     /// Worst first, with the tightest number breaking a tie — coarsely.
@@ -210,9 +210,13 @@ public enum GlanceModel {
 
         // Two horizons, not every window an account reports: a tile has room for about two
         // rows before it stops being readable at a glance, which is the entire point of it.
+        //
+        // `.other` is the last resort for the long slot. A window whose duration no provider
+        // documents still counts against the account, and leaving the slot empty would hide a
+        // limit the app knows is being consumed while showing a healthier one beside it.
         let rows = [
             headline(windows, .fiveHour),
-            headline(windows, .weekly) ?? headline(windows, .monthly),
+            headline(windows, .weekly) ?? headline(windows, .monthly) ?? headline(windows, .other),
         ].compactMap { $0 }
 
         var title = usage.account.provider.displayName

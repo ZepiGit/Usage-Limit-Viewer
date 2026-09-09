@@ -33,9 +33,65 @@ object ClaudeUsageParser {
     private const val FIVE_HOUR_ID = "five-hour"
     private const val SEVEN_DAY_ID = "seven-day"
 
+    /**
+     * Top-level objects that look like windows but are not.
+     *
+     * The discovery gate asks whether a key declares `resets_at`, and `extra_usage` is one
+     * field away from passing it — it already carries a `utilization`. It is a CREDIT BALANCE:
+     * folding it in would grade an account by money spent, and spending credits would trip an
+     * exhaustion alert. Named explicitly rather than inferred, because the shape that
+     * distinguishes them today is one upstream field away from being ambiguous.
+     */
+    private val NON_WINDOW_KEYS = setOf(
+        "extra_usage",
+        "spend",
+        "seven_day_breakdown",
+        "limits",
+        "organization",
+        "account",
+    )
+
+    /** A label is a row on a phone, and a server-supplied key has no length limit. */
+    private const val MAX_LABEL_LENGTH = 48
+
+    /**
+     * A `utilization` of 21.0 means 21 % consumed, not 21 % of one.
+     *
+     * Worth stating because the field is named `utilization` rather than `percent`, and a
+     * fractional reading would put every fallback number out by a factor of a hundred while
+     * still looking like a number. A live account settles it: `five_hour.utilization` was 21.0
+     * and the `limits` entry for the same quota reported `percent: 21`. The test suite pins
+     * that equivalence, so if the scale ever changes it fails loudly rather than quietly.
+     */
     fun parse(payload: JsonObject, nowMs: Long): List<UsageWindow> {
-        val primary = parseLimits(payload).ifEmpty { parseFlatWindows(payload) }
-        return primary + discoverUnknownWindows(payload, primary)
+        val primary = parseLimits(payload)
+
+        // Everything `limits` did not already account for. `limits` is upstream's own view and
+        // has been complete on every payload seen, but "has been complete" is not a guarantee:
+        // a partial one would silently hide live windows, and treating it as all-or-nothing
+        // made that unrecoverable. Supplementing costs nothing when it is complete.
+        val discovered = discoverUnknownWindows(payload)
+        val supplemental = (parseFlatWindows(payload) + discovered)
+            .filterNot { candidate ->
+                // Same id is the same quota by construction.
+                primary.any { it.id == candidate.id } ||
+                    // And so is the same reset instant: a codename key and a `limits` entry
+                    // describing one quota roll over together. Only a stated instant counts —
+                    // two windows that both report no reset are not thereby the same window.
+                    (
+                        candidate.resetAt != null &&
+                            primary.any { it.resetAt == candidate.resetAt }
+                        )
+            }
+
+        val windows = primary + supplemental.filter { (it.usedPercent ?: 0.0) > 0.0 }
+        if (windows.isNotEmpty()) return windows
+
+        // Untouched codename slots are noise on a screen meant to be read in three seconds —
+        // unless they are all an account has. Dropping them unconditionally turned a healthy,
+        // completely unused account into zero windows, which resolves to ERROR: the app
+        // reporting a fault where the real answer was "nothing used yet".
+        return supplemental
     }
 
     /**
@@ -103,13 +159,29 @@ object ClaudeUsageParser {
                 "displayName",
             )
 
-            val id = when (kind) {
+            // Identity prefers the model's own id: two display names that differ only in
+            // punctuation ("Sonnet 4.5" and "sonnet-4.5") slug identically, and the loser was
+            // silently dropped — the user then read one model's figure as the other's.
+            val modelKey = JsonSupport.string(
+                JsonSupport.obj(JsonSupport.obj(limit, "scope"), "model"),
+                "id",
+            ) ?: model
+
+            val baseId = when (kind) {
                 "session" -> FIVE_HOUR_ID
                 "weekly_all" -> SEVEN_DAY_ID
-                "weekly_scoped" -> "$SEVEN_DAY_ID-${slug(model ?: index.toString())}"
-                else -> slug(kind ?: "limit-$index")
+                "weekly_scoped" -> "$SEVEN_DAY_ID-${slug(modelKey ?: "scoped")}"
+                else -> slug(kind ?: "limit")
             }
-            if (!seen.add(id)) return@mapIndexedNotNull null
+            // A collision suffixes rather than drops. Array position is deliberately not part of
+            // identity: reordering `limits` would then rename every window, detaching anything
+            // keyed by it — a notification's dedupe record, for one.
+            var id = baseId
+            var suffix = 2
+            while (!seen.add(id)) {
+                id = "$baseId-$suffix"
+                suffix++
+            }
 
             val periodSeconds = when {
                 kind == "session" || group == "session" -> FIVE_HOUR_SECONDS
@@ -121,7 +193,7 @@ object ClaudeUsageParser {
                 "session" -> "5h limit"
                 "weekly_all" -> "Weekly"
                 "weekly_scoped" -> model?.let { "Weekly ($it)" } ?: "Weekly (scoped)"
-                else -> humanize(kind ?: "Limit ${index + 1}")
+                else -> humanize(kind ?: "Limit ${index + 1}").take(MAX_LABEL_LENGTH)
             }
 
             window(
@@ -178,15 +250,11 @@ object ClaudeUsageParser {
      * a duplicated row is visible and obviously wrong, while a hidden quota is invisible and
      * makes the number on screen wrong with nothing to notice.
      */
-    private fun discoverUnknownWindows(
-        payload: JsonObject,
-        known: List<UsageWindow>,
-    ): List<UsageWindow> {
+    private fun discoverUnknownWindows(payload: JsonObject): List<UsageWindow> {
         val knownKeys = Claude.USAGE_WINDOW_KEYS.map { it.first }.toSet()
-        val knownIds = known.map { it.id }.toSet()
 
-        return payload.entries.mapNotNull { (key, value) ->
-            if (key in knownKeys) return@mapNotNull null
+        val candidates: List<UsageWindow> = payload.entries.mapNotNull { (key, value) ->
+            if (key in knownKeys || key in NON_WINDOW_KEYS) return@mapNotNull null
 
             val entry = value as? JsonObject ?: return@mapNotNull null
             if (!entry.containsKey("resets_at") && !entry.containsKey("resetsAt")) {
@@ -194,21 +262,26 @@ object ClaudeUsageParser {
             }
 
             val used = JsonSupport.double(entry, "utilization") ?: return@mapNotNull null
-            if (used <= 0.0) return@mapNotNull null
 
-            val id = key.replace('_', '-')
-            if (id in knownIds) return@mapNotNull null
+            val id = key.replace('_', '-').trim('-')
+            if (id.isBlank()) return@mapNotNull null
 
             window(
                 id = id,
-                label = humanize(key),
+                label = humanize(key).take(MAX_LABEL_LENGTH),
                 usedPercent = used,
                 // The duration of a window nobody has documented is unknown, and OTHER says so.
-                // Guessing seven days would put a wrong countdown on the Resets screen.
+                // It cannot be inferred from the time left before its reset either: a weekly
+                // window observed two hours before it rolls over would infer two hours, which
+                // is a confidently wrong category rather than an honest unknown.
                 periodSeconds = null,
                 resetsAt = JsonSupport.string(entry, "resets_at", "resetsAt"),
             )
         }.sortedBy { it.id }
+
+        // Zero-consumption slots are filtered by the caller, which is the only place that can
+        // see whether they are all the account has.
+        return candidates
     }
 
     /**

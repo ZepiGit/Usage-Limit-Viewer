@@ -69,10 +69,11 @@ final class ClaudeUsageParserTests: XCTestCase {
         XCTAssertNil(windows[0].resetAt)
     }
 
-    func testLimitsSupersedeTheFlatKeysEntirely() {
+    func testLimitsWinOverTheFlatTwinsRatherThanDuplicatingThem() {
         // `limits` is Anthropic's own presentation model and, on a live account, the ONLY
         // place the Fable figure appears — the `iguana_necktie` key it belongs under was null.
-        // Reading both lists would render every quota twice.
+        // The flat keys describe the same quotas, so they dedupe away by id rather than
+        // rendering each limit twice.
         let windows = ClaudeUsageParser.parse(payload("""
         {
           "five_hour": { "utilization": 21.0, "resets_at": "2026-09-10T01:29:59Z" },
@@ -198,6 +199,107 @@ final class ClaudeUsageParserTests: XCTestCase {
         """), now: now)
 
         XCTAssertEqual(windows.map(\.id), ["five-hour"])
+    }
+
+    func testALimitsArrayThatMissesALiveWindowNoLongerHidesIt() {
+        // Treating `limits` as all-or-nothing meant one entry could suppress six live flat
+        // windows. A 90 %-consumed weekly vanished, and account severity read the 10 % session
+        // instead — the app confidently reporting the wrong constraint.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "limits": [ { "kind": "session", "group": "session", "percent": 10,
+                        "resets_at": "2026-09-09T17:30:00Z" } ],
+          "seven_day": { "utilization": 90.5, "resets_at": "2026-09-14T00:00:00Z" }
+        }
+        """), now: now)
+
+        XCTAssertEqual(Set(windows.map(\.id)), ["five-hour", "seven-day"])
+        XCTAssertEqual(windows.first { $0.id == "seven-day" }?.usedPercent, 90.5)
+    }
+
+    func testACodenameSharingAResetInstantIsNotShownTwice() {
+        // The same quota under two names. Rendering both puts two constraints on screen where
+        // there is one, and integer-versus-decimal rounding makes them look like they disagree.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "limits": [ { "kind": "weekly_scoped", "group": "weekly", "percent": 42,
+                        "resets_at": "2026-09-16T20:00:00Z",
+                        "scope": { "model": { "display_name": "Fable" } } } ],
+          "juniper_tide": { "utilization": 41.7, "resets_at": "2026-09-16T20:00:00Z" }
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["seven-day-fable"])
+    }
+
+    func testTwoWindowsWithNoResetAreNotMerged() {
+        // Absent reset times are not evidence of sameness.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "limits": [ { "kind": "session", "group": "session", "percent": 10 } ],
+          "juniper_tide": { "utilization": 41.7, "resets_at": null }
+        }
+        """), now: now)
+
+        XCTAssertEqual(Set(windows.map(\.id)), ["five-hour", "juniper-tide"])
+    }
+
+    func testAnAccountWhoseOnlyWindowIsUntouchedIsNotReportedAsBroken() {
+        // Zero windows resolves to `.error`, so filtering out every unused codename slot turned
+        // a healthy, completely unused account into a fault report.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": null,
+          "seven_day": null,
+          "tangelo": { "utilization": 0.0, "resets_at": "2026-09-14T00:00:00Z" }
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["tangelo"])
+        XCTAssertFalse(windows.contains { $0.severity == .error })
+    }
+
+    func testACreditBalanceIsNeverDiscoveredEvenWithAResetKey() {
+        // `extra_usage` is one upstream field away from passing the discovery gate. It is money
+        // spent, not quota consumed, and folding it in would trip an exhaustion alert.
+        let windows = ClaudeUsageParser.parse(payload("""
+        {
+          "five_hour": { "utilization": 3.0, "resets_at": "2026-09-09T17:30:00Z" },
+          "extra_usage": { "is_enabled": true, "monthly_limit": 50000,
+                           "used_credits": 12500, "utilization": 25.0, "resets_at": null },
+          "spend": { "percent": 40, "severity": "normal", "resets_at": null }
+        }
+        """), now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["five-hour"])
+    }
+
+    func testTwoModelNamesThatSlugAlikeBothSurvive() {
+        // "Sonnet 4.5" and "sonnet-4.5" slug identically. Dropping the loser meant the user
+        // read one model's figure as the other's.
+        let windows = ClaudeUsageParser.parse(payload("""
+        { "limits": [
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 87,
+              "scope": { "model": { "display_name": "Sonnet 4.5" } } },
+            { "kind": "weekly_scoped", "group": "weekly", "percent": 12,
+              "scope": { "model": { "display_name": "sonnet-4.5" } } } ] }
+        """), now: now)
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(Set(windows.map(\.id)).count, 2)
+        XCTAssertEqual(windows.map(\.usedPercent), [87.0, 12.0])
+    }
+
+    func testAScopedWindowIsIdentifiedByTheModelIDWhenThereIsOne() {
+        // Identity that survives a display name being retitled upstream.
+        let window = ClaudeUsageParser.parse(payload("""
+        { "limits": [ { "kind": "weekly_scoped", "group": "weekly", "percent": 5,
+                        "scope": { "model": { "id": "claude-fable-5-1",
+                                              "display_name": "Fable" } } } ] }
+        """), now: now).first
+
+        XCTAssertEqual(window?.id, "seven-day-claude-fable-5-1")
+        XCTAssertEqual(window?.label, "Weekly (Fable)")
     }
 
     func testAnExplicitlyNullWindowKeyYieldsNoRow() {

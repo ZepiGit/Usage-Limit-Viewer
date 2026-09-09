@@ -62,9 +62,9 @@ class ClaudeUsageParserTest {
     // region limits is the primary source
 
     @Test
-    fun `limits entries become the windows and the flat twins are not repeated`() {
-        // Reading both lists would render every quota twice, and a duplicated weekly row is
-        // indistinguishable from a second real limit.
+    fun `limits win over the flat twins rather than duplicating them`() {
+        // The flat keys describe the same quotas, so they dedupe away by id. A duplicated
+        // weekly row is indistinguishable from a second real limit.
         val windows = ClaudeUsageParser.parse(JsonSupport.parseObject(fullPayload), now)
 
         assertEquals(listOf("five-hour", "seven-day", "seven-day-fable"), windows.map { it.id })
@@ -465,6 +465,189 @@ class ClaudeUsageParserTest {
             ),
         )
         assertNull(ClaudeUsageParser.parsePlan(JsonSupport.parseObject("{}")))
+    }
+
+    @Test
+    fun `utilization is a percentage, not a fraction`() {
+        // Captured live: `five_hour.utilization` was 21.0 while the `limits` entry for the same
+        // quota reported `percent: 21`. The field is named `utilization`, not `percent`, so a
+        // fractional reading is a plausible mistake — and it would put every fallback number
+        // out by a factor of a hundred while still looking like a number. Pinned so a change
+        // in scale fails here rather than on a user's home screen.
+        val fromLimits = ClaudeUsageParser.parse(
+            JsonSupport.parseObject(
+                """{ "limits": [ { "kind": "session", "group": "session", "percent": 21 } ] }""",
+            ),
+            now,
+        ).single()
+        val fromFlatKey = ClaudeUsageParser.parse(
+            JsonSupport.parseObject("""{ "five_hour": { "utilization": 21.0 } }"""),
+            now,
+        ).single()
+
+        assertEquals(fromLimits.usedPercent!!, fromFlatKey.usedPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `a limits array that misses a live window no longer hides it`() {
+        // Treating `limits` as all-or-nothing meant one entry could suppress six live flat
+        // windows. A 90 %-consumed weekly vanished, and account severity read the 10 % session
+        // instead — the app confidently reporting the wrong constraint.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "limits": [ { "kind": "session", "group": "session", "percent": 10,
+                            "resets_at": "2026-09-09T17:30:00Z" } ],
+              "seven_day": { "utilization": 90.5, "resets_at": "2026-09-14T00:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now).associateBy { it.id }
+
+        assertEquals(setOf("five-hour", "seven-day"), windows.keys)
+        assertEquals(90.5, windows.getValue("seven-day").usedPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `a codename key sharing a reset instant with a limits entry is not shown twice`() {
+        // The same quota under two names. Rendering both puts two constraints on screen where
+        // there is one, and integer-versus-decimal rounding makes them look like they disagree.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "limits": [ { "kind": "weekly_scoped", "group": "weekly", "percent": 42,
+                            "resets_at": "2026-09-16T20:00:00Z",
+                            "scope": { "model": { "display_name": "Fable" } } } ],
+              "juniper_tide": { "utilization": 41.7, "resets_at": "2026-09-16T20:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        assertEquals(listOf("seven-day-fable"), windows.map { it.id })
+    }
+
+    @Test
+    fun `a window with no reset is not merged with another that has none either`() {
+        // Absent reset times are not evidence of sameness. Collapsing on them would hide a real
+        // window behind an unrelated one.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "limits": [ { "kind": "session", "group": "session", "percent": 10 } ],
+              "juniper_tide": { "utilization": 41.7, "resets_at": null }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            listOf("five-hour", "juniper-tide"),
+            ClaudeUsageParser.parse(payload, now).map { it.id },
+        )
+    }
+
+    @Test
+    fun `an account whose only window is untouched is not reported as broken`() {
+        // Zero windows resolves to ERROR, so filtering out every unused codename slot turned a
+        // healthy, completely unused account into a fault report.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "five_hour": null,
+              "seven_day": null,
+              "tangelo": { "utilization": 0.0, "resets_at": "2026-09-14T00:00:00Z" }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        assertEquals(listOf("tangelo"), windows.map { it.id })
+        assertFalse(windows.any { it.severity == Severity.ERROR })
+    }
+
+    @Test
+    fun `a credit balance is never discovered even when it declares a reset key`() {
+        // The discovery gate asks whether a key declares `resets_at`, and `extra_usage` is one
+        // upstream field away from passing it — it already carries a `utilization`. It is money
+        // spent, not quota consumed, and folding it in would trip an exhaustion alert.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "five_hour": { "utilization": 3.0, "resets_at": "2026-09-09T17:30:00Z" },
+              "extra_usage": { "is_enabled": true, "monthly_limit": 50000,
+                               "used_credits": 12500, "utilization": 25.0, "resets_at": null },
+              "spend": { "percent": 40, "severity": "normal", "resets_at": null }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("five-hour"), ClaudeUsageParser.parse(payload, now).map { it.id })
+    }
+
+    @Test
+    fun `two model names that slug alike both survive`() {
+        // "Sonnet 4.5" and "sonnet-4.5" slug identically. Dropping the loser meant the user
+        // read one model's figure as the other's.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "limits": [
+                { "kind": "weekly_scoped", "group": "weekly", "percent": 87,
+                  "scope": { "model": { "display_name": "Sonnet 4.5" } } },
+                { "kind": "weekly_scoped", "group": "weekly", "percent": 12,
+                  "scope": { "model": { "display_name": "sonnet-4.5" } } }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        assertEquals(2, windows.size)
+        assertEquals(2, windows.map { it.id }.distinct().size)
+        assertEquals(listOf(87.0, 12.0), windows.map { it.usedPercent })
+    }
+
+    @Test
+    fun `a scoped window is identified by the model id when there is one`() {
+        // Identity that survives a display name being retitled upstream.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "limits": [ { "kind": "weekly_scoped", "group": "weekly", "percent": 5,
+                            "scope": { "model": { "id": "claude-fable-5-1",
+                                                  "display_name": "Fable" } } } ]
+            }
+            """.trimIndent(),
+        )
+
+        val window = ClaudeUsageParser.parse(payload, now).single()
+
+        assertEquals("seven-day-claude-fable-5-1", window.id)
+        // The label still reads as the user knows the model.
+        assertEquals("Weekly (Fable)", window.label)
+    }
+
+    @Test
+    fun `an absurd key does not produce an unusable row`() {
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "___": { "utilization": 5.0, "resets_at": null },
+              "a_very_long_codename_key_that_would_never_fit_on_a_phone_row_at_all_ever":
+                { "utilization": 5.0, "resets_at": null }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = ClaudeUsageParser.parse(payload, now)
+
+        // The all-punctuation key yields no usable id and is dropped rather than rendered blank.
+        assertTrue(windows.none { it.id.isBlank() })
+        assertTrue(windows.all { it.label.length <= 48 })
     }
 
     @Test
