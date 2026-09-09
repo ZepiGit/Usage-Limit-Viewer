@@ -160,9 +160,15 @@ class CompactUsageWidget : GlanceAppWidget() {
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Tile(
-                        label = "Resets in",
+                        // A wall-clock instant rather than a countdown: a widget recomposes
+                        // only when its worker runs, so "in 20m" rendered half an hour ago is
+                        // not stale but wrong — the limit has already reset.
+                        label = "Next reset",
                         value = snapshot.nextResetAt
-                            ?.let { Countdown.format(it - System.currentTimeMillis()) }
+                            ?.let {
+                                Countdown.absoluteResetLabel(it, System.currentTimeMillis())
+                                    ?.removePrefix("Resets ")
+                            }
                             ?: "—",
                         row = null,
                         modifier = GlanceModifier.defaultWeight(),
@@ -311,8 +317,9 @@ class DetailedUsageWidget : GlanceAppWidget() {
                 )
             }
             Text(
-                text = Countdown.freshnessLabel(snapshot.updatedAt, System.currentTimeMillis())
-                    .removePrefix("Updated "),
+                // "As of 12:40", not "2m ago": an age composed once and left on the home screen
+                // for three hours goes on claiming the numbers are two minutes old.
+                text = Countdown.asOfLabel(snapshot.updatedAt).removePrefix("As of "),
                 style = TextStyle(
                     color = androidx.glance.unit.ColorProvider(W.TextSecondary),
                     fontSize = 11.sp,
@@ -406,7 +413,10 @@ class DetailedUsageWidget : GlanceAppWidget() {
                     )
                     Text(
                         text = row.resetAt
-                            ?.let { Countdown.format(it - System.currentTimeMillis()) }
+                            ?.let {
+                                Countdown.absoluteResetLabel(it, System.currentTimeMillis())
+                                    ?.removePrefix("Resets ")
+                            }
                             ?: "—",
                         style = TextStyle(
                             color = androidx.glance.unit.ColorProvider(W.TextSecondary),
