@@ -17,9 +17,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         AccountEntity::class,
         UsageSnapshotEntity::class,
+        NotificationEventEntity::class,
+        NotificationStateEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -27,6 +29,8 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun usageSnapshotDao(): UsageSnapshotDao
     abstract fun widgetConfigDao(): WidgetConfigDao
+
+    abstract fun notificationDao(): NotificationDao
 
     companion object {
         private const val DATABASE_NAME = "usage_limits.db"
@@ -60,11 +64,51 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the notification event ledger and per-account notification state.
+         *
+         * Both start empty, which means the first sync after the upgrade treats every account
+         * as unseen. That is the right direction to fail: an account already sitting below a
+         * threshold produces one alert, rather than the alternative of back-filling state and
+         * silently swallowing a limit the user is actually up against.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS notification_events (
+                        eventKey TEXT NOT NULL PRIMARY KEY,
+                        accountId TEXT NOT NULL,
+                        consumedAt INTEGER NOT NULL,
+                        FOREIGN KEY(accountId) REFERENCES accounts(localId)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_notification_events_accountId " +
+                        "ON notification_events (accountId)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS notification_state (
+                        accountId TEXT NOT NULL PRIMARY KEY,
+                        lowQuotaEpisode INTEGER NOT NULL,
+                        lowQuotaActive INTEGER NOT NULL,
+                        lastProcessedFetchedAt INTEGER,
+                        FOREIGN KEY(accountId) REFERENCES accounts(localId)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 UsageLimitsDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     }
 }

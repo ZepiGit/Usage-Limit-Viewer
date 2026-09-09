@@ -80,3 +80,32 @@ interface WidgetConfigDao {
     @Query("DELETE FROM widget_configs WHERE appWidgetId = :appWidgetId")
     suspend fun delete(appWidgetId: Int)
 }
+
+/**
+ * Claims notification events and carries per-account state.
+ *
+ * [claim] is the whole point: `OnConflictStrategy.IGNORE` returns -1 for a row that already
+ * existed, which is how "has this alert already been delivered" is answered without a
+ * read-then-write race between two sync workers.
+ */
+@Dao
+interface NotificationDao {
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun claim(event: NotificationEventEntity): Long
+
+    @Query("SELECT * FROM notification_state")
+    suspend fun allStates(): List<NotificationStateEntity>
+
+    @Upsert
+    suspend fun upsertStates(states: List<NotificationStateEntity>)
+
+    /**
+     * Drops consumed records older than [cutoff].
+     *
+     * Without this the table grows for the life of the install. The cutoff has to be long
+     * enough that a monthly window's reset key is still remembered when it comes round again.
+     */
+    @Query("DELETE FROM notification_events WHERE consumedAt < :cutoff")
+    suspend fun pruneEventsBefore(cutoff: Long)
+}

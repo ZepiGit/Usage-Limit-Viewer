@@ -224,10 +224,13 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                     SettingsScreen(
                         state = state,
                         onSyncIntervalChange = viewModel::setSyncInterval,
-                        onNotifyLowUsage = viewModel::setNotifyLowUsage,
+                        onNotifyBelow20 = viewModel::setNotifyBelow20,
+                        onNotifyBelow10 = viewModel::setNotifyBelow10,
                         onNotifyExhausted = viewModel::setNotifyExhausted,
                         onNotifyResetCredit = viewModel::setNotifyResetCredit,
                         onNotifyAuthExpired = viewModel::setNotifyAuthExpired,
+                        onNotifyResetApproaching = viewModel::setNotifyResetApproaching,
+                        onNotifyCreditExpiring = viewModel::setNotifyCreditExpiring,
                     )
                 }
 

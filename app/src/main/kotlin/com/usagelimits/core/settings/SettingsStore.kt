@@ -12,12 +12,21 @@ import kotlinx.coroutines.flow.map
 /** User-configurable preferences. */
 data class AppSettings(
     val syncIntervalMinutes: Int = DEFAULT_SYNC_INTERVAL_MINUTES,
-    val notifyOnLowUsage: Boolean = true,
+    /** Warn once when a limit first drops below 20 % remaining. */
+    val notifyBelow20Percent: Boolean = true,
+    /** Escalate once when it drops below 10 %, even if the 20 % warning already fired. */
+    val notifyBelow10Percent: Boolean = true,
     val notifyOnExhausted: Boolean = true,
     val notifyOnResetCreditAvailable: Boolean = true,
     val notifyOnAuthExpired: Boolean = true,
-    /** Remaining-percent threshold below which a low-usage notification fires. */
-    val lowUsageThreshold: Int = DEFAULT_LOW_THRESHOLD,
+    /**
+     * Off by default: an approaching reset is usually information rather than something to act
+     * on, and a limit that resets nightly would otherwise notify every night.
+     */
+    val notifyOnResetApproaching: Boolean = false,
+    val resetApproachingMinutes: Int = DEFAULT_RESET_LEAD_MINUTES,
+    val notifyOnResetCreditExpiring: Boolean = true,
+    val resetCreditExpiryLeadMinutes: Int = DEFAULT_CREDIT_LEAD_MINUTES,
 ) {
     companion object {
         /**
@@ -26,7 +35,10 @@ data class AppSettings(
          */
         const val DEFAULT_SYNC_INTERVAL_MINUTES = 30
         const val MIN_SYNC_INTERVAL_MINUTES = 15
-        const val DEFAULT_LOW_THRESHOLD = 20
+        const val DEFAULT_RESET_LEAD_MINUTES = 30
+
+        /** A day: long enough to act on, short enough not to be background noise. */
+        const val DEFAULT_CREDIT_LEAD_MINUTES = 1_440
     }
 }
 
@@ -49,7 +61,13 @@ class SettingsStore(context: Context) {
         it[Keys.SYNC_INTERVAL] = minutes.coerceAtLeast(AppSettings.MIN_SYNC_INTERVAL_MINUTES)
     }
 
-    suspend fun setNotifyOnLowUsage(enabled: Boolean) = edit { it[Keys.NOTIFY_LOW] = enabled }
+    suspend fun setNotifyBelow20Percent(enabled: Boolean) = edit {
+        it[Keys.NOTIFY_BELOW_20] = enabled
+    }
+
+    suspend fun setNotifyBelow10Percent(enabled: Boolean) = edit {
+        it[Keys.NOTIFY_BELOW_10] = enabled
+    }
 
     suspend fun setNotifyOnExhausted(enabled: Boolean) = edit { it[Keys.NOTIFY_EXHAUSTED] = enabled }
 
@@ -57,8 +75,20 @@ class SettingsStore(context: Context) {
 
     suspend fun setNotifyOnAuthExpired(enabled: Boolean) = edit { it[Keys.NOTIFY_AUTH] = enabled }
 
-    suspend fun setLowUsageThreshold(percent: Int) = edit {
-        it[Keys.LOW_THRESHOLD] = percent.coerceIn(1, 99)
+    suspend fun setNotifyOnResetApproaching(enabled: Boolean) = edit {
+        it[Keys.NOTIFY_RESET_APPROACHING] = enabled
+    }
+
+    suspend fun setResetApproachingMinutes(minutes: Int) = edit {
+        it[Keys.RESET_LEAD_MINUTES] = minutes.coerceIn(5, 24 * 60)
+    }
+
+    suspend fun setNotifyOnResetCreditExpiring(enabled: Boolean) = edit {
+        it[Keys.NOTIFY_CREDIT_EXPIRING] = enabled
+    }
+
+    suspend fun setResetCreditExpiryLeadMinutes(minutes: Int) = edit {
+        it[Keys.CREDIT_LEAD_MINUTES] = minutes.coerceIn(60, 7 * 24 * 60)
     }
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
@@ -67,19 +97,34 @@ class SettingsStore(context: Context) {
 
     private fun Preferences.toSettings() = AppSettings(
         syncIntervalMinutes = this[Keys.SYNC_INTERVAL] ?: AppSettings.DEFAULT_SYNC_INTERVAL_MINUTES,
-        notifyOnLowUsage = this[Keys.NOTIFY_LOW] ?: true,
+        // The single low-usage switch became two tiers. Someone who turned the old one off
+        // meant "stop telling me about low quota", so their opt-out carries to both rather
+        // than silently re-enabling alerts on upgrade.
+        notifyBelow20Percent = this[Keys.NOTIFY_BELOW_20] ?: this[Keys.NOTIFY_LOW] ?: true,
+        notifyBelow10Percent = this[Keys.NOTIFY_BELOW_10] ?: this[Keys.NOTIFY_LOW] ?: true,
         notifyOnExhausted = this[Keys.NOTIFY_EXHAUSTED] ?: true,
         notifyOnResetCreditAvailable = this[Keys.NOTIFY_CREDIT] ?: true,
         notifyOnAuthExpired = this[Keys.NOTIFY_AUTH] ?: true,
-        lowUsageThreshold = this[Keys.LOW_THRESHOLD] ?: AppSettings.DEFAULT_LOW_THRESHOLD,
+        notifyOnResetApproaching = this[Keys.NOTIFY_RESET_APPROACHING] ?: false,
+        resetApproachingMinutes =
+            this[Keys.RESET_LEAD_MINUTES] ?: AppSettings.DEFAULT_RESET_LEAD_MINUTES,
+        notifyOnResetCreditExpiring = this[Keys.NOTIFY_CREDIT_EXPIRING] ?: true,
+        resetCreditExpiryLeadMinutes =
+            this[Keys.CREDIT_LEAD_MINUTES] ?: AppSettings.DEFAULT_CREDIT_LEAD_MINUTES,
     )
 
     private object Keys {
         val SYNC_INTERVAL = intPreferencesKey("sync_interval_minutes")
+        /** Read only to carry a pre-tier opt-out forward; nothing writes it any more. */
         val NOTIFY_LOW = booleanPreferencesKey("notify_low_usage")
+        val NOTIFY_BELOW_20 = booleanPreferencesKey("notify_below_20_percent")
+        val NOTIFY_BELOW_10 = booleanPreferencesKey("notify_below_10_percent")
         val NOTIFY_EXHAUSTED = booleanPreferencesKey("notify_exhausted")
         val NOTIFY_CREDIT = booleanPreferencesKey("notify_reset_credit")
         val NOTIFY_AUTH = booleanPreferencesKey("notify_auth_expired")
-        val LOW_THRESHOLD = intPreferencesKey("low_usage_threshold")
+        val NOTIFY_RESET_APPROACHING = booleanPreferencesKey("notify_reset_approaching")
+        val RESET_LEAD_MINUTES = intPreferencesKey("reset_approaching_minutes")
+        val NOTIFY_CREDIT_EXPIRING = booleanPreferencesKey("notify_reset_credit_expiring")
+        val CREDIT_LEAD_MINUTES = intPreferencesKey("reset_credit_expiry_lead_minutes")
     }
 }

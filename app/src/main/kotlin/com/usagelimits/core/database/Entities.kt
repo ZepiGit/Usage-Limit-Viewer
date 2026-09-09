@@ -89,3 +89,56 @@ data class WidgetConfigEntity(
     val provider: String?,
     val updatedAt: Long,
 )
+
+/**
+ * One alert this app has already delivered.
+ *
+ * The row is the record that a given edge has been consumed, so it exists solely to stop the
+ * same alert firing on the next sync. Insert-or-ignore against the primary key is what makes
+ * claiming atomic: the insert either wins, and the caller may post, or loses, and it must not.
+ *
+ * Keys are opaque and internal — they may name an account row or a credit id, and never appear
+ * in notification text.
+ */
+@Entity(
+    tableName = "notification_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["accountId"])],
+)
+data class NotificationEventEntity(
+    @PrimaryKey val eventKey: String,
+    val accountId: String,
+    val consumedAt: Long,
+)
+
+/**
+ * Per-account carried-over notification state.
+ *
+ * Separate from the snapshot because it must outlive any single fetch: whether the account is
+ * mid-episode, and which snapshot has already been processed, are the two facts that turn a
+ * series of point-in-time readings into edges.
+ */
+@Entity(
+    tableName = "notification_state",
+    foreignKeys = [
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class NotificationStateEntity(
+    @PrimaryKey val accountId: String,
+    val lowQuotaEpisode: Int,
+    val lowQuotaActive: Boolean,
+    val lastProcessedFetchedAt: Long?,
+)
