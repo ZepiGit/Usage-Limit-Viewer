@@ -12,6 +12,7 @@ import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.compose.ui.unit.DpSize
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
@@ -109,7 +110,16 @@ private fun percentText(row: WidgetRow): String =
  */
 class CompactUsageWidget : GlanceAppWidget() {
 
-    override val sizeMode = SizeMode.Exact
+    // Responsive rather than Exact: the launcher picks the nearest declared size, so the
+    // widget stays correct on tablets and unfolded foldables, whose grid cells are much wider
+    // than a phone's, instead of being re-measured into a layout it was never designed for.
+    override val sizeMode = SizeMode.Responsive(
+        setOf(
+            DpSize(250.dp, 48.dp),
+            DpSize(320.dp, 48.dp),
+            DpSize(420.dp, 56.dp),
+        ),
+    )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = WidgetUpdater.loadSnapshot(context, id)
@@ -129,12 +139,14 @@ class CompactUsageWidget : GlanceAppWidget() {
                         label = "5h limit",
                         value = snapshot.headlineShort?.let(::percentText) ?: "—",
                         row = snapshot.headlineShort,
+                        modifier = GlanceModifier.defaultWeight(),
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Tile(
                         label = "Weekly",
                         value = snapshot.headlineLong?.let(::percentText) ?: "—",
                         row = snapshot.headlineLong,
+                        modifier = GlanceModifier.defaultWeight(),
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Tile(
@@ -143,12 +155,14 @@ class CompactUsageWidget : GlanceAppWidget() {
                             ?.let { Countdown.format(it - System.currentTimeMillis()) }
                             ?: "—",
                         row = null,
+                        modifier = GlanceModifier.defaultWeight(),
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Tile(
                         label = "Quota",
                         value = statusWord(snapshot.overallSeverity),
                         row = null,
+                        modifier = GlanceModifier.defaultWeight(),
                         accent = W.accent(snapshot.overallSeverity),
                     )
                 }
@@ -161,11 +175,11 @@ class CompactUsageWidget : GlanceAppWidget() {
         label: String,
         value: String,
         row: WidgetRow?,
+        modifier: GlanceModifier = GlanceModifier,
         accent: Color = W.TextPrimary,
     ) {
         Column(
-            modifier = GlanceModifier
-                .defaultWeight()
+            modifier = modifier
                 .cornerRadius(16.dp)
                 .background(W.Card)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -210,7 +224,13 @@ class CompactUsageWidget : GlanceAppWidget() {
  */
 class DetailedUsageWidget : GlanceAppWidget() {
 
-    override val sizeMode = SizeMode.Exact
+    override val sizeMode = SizeMode.Responsive(
+        setOf(
+            DpSize(250.dp, 110.dp),
+            DpSize(320.dp, 150.dp),
+            DpSize(420.dp, 200.dp),
+        ),
+    )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = WidgetUpdater.loadSnapshot(context, id)

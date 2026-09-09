@@ -141,9 +141,10 @@ object XaiBillingParser {
     /**
      * Joins the two views, credits first.
      *
-     * Ids are de-duplicated because the endpoints overlap: `?format=credits` is the same
-     * resource under a different projection and has served monthly fields before. First
-     * occurrence wins, so the credit view stays authoritative for anything it reports.
+     * Ids are de-duplicated because the two views are projections of one resource: if the
+     * credit view ever starts reporting a monthly figure as well, the account gets one bar
+     * rather than two contradictory ones. First occurrence wins, so the credit view — the
+     * only one that reports a percentage directly — stays authoritative.
      */
     fun merge(credits: List<UsageWindow>, billing: List<UsageWindow>): List<UsageWindow> {
         val seen = mutableSetOf<String>()

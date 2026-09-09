@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 1x4: a single glanceable row of headline numbers. -->
+<!--
+  1x4: a single glanceable row of headline numbers.
+  minResize lets a user shrink it to 2 cells on a dense phone grid, while the target cell
+  sizing keeps it a full-width row by default on both phone and unfolded foldable grids.
+-->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="250dp"
+    android:minWidth="180dp"
     android:minHeight="40dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="40dp"
     android:targetCellWidth="4"
     android:targetCellHeight="1"
     android:resizeMode="horizontal"
