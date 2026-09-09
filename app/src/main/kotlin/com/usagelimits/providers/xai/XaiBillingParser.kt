@@ -37,6 +37,30 @@ object XaiBillingParser {
     private const val BILLING_PERIOD_SECONDS = 2_592_000L
 
     /**
+     * Unwraps the `config` envelope both billing endpoints wrap their payload in.
+     *
+     * Upstream reads `payload.config` (Management Center
+     * src/features/quota/providers/xai/data.ts:97). Older or partial responses have been seen
+     * flat, so the root is accepted as a fallback rather than requiring the envelope.
+     */
+    private fun config(payload: JsonObject): JsonObject =
+        JsonSupport.obj(payload, "config") ?: payload
+
+    /**
+     * Reads a money field, which xAI reports either as a bare number or wrapped as
+     * `{"val": 10000}`.
+     *
+     * Management Center normalises the same two shapes in normalizeXaiCentValue
+     * (src/utils/quota/builders.ts:374). Reading only the bare form yields null for a wrapped
+     * value, which would silently drop the whole billing view.
+     */
+    private fun cents(source: JsonObject?, vararg names: String): Double? {
+        JsonSupport.double(source, *names)?.let { return it }
+        val wrapped = JsonSupport.obj(source, *names) ?: return null
+        return JsonSupport.double(wrapped, "val")
+    }
+
+    /**
      * Parses the weekly credit view.
      *
      * [nowMs] is part of the parser contract the four providers share; xAI states the period
@@ -46,10 +70,11 @@ object XaiBillingParser {
     fun parseCredits(payload: JsonObject, nowMs: Long): List<UsageWindow> {
         // No percentage means no credit window at all — better one missing row than a bar
         // drawn from an assumed zero.
-        val usedPercent = JsonSupport.double(payload, "creditUsagePercent", "credit_usage_percent")
+        val config = config(payload)
+        val usedPercent = JsonSupport.double(config, "creditUsagePercent", "credit_usage_percent")
             ?: return emptyList()
 
-        val period = JsonSupport.obj(payload, "currentPeriod", "current_period")
+        val period = JsonSupport.obj(config, "currentPeriod", "current_period")
         val startMs = Instants.parse(JsonSupport.string(period, "start"))
         val endMs = Instants.parse(JsonSupport.string(period, "end"))
 
@@ -87,15 +112,16 @@ object XaiBillingParser {
      */
     @Suppress("UNUSED_PARAMETER")
     fun parseBilling(payload: JsonObject, nowMs: Long): List<UsageWindow> {
-        val monthlyLimit = JsonSupport.double(payload, "monthlyLimit", "monthly_limit")
-        val used = JsonSupport.double(payload, "used")
+        val config = config(payload)
+        val monthlyLimit = cents(config, "monthlyLimit", "monthly_limit")
+        val used = cents(config, "used")
         // Neither figure present means this is not a billing payload we understand.
         if (monthlyLimit == null && used == null) return emptyList()
 
         val limitCents = monthlyLimit ?: 0.0
         val usedCents = used ?: 0.0
         val resetAt = Instants.parse(
-            JsonSupport.string(payload, "billingPeriodEnd", "billing_period_end"),
+            JsonSupport.string(config, "billingPeriodEnd", "billing_period_end"),
         )
 
         val windows = mutableListOf<UsageWindow>()
@@ -117,11 +143,11 @@ object XaiBillingParser {
 
         // A zero or absent cap means the account cannot spend on demand at all; showing an
         // empty bar for a facility that does not exist would just be noise.
-        val onDemandCap = JsonSupport.double(payload, "onDemandCap", "on_demand_cap") ?: 0.0
+        val onDemandCap = cents(config, "onDemandCap", "on_demand_cap") ?: 0.0
         if (onDemandCap > 0.0) {
             // Older payloads omit the on-demand figure and only report total spend, in which
             // case everything above the allowance is by definition on demand.
-            val onDemandUsed = JsonSupport.double(payload, "onDemandUsed", "on_demand_used")
+            val onDemandUsed = cents(config, "onDemandUsed", "on_demand_used")
                 ?: maxOf(0.0, usedCents - limitCents)
             val onDemandPercent = percentOf(onDemandUsed, onDemandCap)
             windows += UsageWindow(

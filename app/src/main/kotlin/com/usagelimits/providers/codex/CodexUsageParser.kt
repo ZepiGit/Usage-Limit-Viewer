@@ -43,9 +43,25 @@ object CodexUsageParser {
 
         JsonSupport.array(payload, "additional_rate_limits", "additionalRateLimits")
             .forEachIndexed { index, element ->
-                val info = runCatching { element as JsonObject }.getOrNull() ?: return@forEachIndexed
-                val name = JsonSupport.string(info, "name", "limit_name", "limitName")
-                    ?: "Additional ${index + 1}"
+                val entry = runCatching { element as JsonObject }.getOrNull() ?: return@forEachIndexed
+
+                // Each entry NESTS its windows under `rate_limit`; the primary/secondary pair
+                // is one level deeper than on the top-level limits. Reading them off the entry
+                // itself finds nothing, which would drop every extra metered feature silently
+                // — and worse, leave the account's severity computed only from the windows
+                // that did parse, so a spent extra limit could still read as healthy.
+                // A flat entry is accepted as a fallback for older payloads.
+                val info = JsonSupport.obj(entry, "rate_limit", "rateLimit") ?: entry
+
+                val name = JsonSupport.string(
+                    entry,
+                    "name",
+                    "limit_name",
+                    "limitName",
+                    "metered_feature",
+                    "meteredFeature",
+                ) ?: "Additional ${index + 1}"
+
                 windows += windowsFor(
                     info,
                     idPrefix = "additional-${slug(name)}-$index",
