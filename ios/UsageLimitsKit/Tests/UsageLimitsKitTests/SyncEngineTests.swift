@@ -515,4 +515,61 @@ extension SyncEngineTests {
         func removeAll() async throws { stored = nil }
         func allReferences() async throws -> [String] { stored == nil ? [] : ["ref-a"] }
     }
+
+    // MARK: - Overlapping syncs for one account
+
+    func testOverlappingSyncsForOneAccountDoNotInterleave() async throws {
+        // An actor is reentrant at every `await`, and the span from usage request to stored
+        // snapshot was not coordinated at all. Foreground and background refreshes overlap, so
+        // a request started EARLIER could finish LATER and be written last — an 80% reading
+        // from an age ago overwriting the 10% a newer request had just recorded, and taking
+        // the newer timestamp with it.
+        //
+        // The provider records when each fetch starts and ends. If the two runs interleave,
+        // a start appears between another's start and end.
+        let store = InMemoryCredentialStore(credentials: ["ref-a": fresh("access-1")])
+        let provider = SlowProvider()
+        let sink = RecordingSink()
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+
+        async let first: Void = { _ = try? await engine.sync(accounts: [account("a")]) }()
+        async let second: Void = { _ = try? await engine.sync(accounts: [account("a")]) }()
+        _ = await (first, second)
+
+        let events = await provider.events
+        XCTAssertEqual(events.count, 4, "two fetches, each with a start and an end")
+        XCTAssertEqual(
+            events, ["start", "end", "start", "end"],
+            "one account's fetches must not overlap: \(events)")
+    }
+
+    private func fresh(_ token: String) -> OAuthCredentials {
+        OAuthCredentials(
+            accessToken: token,
+            refreshToken: "refresh-1",
+            expiresAt: Date(timeIntervalSince1970: 4_000_000_000))
+    }
+
+    /// Records the order of fetch entry and exit, with a suspension between them so an
+    /// unserialised caller has every opportunity to interleave.
+    private actor SlowProvider: SyncProvider {
+        nonisolated let providerID = "codex"
+        private(set) var events: [String] = []
+
+        func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
+            credentials
+        }
+
+        func fetchUsage(
+            credentials: OAuthCredentials, attributes: [String: String]
+        ) async throws -> UsageResult {
+            events.append("start")
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 5_000_000)
+            events.append("end")
+            return UsageResult()
+        }
+    }
 }
