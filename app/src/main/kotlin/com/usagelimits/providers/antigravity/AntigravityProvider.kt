@@ -184,6 +184,8 @@ class AntigravityProvider(
                     "grant_type" to "refresh_token",
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
         )
 
         // Google never returns a refresh token on a refresh; the original stays valid until it
