@@ -85,10 +85,16 @@ What runs in CI, on every push:
 
 | | Android | iOS |
 |---|---|---|
-| Unit tests | 256, on the JVM | 330, on Linux and macOS |
+| Unit tests | 295, on the JVM | 352, on Linux and macOS |
 | Screens rendered | every screen, under Robolectric | every screen, on a booted simulator |
 | App launched | the Application, under Robolectric | the real binary, on a booted simulator |
 | Installable artifact | debug APK, and a signed release on a tag | unsigned archive |
+
+Those are the counts as of the last local run. GitHub-hosted runners have been unavailable to
+this repository since the morning of 10 September — every job dies in two seconds with no log,
+on both runner types, which is the signature of an exhausted Actions allowance rather than a
+build failure — so the commits since then are verified locally and say so individually. PR #2
+records the evidence.
 
 What that still does not cover: signing in to a real account, a token actually being refreshed,
 and a reset credit actually being spent. Refresh in particular has deliberately NOT been
