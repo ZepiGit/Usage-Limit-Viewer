@@ -504,4 +504,27 @@ final class NotificationEvaluatorTests: XCTestCase {
 
         XCTAssertEqual(spoken, 1, "an unchanged account must be warned once, not once per sync")
     }
+
+    func testStateForAnAccountMissingFromThisSyncIsCarriedThrough() {
+        // The outcome is built from a map that must be SEEDED with everything handed in.
+        // Starting it empty reads more naturally — the outcome is its values, and seeding
+        // means a deleted account's state lingers until the caller evicts it — which is
+        // exactly why it wants a test and not a comment. Emptied, an account absent from one
+        // partial sync loses its `lastProcessedFetchedAt` and its episode numbering, then
+        // mints keys the ledger has already swallowed and goes permanently silent.
+        let first = NotificationEvaluator.evaluate(
+            accounts: [account(remaining: 15)], settings: settings, states: [:], now: now)
+        let seeded = Dictionary(uniqueKeysWithValues: first.states.map { ($0.accountId, $0) })
+        XCTAssertFalse(seeded.isEmpty, "precondition: the first pass must produce state")
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [account("other", remaining: 80)],
+            settings: settings,
+            states: seeded,
+            now: now.addingTimeInterval(1))
+
+        XCTAssertTrue(
+            outcome.states.contains { $0.accountId == "acct" },
+            "the absent account's state must survive: \(outcome.states.map(\.accountId))")
+    }
 }
