@@ -74,11 +74,16 @@ jobs:
       - name: Generate the project
         working-directory: ios/UsageLimits
         run: xcodegen generate
+      # A GENERIC destination, not a named device. `name=iPhone 16` failed on the runner for a
+      # reason that had nothing to do with the code: Xcode 26 ships simulators for the iPhone 17
+      # family and the 16 is simply not among them, so xcodebuild exited before compiling a
+      # single file. Any pinned model rots the same way at the next Xcode bump, and this job only
+      # needs to COMPILE for the simulator SDK — it never boots a device or runs a test.
       - name: Build for simulator
         working-directory: ios/UsageLimits
         run: |
           set -o pipefail
           xcodebuild build \
             -scheme UsageLimits \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
