@@ -166,246 +166,39 @@ private enum SnapshotCache {
     }
 }
 
-// MARK: - Criticality ranking
+// MARK: - Snapshot lead
 
-private extension Severity {
-    /// Ranking for "what deserves the tile", most urgent first.
-    ///
-    /// Concrete quota pressure outranks data-quality states: an account we can see
-    /// is exhausted beats one we merely failed to read. Among the quality states a
-    /// failed fetch (error) outranks an ageing one (stale) — silence is louder
-    /// than delay — and healthy is least urgent, so an all-clear never displaces a
-    /// warning.
-    var urgency: Int {
-        switch self {
-        case .exhausted: return 0
-        case .low: return 1
-        case .medium: return 2
-        case .error: return 3
-        case .stale: return 4
-        case .healthy: return 5
-        }
-    }
-}
-
-/// Chooses which account, and which row within it, earns the widget's scarce pixels.
-private enum Criticality {
-
-    /// The one account + row the small tile is allowed to talk about.
-    struct Focus {
-        let account: GlanceAccount
-        let row: GlanceRow
-    }
-
-    /// The most critical account that actually has rows to show, with its own most
-    /// critical row. An account without rows cannot contribute a number, so it
-    /// cannot claim the small tile.
-    static func focus(in snapshot: GlanceSnapshot) -> Focus? {
-        let candidates = snapshot.accounts.filter { !$0.rows.isEmpty }
-        guard let account = candidates.min(by: { isMoreCritical($0, $1) }) else { return nil }
-        guard let row = criticalRow(in: account) else { return nil }
-        return Focus(account: account, row: row)
-    }
-
-    /// The account's own most critical row.
-    static func criticalRow(in account: GlanceAccount) -> GlanceRow? {
-        account.rows.min { row($0, isMoreCriticalThan: $1) }
-    }
-
-    /// Most-critical-first display order for the medium tile.
-    static func sortedAccounts(_ accounts: [GlanceAccount]) -> [GlanceAccount] {
-        accounts.sorted { isMoreCritical($0, $1) }
-    }
-
-    private static func isMoreCritical(_ a: GlanceAccount, _ b: GlanceAccount) -> Bool {
-        if a.severity.urgency != b.severity.urgency {
-            return a.severity.urgency < b.severity.urgency
-        }
-        // Same account severity: let the tighter row decide, since an account that
-        // can name its worst row says more than one that cannot.
-        switch (criticalRow(in: a), criticalRow(in: b)) {
-        case (let rowA?, let rowB?):
-            return row(rowA, isMoreCriticalThan: rowB)
-        case (_?, nil):
-            return true
-        case (nil, _?):
-            return false
-        default:
-            return false
-        }
-    }
-
-    private static func row(_ a: GlanceRow, isMoreCriticalThan b: GlanceRow) -> Bool {
-        if a.severity.urgency != b.severity.urgency {
-            return a.severity.urgency < b.severity.urgency
-        }
-        // Equal severity: the smaller *stated* percentage is the tighter limit. An
-        // unknown percentage never outranks a stated one — we cannot rank what we
-        // were not told — and equally-unknown rows fall through to their resets.
-        switch (a.remainingPercent, b.remainingPercent) {
-        case (let pa?, let pb?) where QuotaFormatting.fraction(pa) != QuotaFormatting.fraction(pb):
-            return QuotaFormatting.fraction(pa) < QuotaFormatting.fraction(pb)
-        case (_?, nil):
-            return true
-        case (nil, _?):
-            return false
-        default:
-            return isEarlier(a.resetAt, b.resetAt)
-        }
-    }
-
-    /// The earlier concrete reset wins; an unknown reset never does.
-    private static func isEarlier(_ a: Date?, _ b: Date?) -> Bool {
-        switch (a, b) {
-        case (let a?, let b?):
-            return a < b
-        case (nil, nil):
-            return false
-        case (_?, nil):
-            return true
-        default:
-            return false
-        }
-    }
-}
-
-// MARK: - Numbers and words
-
-/// Quota number formatting. The rule that governs it: never invent a number.
-private enum QuotaFormatting {
-
-    /// A nil percentage is *unknown*, not zero. It renders as an em dash over an
-    /// empty bar; coercing it to "0 %" would cry wolf, and to "100 %" would invent
-    /// an all-clear the cache never made.
-    static func percentText(_ percent: Double?) -> String {
-        guard let percent else { return "—" }
-        let value = Int((fraction(percent) * 100).rounded())
-        return "\(value)%"
-    }
-
-    /// Normalises a 0…100 percentage to 0…1 for bar widths and labels.
-    ///
-    /// The previous version guessed the scale from the value — anything above 1 was
-    /// treated as a percentage and anything at or below 1 as a fraction already. But the
-    /// kit's `remainingPercent` is 0…100 everywhere (`UsageWindow.swift`, `min(max(100 -
-    /// used, 0), 100)`), so a quota with 1 % left arrived as `1.0`, was taken to be a
-    /// fraction, and rendered as "100%" with a completely full bar. The Android widget
-    /// showed "1%" for the identical snapshot. A nearly-exhausted quota reading as nearly
-    /// full is the single worst number this app can show, so the scale is no longer
-    /// inferred: the input is always a percentage. Clamping still stops a corrupt cache
-    /// value from overflowing the bar.
-    static func fraction(_ percent: Double) -> Double {
-        min(max(percent / 100, 0), 1)
-    }
-}
-
-/// Builds every time string the tiles show. Everything here is *absolute*.
+/// The account and row the small tiles talk about — chosen by the kit, not here.
 ///
-/// The kit offers `Countdown.format` ("2d 4h") and the widget deliberately refuses
-/// it. A relative countdown is frozen at the moment WidgetKit last rendered, and it
-/// goes wrong in the one direction that matters: the limit can already have reset
-/// while the tile still insists "in 20m". A clock time ("Resets 14:05") was true
-/// when it was written and stays true whatever the system does next. The same
-/// argument forbids "5 min ago" styling — an age silently goes stale — so the data
-/// instead carries its own timestamp: "As of 12:40".
-private enum GlanceText {
+/// The widget used to re-rank accounts with a private urgency scale that disagreed with
+/// `GlanceModel.urgency` (it put error and stale above healthy; the kit puts them below), and
+/// then printed `snapshot.nextResetAt` — which the kit computed for ITS first account — next
+/// to whichever account the local ranking had promoted. The medium tile read "Resets 14:05"
+/// beside a Claude row when 14:05 was Codex's clock. One ranking, one owner: the lead is
+/// `accounts.first`, and its headline rows and reset are the ones the kit paired with it.
+private struct WidgetFocus {
+    let account: GlanceAccount
+    /// The kit's headline for the lead: the five-hour row when it has one, else the longer.
+    let row: GlanceRow?
 
-    /// "Resets Tue 09:00", or the boundary state once the reset has passed.
-    static func resetLine(resetAt: Date?, now: Date) -> String? {
-        guard let resetAt else { return nil }
-        if resetAt <= now {
-            // The cached numbers predate the reset, so the tile says so instead of
-            // implying a reset is still pending. The timeline requests fresh data
-            // moments after the boundary, so this state is short-lived.
-            return "Reset · refresh pending"
-        }
-        return "Resets \(Countdown.absolute(resetAt, now: now))"
-    }
-
-    /// "As of 12:40" — the data's own timestamp, or nothing if the cache states none.
-    static func asOfLine(updatedAt: Date?, now: Date) -> String? {
-        guard let updatedAt else { return nil }
-        return "As of \(Countdown.absolute(updatedAt, now: now))"
+    init?(snapshot: GlanceSnapshot) {
+        guard let account = snapshot.accounts.first else { return nil }
+        self.account = account
+        self.row = snapshot.headlineShort ?? snapshot.headlineLong ?? account.rows.first
     }
 }
 
-/// Tap destinations. Lock Screen accessories ignore these; the app registers the scheme.
-private enum DeepLink {
-    static let glance = URL(string: "usagelimits://glance")
-}
-
-// MARK: - Shared views
-
-/// One quota bar.
+/// One account line on the medium tile: title, one row's percentage, its bar.
 ///
-/// A fixed height on a *bar* is legitimate — the Dynamic Type rule concerns text —
-/// and `@ScaledMetric` grows the bar with the user's type size regardless.
-private struct QuotaBar: View {
-
-    let remainingPercent: Double?
-    let severity: Severity
-    /// Spoken context ("Claude, Messages") so the label below reads as a sentence.
-    let context: String
-
-    @ScaledMetric(relativeTo: .caption) private var barHeight = 5
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(UsageColors.progressTrack)
-                if let remainingPercent {
-                    // Unknown percentages draw the empty track only — never a 0 % sliver.
-                    Capsule()
-                        .fill(SeverityPalette.bar(remainingPercent: remainingPercent, severity: severity))
-                        .frame(width: proxy.size.width * QuotaFormatting.fraction(remainingPercent))
-                }
-            }
-        }
-        .frame(height: barHeight)
-        // A bar shape tells VoiceOver nothing; state the number in words.
-        .accessibilityElement()
-        .accessibilityLabel(spokenText)
-    }
-
-    private var spokenText: String {
-        guard let remainingPercent else {
-            return "\(context): remaining unknown"
-        }
-        return "\(context): \(QuotaFormatting.percentText(remainingPercent)) remaining"
-    }
-}
-
-/// Rendered whenever the cache is missing, unreadable or empty.
-///
-/// The widget cannot open a dialogue with the user, so its only honest message is
-/// that the app has the numbers — never a fabricated percentage to look busy.
-private struct WidgetEmptyStateView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: "gauge.with.needle")
-                .font(.title3)
-                .foregroundColor(UsageColors.textSecondary)
-            Text("No accounts yet")
-                .font(.headline)
-                .foregroundColor(UsageColors.textPrimary)
-            Text("Open UsageLimits to see how much quota is left")
-                .font(.caption)
-                .foregroundColor(UsageColors.textSecondary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-/// One account line on the medium tile: title, its worst row's percentage, its bar.
+/// The row is handed in rather than chosen here, so the lead shows the kit's headline and
+/// every other account shows its first row in the kit's order.
 private struct MediumAccountRow: View {
 
     let account: GlanceAccount
+    let row: GlanceRow?
 
     var body: some View {
-        let row = Criticality.criticalRow(in: account)
-        return VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 // A severity dot: the colour-blind-readable twin of the bar colour.
                 // Redundant to VoiceOver, which already hears the percentage.
@@ -445,7 +238,7 @@ struct UsageWidgetSmallView: View {
 
     var body: some View {
         Group {
-            if let focus = Criticality.focus(in: entry.snapshot) {
+            if let focus = WidgetFocus(snapshot: entry.snapshot) {
                 content(for: focus)
             } else {
                 WidgetEmptyStateView()
@@ -455,32 +248,35 @@ struct UsageWidgetSmallView: View {
         .widgetURL(DeepLink.glance)
     }
 
-    private func content(for focus: Criticality.Focus) -> some View {
-        // The row's own reset when the cache states one, otherwise the snapshot's
-        // next reset — the nearest reset we can actually name, never a countdown.
-        let resetAt = focus.row.resetAt ?? entry.snapshot.nextResetAt
+    private func content(for focus: WidgetFocus) -> some View {
+        // The snapshot's next reset is the LEAD's soonest reset — the kit scoped it that way
+        // — so it is the right clock for this tile, and never a countdown.
+        let resetAt = entry.snapshot.nextResetAt
+        let severity = focus.row?.severity ?? focus.account.severity
         return VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: focus.account.title)
                 .font(.headline)
                 .foregroundColor(UsageColors.textPrimary)
                 .lineLimit(1)
 
-            Text(verbatim: focus.row.label)
-                .font(.caption)
-                .foregroundColor(UsageColors.textSecondary)
-                .lineLimit(1)
+            if let row = focus.row {
+                Text(verbatim: row.label)
+                    .font(.caption)
+                    .foregroundColor(UsageColors.textSecondary)
+                    .lineLimit(1)
+            }
 
             Spacer(minLength: 4)
 
-            Text(verbatim: QuotaFormatting.percentText(focus.row.remainingPercent))
+            Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
                 .font(.system(.title2, design: .rounded).weight(.semibold))
-                .foregroundColor(SeverityPalette.text(focus.row.severity))
+                .foregroundColor(SeverityPalette.text(severity))
                 .lineLimit(1)
 
             QuotaBar(
-                remainingPercent: focus.row.remainingPercent,
-                severity: focus.row.severity,
-                context: "\(focus.account.title), \(focus.row.label)"
+                remainingPercent: focus.row?.remainingPercent,
+                severity: severity,
+                context: focus.row.map { "\(focus.account.title), \($0.label)" } ?? focus.account.title
             )
 
             if let reset = GlanceText.resetLine(resetAt: resetAt, now: entry.date) {
@@ -504,7 +300,8 @@ struct UsageWidgetSmallView: View {
 
 /// systemMedium: the accounts that most need attention, at most three of them.
 ///
-/// Ranked most-critical-first; everything past the third is counted ("+N more"),
+/// In the kit's order — most urgent first, as GlanceModel ranks them — everything past the
+/// third is counted ("+N more"),
 /// not drawn — a fourth cramped row helps nobody. At larger type sizes even three
 /// rows will not fit, so the limit drops to two; and no text anywhere is given a
 /// fixed height, so rows grow with the user's chosen size instead of being
@@ -515,8 +312,17 @@ struct UsageWidgetMediumView: View {
 
     let entry: UsageEntry
 
+    /// The kit's order, untouched. See `WidgetFocus` for what re-ranking here cost.
     private var rankedAccounts: [GlanceAccount] {
-        Criticality.sortedAccounts(entry.snapshot.accounts)
+        entry.snapshot.accounts
+    }
+
+    /// The lead shows the kit's headline row; every other account its own first row.
+    private func row(for account: GlanceAccount) -> GlanceRow? {
+        if account.id == entry.snapshot.accounts.first?.id {
+            return entry.snapshot.headlineShort ?? entry.snapshot.headlineLong ?? account.rows.first
+        }
+        return account.rows.first
     }
 
     /// Three rows fit at regular sizes; from xLarge upwards two fill the tile, and
@@ -550,7 +356,7 @@ struct UsageWidgetMediumView: View {
             header
 
             ForEach(visibleAccounts) { account in
-                MediumAccountRow(account: account)
+                MediumAccountRow(account: account, row: row(for: account))
             }
 
             if hiddenCount > 0 {
@@ -602,30 +408,34 @@ struct UsageAccessoryRectangularView: View {
     let entry: UsageEntry
 
     var body: some View {
-        if let focus = Criticality.focus(in: entry.snapshot) {
+        if let focus = WidgetFocus(snapshot: entry.snapshot) {
             content(for: focus)
         } else {
             emptyContent
         }
     }
 
-    private func content(for focus: Criticality.Focus) -> some View {
+    private func content(for focus: WidgetFocus) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(verbatim: focus.account.title)
                 .font(.headline)
                 .lineLimit(1)
 
             HStack(spacing: 4) {
-                Text(verbatim: QuotaFormatting.percentText(focus.row.remainingPercent))
+                Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
                     .font(.title3.weight(.semibold))
                     .lineLimit(1)
-                Text(verbatim: SeverityPalette.label(focus.row.severity))
+                // The ACCOUNT's severity, which is the one that carries staleness. The row's
+                // is computed from the percentage alone, so the lock screen wrote "Healthy"
+                // over numbers fetched a day ago. Now it says "Stale", which is one property
+                // access away and the truth.
+                Text(verbatim: SeverityPalette.label(focus.account.severity))
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
 
-            if let reset = GlanceText.resetLine(resetAt: focus.row.resetAt, now: entry.date) {
+            if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
                 Text(verbatim: reset)
                     .font(.caption2)
                     .foregroundColor(.secondary)

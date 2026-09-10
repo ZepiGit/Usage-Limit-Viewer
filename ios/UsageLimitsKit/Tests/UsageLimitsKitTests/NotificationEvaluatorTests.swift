@@ -66,6 +66,78 @@ final class NotificationEvaluatorTests: XCTestCase {
 
     // MARK: - Low-quota tiers
 
+    /// An account with several windows, each with its own remaining percentage.
+    private func multi(
+        _ windows: [(String, Double?)], fetchedAt: Date? = nil, id: String = "acct"
+    ) -> AccountSummary {
+        AccountSummary(
+            accountId: id,
+            label: "Account \(id)",
+            snapshot: UsageSnapshot(
+                accountID: id,
+                fetchedAt: fetchedAt ?? now,
+                status: .ok,
+                windows: windows.enumerated().map { i, entry in
+                    UsageWindow(
+                        id: "w\(i)", label: entry.0, category: i == 0 ? .fiveHour : .weekly,
+                        usedPercent: entry.1.map { 100 - $0 },
+                        periodSeconds: i == 0 ? 18_000 : 604_800, resetAt: nil,
+                        exhausted: entry.1.map { $0 <= 0 } ?? false)
+                },
+                resetCredits: []))
+    }
+
+    func testOneWindowRunningOutDoesNotSilenceAnotherWindowsCrossings() {
+        // The bug: the episode was per ACCOUNT. The five-hour window running out claimed every
+        // tier, and the weekly window then crossing 20 %, 10 % and 0 % found nothing left to
+        // claim — the user was never told about the limit that matters most. Same input,
+        // same expected lines as the Kotlin test.
+        let publisher = Publisher()
+        let t = { (s: TimeInterval) in self.now.addingTimeInterval(s) }
+
+        XCTAssertEqual(
+            publisher.sync([multi([("5h limit", 0), ("Weekly", 60)])], settings, now),
+            ["Account acct · 5h limit exhausted"])
+        XCTAssertEqual(
+            publisher.sync([multi([("5h limit", 0), ("Weekly", 18)], fetchedAt: t(1))], settings, now),
+            ["Account acct · Weekly: less than 20% remaining"])
+        XCTAssertEqual(
+            publisher.sync([multi([("5h limit", 0), ("Weekly", 8)], fetchedAt: t(2))], settings, now),
+            ["Account acct · Weekly: less than 10% remaining"])
+        XCTAssertEqual(
+            publisher.sync([multi([("5h limit", 0), ("Weekly", 0)], fetchedAt: t(3))], settings, now),
+            ["Account acct · Weekly exhausted"])
+        // A window that recovers re-arms on its own, without waiting for the other.
+        XCTAssertTrue(publisher.sync([multi([("5h limit", 90), ("Weekly", 0)], fetchedAt: t(4))], settings, now).isEmpty)
+        XCTAssertEqual(
+            publisher.sync([multi([("5h limit", 15), ("Weekly", 0)], fetchedAt: t(5))], settings, now),
+            ["Account acct · 5h limit: less than 20% remaining"])
+    }
+
+    func testKeysCarryTheWindowIdentity() {
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [multi([("5h limit", 18), ("Weekly", 18)])], settings: settings, states: [:], now: now)
+        XCTAssertEqual(
+            Set(outcome.events.map(\.key)),
+            ["acct|fiveHour:5h limit|1|warning", "acct|weekly:Weekly|1|warning"])
+    }
+
+    func testStateWrittenBeforePerWindowEpisodesStillLoads() throws {
+        // A ledger from before this change has no `windows` key. It must decode, not wipe.
+        let legacy = Data(#"{"accountId":"a","lowQuotaEpisode":3,"lowQuotaActive":true}"#.utf8)
+        let state = try JSONDecoder().decode(NotificationEvaluator.AccountState.self, from: legacy)
+        XCTAssertEqual(state.lowQuotaEpisode, 3)
+        XCTAssertTrue(state.windows.isEmpty)
+
+        // And the per-window map survives a round trip.
+        var next = state
+        next.windows["fiveHour:5h limit"] = .init(episode: 2, active: true)
+        let back = try JSONDecoder().decode(
+            NotificationEvaluator.AccountState.self, from: JSONEncoder().encode(next))
+        XCTAssertEqual(back.windows["fiveHour:5h limit"], .init(episode: 2, active: true))
+    }
+
+
     func testCrossingBelowTwentyWarnsOnceThenStaysQuiet() {
         let publisher = Publisher()
 

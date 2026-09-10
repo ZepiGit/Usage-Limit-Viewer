@@ -19,6 +19,9 @@ import com.usagelimits.core.database.NotificationStateEntity
 import com.usagelimits.core.notifications.NotificationEvaluator
 import com.usagelimits.core.settings.SettingsStore
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /**
  * Turns a completed sync into at most one notification.
@@ -54,6 +57,7 @@ class NotificationPublisher(
                     lowQuotaEpisode = it.lowQuotaEpisode,
                     lowQuotaActive = it.lowQuotaActive,
                     lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                    windows = decodeWindows(it.windowsJson),
                 )
             },
             nowMs = nowMs,
@@ -79,6 +83,7 @@ class NotificationPublisher(
                     lowQuotaEpisode = it.lowQuotaEpisode,
                     lowQuotaActive = it.lowQuotaActive,
                     lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                    windowsJson = json.encodeToString(WINDOWS_SERIALIZER, it.windows),
                 )
             },
         )
@@ -166,7 +171,14 @@ class NotificationPublisher(
             PackageManager.PERMISSION_GRANTED
     }
 
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** A map that cannot be read is an empty map: every window starts its own episode afresh. */
+    private fun decodeWindows(raw: String?): Map<String, NotificationEvaluator.WindowState> =
+        raw?.let { runCatching { json.decodeFromString(WINDOWS_SERIALIZER, it) }.getOrNull() }.orEmpty()
+
     companion object {
+        private val WINDOWS_SERIALIZER = MapSerializer(String.serializer(), NotificationEvaluator.WindowState.serializer())
         private const val STANDING_PREFS = "usage_limits_notifications"
         private const val STANDING_FINGERPRINT = "standing_fingerprint"
 

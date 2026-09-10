@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotificationStateEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -105,12 +105,27 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Per-window notification episodes. Additive and defaulted, so a row written by
+         * version 4 reads back with an empty map: every window then starts its own episode at
+         * the next fresh snapshot, which means an account that is mid-dip on upgrade is told
+         * once more — the same choice 3→4 made, and the right side of the trade against
+         * silently suppressing a limit that is still exhausted.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE notification_state ADD COLUMN windowsJson TEXT NOT NULL DEFAULT '{}'",
+                )
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 UsageLimitsDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
     }
 }
 
