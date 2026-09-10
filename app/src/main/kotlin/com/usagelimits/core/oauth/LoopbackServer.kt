@@ -91,17 +91,47 @@ class LoopbackServer(private val port: Int) : Closeable {
         }
         return client.use { connection ->
             val reader = BufferedReader(InputStreamReader(connection.getInputStream()))
-            val requestLine = reader.readLine().orEmpty()
+            val requestLine = readBoundedLine(reader)
             val parsed = parseRequestLine(requestLine)
             connection.getOutputStream().write(httpResponse(parsed).toByteArray(Charsets.UTF_8))
             connection.getOutputStream().flush()
-            parsed
+
+            // A connection that is not the redirect does NOT end the wait.
+            //
+            // Every process on the device shares 127.0.0.1, so treating the first connection
+            // as the answer let anything at all break a sign-in in progress: the caller throws
+            // "state mismatch" on a response with no state, so one `curl http://127.0.0.1:PORT/`
+            // from any app killed the login. The browser alone opens more than one connection —
+            // a favicon fetch would do it without malice.
+            //
+            // A real redirect always carries one or the other: `code` on success, `error` when
+            // the user declines. Anything else is answered politely and ignored.
+            if (parsed.code == null && parsed.error == null) null else parsed
         }
     }
 
     override fun close() {
         runCatching { serverSocket?.close() }
         serverSocket = null
+    }
+
+    /**
+     * Reads one request line, and no more than one request line's worth of bytes.
+     *
+     * `readLine()` reads until a newline arrives, however long that takes and however much it
+     * accumulates. A local process that opens the port and streams bytes without ever sending
+     * one grows this buffer until the app dies — no credential needed, just the address every
+     * app on the device can reach. A redirect line is a few hundred bytes; this cap is far
+     * above anything legitimate and far below anything dangerous.
+     */
+    private fun readBoundedLine(reader: BufferedReader): String {
+        val builder = StringBuilder()
+        while (builder.length < MAX_REQUEST_LINE_BYTES) {
+            val ch = reader.read()
+            if (ch == -1 || ch == '\n'.code) break
+            if (ch != '\r'.code) builder.append(ch.toChar())
+        }
+        return builder.toString()
     }
 
     private fun parseRequestLine(line: String): AuthorizationResponse {
@@ -178,6 +208,9 @@ class LoopbackServer(private val port: Int) : Closeable {
     private companion object {
         /** How long one accept() blocks before cancellation and the deadline are re-checked. */
         const val ACCEPT_POLL_MS = 200
+
+        /** Far above any real redirect line, far below anything that could exhaust memory. */
+        const val MAX_REQUEST_LINE_BYTES = 8 * 1024
         const val NANOS_PER_MS = 1_000_000L
     }
 }
