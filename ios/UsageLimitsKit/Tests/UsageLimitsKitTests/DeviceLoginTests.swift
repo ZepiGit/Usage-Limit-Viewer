@@ -201,7 +201,7 @@ final class DeviceLoginTests: XCTestCase {
             .profile(OAuthCredentials(accessToken: "a", idToken: jwt))
 
         XCTAssertEqual(profile.externalAccountID, "acct-789")
-        XCTAssertEqual(profile.plan, "plus")
+        XCTAssertEqual(profile.plan, "Plus")
         XCTAssertEqual(profile.attributes["chatgpt_account_id"], "acct-789")
     }
 

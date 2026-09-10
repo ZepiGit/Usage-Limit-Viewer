@@ -36,7 +36,8 @@ final class ProductionShapeTests: XCTestCase {
         XCTAssertEqual(try percent(windows, window.id), 100, accuracy: 0.001)
         XCTAssertTrue(window.exhausted)
         XCTAssertEqual(window.resetAt, Date(timeIntervalSince1970: 1789457449))
-        XCTAssertEqual(CodexUsageParser.parsePlan(input), "plus")
+        // Captured lowercase from the live account; shown capitalised, like every other tier.
+        XCTAssertEqual(CodexUsageParser.parsePlan(input), "Plus")
         // The counts sit under `rate_limit_reset_credits`, and production sends no `credits`
         // array at all — a UI gated on the row list would report "none" to a holder.
         let credits = try XCTUnwrap(input["rate_limit_reset_credits"] as? [String: Any])

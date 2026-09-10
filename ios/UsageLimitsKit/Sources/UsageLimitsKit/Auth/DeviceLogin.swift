@@ -257,7 +257,7 @@ public struct CodexDeviceLogin: DeviceLoginProvider {
             externalAccountID: accountID,
             email: JWTClaims.string(claims, "email"),
             displayName: nil,
-            plan: JWTClaims.string(auth, "chatgpt_plan_type"),
+            plan: planLabel(JWTClaims.string(auth, "chatgpt_plan_type")),
             attributes: attributes)
     }
 }

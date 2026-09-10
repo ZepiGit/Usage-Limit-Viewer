@@ -1,5 +1,7 @@
 package com.usagelimits.providers.codex
 
+import com.usagelimits.core.model.planLabel
+
 import com.usagelimits.core.auth.OAuthCredentials
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
@@ -194,7 +196,7 @@ class CodexProvider(
             externalAccountId = accountId,
             email = JwtClaims.string(claims, "email"),
             displayName = null,
-            plan = JsonSupport.string(auth, "chatgpt_plan_type"),
+            plan = planLabel(JsonSupport.string(auth, "chatgpt_plan_type")),
             attributes = JsonSupport.string(auth, "chatgpt_account_id")
                 ?.let { mapOf(ATTR_ACCOUNT_ID to it) } ?: emptyMap(),
         )

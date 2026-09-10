@@ -130,7 +130,7 @@ public enum CodexUsageParser: Sendable {
     }
 
     public static func parsePlan(_ payload: [String: Any]) -> String? {
-        JSONSupport.string(payload, "plan_type", "planType")
+        planLabel(JSONSupport.string(payload, "plan_type", "planType"))
     }
 
     private static func windowsFor(
