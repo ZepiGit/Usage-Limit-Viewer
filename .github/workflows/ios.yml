@@ -58,7 +58,13 @@ jobs:
     # every branch and nobody can review a diff of one. This job is the only place the SwiftUI
     # and WidgetKit code is compiled at all, since the environment it was written in has no
     # Apple SDK — so a failure here is the real signal, not a formality.
-    if: ${{ hashFiles('ios/UsageLimits/project.yml') != '' }}
+    #
+    # It deliberately carries no `if:` guard. It had one — `hashFiles(...) != ''`, meaning "only
+    # if the spec is there" — and `hashFiles` is not available in a JOB-level condition: it reads
+    # the workspace, which does not exist before a job checks anything out. GitHub rejected the
+    # whole workflow at startup, so all three jobs never ran and every push for a day reported a
+    # failure with no logs and no job list to explain it. The spec is committed; the guard was
+    # protecting against nothing.
     steps:
       - uses: actions/checkout@v4
       - name: Show toolchain
