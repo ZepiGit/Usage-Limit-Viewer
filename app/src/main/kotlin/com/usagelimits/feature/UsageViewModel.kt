@@ -239,10 +239,19 @@ class UsageViewModel(
             // was just removed — widgets do not observe the database, they are told.
             withContext(NonCancellable) {
                 val account = container.repository.account(accountId) ?: return@withContext
-                // Credentials go first: if this crashed between the two, an orphaned account
-                // row is recoverable, an orphaned credential is not visible to the user at all.
-                container.credentialStore.delete(account.credentialReference)
-                container.repository.deleteAccount(accountId)
+                // Under the same lock a refresh holds, which this did not take before. A
+                // refresh checks that the reference still exists and then writes the rotated
+                // pair back; a delete landing between those two steps was undone by the write,
+                // and the account the user removed kept a live credential in the keystore with
+                // no row naming it. Each store call is atomic on its own — it is the SEQUENCE
+                // that has to be serialised, so sign-out and refresh share one lock.
+                container.syncEngine.withCredentialLock(account.credentialReference) {
+                    // Credentials go first: if this crashed between the two, an orphaned
+                    // account row is recoverable, an orphaned credential is not visible to
+                    // the user at all.
+                    container.credentialStore.delete(account.credentialReference)
+                    container.repository.deleteAccount(accountId)
+                }
                 // A widget pinned to this account would otherwise render the empty snapshot
                 // for ever; dropping its config returns it to the automatic scope.
                 container.widgetConfigDao.deleteForAccount(accountId)

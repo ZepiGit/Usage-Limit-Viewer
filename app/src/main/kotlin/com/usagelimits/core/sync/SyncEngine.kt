@@ -175,6 +175,24 @@ class SyncEngine(
      * rotation. Presenting an already-spent refresh token is how a provider revokes the whole
      * grant, so the difference is not academic. iOS decides it the same way.
      */
+    /**
+     * Runs [block] holding the per-reference credential lock.
+     *
+     * Sign-out has to take this too, and did not. `validCredentials` checks that the reference
+     * still exists and then saves the rotated pair, both inside this lock — but a delete that
+     * did not hold it could land in between, so the save put the credential the user had just
+     * removed straight back. The store's own operations are each atomic; what needs
+     * serialising is the sequence, and that means one lock shared by everything that changes a
+     * credential's existence.
+     *
+     * Keyed by credential reference rather than by account, because two accounts can share
+     * one reference and both would otherwise spend the same rotating refresh token.
+     */
+    suspend fun <T> withCredentialLock(reference: String, block: suspend () -> T): T {
+        val mutex = mutexGuard.withLock { refreshMutexes.getOrPut(reference) { Mutex() } }
+        return mutex.withLock { block() }
+    }
+
     suspend fun validCredentials(
         account: ProviderAccount,
         rejectedAccessToken: String? = null,
@@ -188,14 +206,13 @@ class SyncEngine(
             current.accessToken == rejectedAccessToken
         if (!currentWasRejected && !current.needsRefresh(nowMs())) return current
 
-        val mutex = mutexGuard.withLock { refreshMutexes.getOrPut(reference) { Mutex() } }
-        return mutex.withLock {
+        return withCredentialLock(reference) {
             val latest = credentialStore.load(reference) ?: current
             val latestWasRejected = rejectedAccessToken != null &&
                 latest.accessToken == rejectedAccessToken
             // Whoever held the lock may have rotated already. If what they saved is not the
             // token this caller was refused, it is worth trying before spending another.
-            if (!latestWasRejected && !latest.needsRefresh(nowMs())) return@withLock latest
+            if (!latestWasRejected && !latest.needsRefresh(nowMs())) return@withCredentialLock latest
 
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
