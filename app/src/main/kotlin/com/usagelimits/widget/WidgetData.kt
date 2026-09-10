@@ -139,14 +139,7 @@ object WidgetDataBuilder {
      * [WidgetSnapshot.overallSeverity] and through the app's own list, neither of which is
      * slot-limited.
      */
-    private fun criticality(severity: Severity): Int = when (severity) {
-        Severity.EXHAUSTED -> 0
-        Severity.LOW -> 1
-        Severity.MEDIUM -> 2
-        Severity.HEALTHY -> 3
-        Severity.ERROR -> 4
-        Severity.STALE -> 5
-    }
+    private fun criticality(severity: Severity): Int = severity.urgency
 
     /**
      * Tie-break within one rank: the tightest number the card actually shows, ascending.

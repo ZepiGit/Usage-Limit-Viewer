@@ -91,7 +91,12 @@ class NotificationPublisher(
         val alerts = claimed.map { it.line }.filter { it.isNotBlank() }
         val findings = alerts + outcome.standingFindings
         if (findings.isEmpty()) {
-            NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+            // Nothing new to say, and NOTHING is taken down. This used to cancel the
+            // notification, which deleted an alert the user had not yet seen: an
+            // edge-triggered "Weekly exhausted" was posted at one sync and cancelled by the
+            // next, thirty minutes later, phone face-down in a pocket — and because its key
+            // was already claimed it could never be posted again. The alert lives until the
+            // user dismisses it or a later refresh has something to replace it with.
             return
         }
 

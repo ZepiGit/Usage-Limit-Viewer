@@ -283,13 +283,19 @@ private enum QuotaFormatting {
         return "\(value)%"
     }
 
-    /// Normalises a percentage to 0…1 for bar widths. The kit's `remainingPercent`
-    /// is a fraction, but a cache written with 0…100 values must not draw a bar
-    /// forty times too wide: anything above 1 is rescaled, then clamped, so no bar
-    /// can overflow and no label can read "4200 %".
+    /// Normalises a 0…100 percentage to 0…1 for bar widths and labels.
+    ///
+    /// The previous version guessed the scale from the value — anything above 1 was
+    /// treated as a percentage and anything at or below 1 as a fraction already. But the
+    /// kit's `remainingPercent` is 0…100 everywhere (`UsageWindow.swift`, `min(max(100 -
+    /// used, 0), 100)`), so a quota with 1 % left arrived as `1.0`, was taken to be a
+    /// fraction, and rendered as "100%" with a completely full bar. The Android widget
+    /// showed "1%" for the identical snapshot. A nearly-exhausted quota reading as nearly
+    /// full is the single worst number this app can show, so the scale is no longer
+    /// inferred: the input is always a percentage. Clamping still stops a corrupt cache
+    /// value from overflowing the bar.
     static func fraction(_ percent: Double) -> Double {
-        let raw = percent > 1 ? percent / 100 : percent
-        return min(max(raw, 0), 1)
+        min(max(percent / 100, 0), 1)
     }
 }
 

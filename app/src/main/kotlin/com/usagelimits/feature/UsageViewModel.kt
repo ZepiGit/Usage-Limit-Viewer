@@ -64,8 +64,20 @@ data class UsageUiState(
     val lastUpdated: Long?
         get() = accounts.mapNotNull { it.snapshot?.fetchedAt }.maxOrNull()
 
-    val nextReset: Long?
-        get() = accounts.mapNotNull { it.snapshot?.nextReset }.minOrNull()
+    /**
+     * The soonest rollover still ahead.
+     *
+     * Ahead is the point. Taking the minimum over every window's reset instant meant that
+     * once ONE window's reset had passed — and a snapshot keeps that instant until the next
+     * fetch replaces it — the minimum was anchored to the past and the summary card read
+     * "Next reset: now" for hours while the real next rollover was never shown. The Resets
+     * screen already drops passed instants; this now matches it.
+     */
+    fun nextResetAt(nowMs: Long): Long? =
+        accounts.flatMap { it.snapshot?.windows.orEmpty() }
+            .mapNotNull { it.resetAt }
+            .filter { it > nowMs }
+            .minOrNull()
 
     fun overallSeverityAt(nowMs: Long): Severity =
         accounts.mapNotNull { it.snapshot?.severityAt(nowMs, staleAfterMs) }.maxOrNull()

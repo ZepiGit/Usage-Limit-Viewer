@@ -105,8 +105,10 @@ fun OverviewScreen(
         }
 
         items(
-            items = state.accounts.sortedByDescending {
-                it.snapshot?.severityAt(nowMs, state.staleAfterMs)?.ordinal ?: 99
+            // Most urgent first, by the same ranking the widget uses — not by Severity's
+            // declaration order, which put stale and never-fetched cards above exhausted ones.
+            items = state.accounts.sortedBy {
+                it.snapshot?.severityAt(nowMs, state.staleAfterMs)?.urgency ?: Int.MAX_VALUE
             },
             key = { it.account.localId },
         ) { usage ->
@@ -225,7 +227,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 symbol = "◷",
                 tint = UsageColors.Terracotta,
                 container = UsageColors.TerracottaSurface,
-                value = state.nextReset?.let { Countdown.format(it - nowMs) } ?: "—",
+                value = state.nextResetAt(nowMs)?.let { Countdown.format(it - nowMs) } ?: "—",
                 label = "Next reset",
             )
 

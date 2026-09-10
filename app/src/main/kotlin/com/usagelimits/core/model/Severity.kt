@@ -14,6 +14,25 @@ enum class Severity {
     STALE,
     ERROR;
 
+    /**
+     * How urgently this deserves the user's attention. Lower is more urgent.
+     *
+     * NOT the declaration order. `ordinal` puts STALE and ERROR after EXHAUSTED because they
+     * are worse *states*, and sorting screens by it put a never-fetched blank card and a
+     * day-old stale card above the account the user had actually run out on. Attention
+     * order is a different question from severity order, and this is the one answer to it
+     * — the overview list and the widget ranking both use it, so they cannot disagree.
+     */
+    val urgency: Int
+        get() = when (this) {
+            EXHAUSTED -> 0
+            LOW -> 1
+            MEDIUM -> 2
+            HEALTHY -> 3
+            ERROR -> 4
+            STALE -> 5
+        }
+
     companion object {
         /** Central thresholds — the one place these numbers are defined. */
         const val HEALTHY_ABOVE = 50.0
