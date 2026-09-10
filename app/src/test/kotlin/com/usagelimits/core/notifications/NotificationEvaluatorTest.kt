@@ -674,4 +674,99 @@ class NotificationEvaluatorTest {
     }
 
     // endregion
+
+    // region windows that share a category and a label
+
+    private fun twoAliasingWindows(
+        firstRemaining: Double,
+        secondRemaining: Double,
+        fetchedAt: Long = now,
+    ) = AccountUsage(
+        account = account("acct"),
+        snapshot = UsageSnapshot(
+            accountId = "acct",
+            fetchedAt = fetchedAt,
+            status = SnapshotStatus.OK,
+            windows = listOf(
+                UsageWindow(
+                    id = "w1",
+                    label = "Usage",
+                    category = WindowCategory.OTHER,
+                    usedPercent = 100.0 - firstRemaining,
+                    periodSeconds = null,
+                    resetAt = null,
+                    exhausted = firstRemaining <= 0.0,
+                ),
+                UsageWindow(
+                    id = "w2",
+                    label = "Usage",
+                    category = WindowCategory.OTHER,
+                    usedPercent = 100.0 - secondRemaining,
+                    periodSeconds = null,
+                    resetAt = null,
+                    exhausted = secondRemaining <= 0.0,
+                ),
+            ),
+        ),
+    )
+
+    @Test
+    fun `two windows sharing a category and label do not silence each other`() {
+        // A window's identity is category and label, deliberately: ids are provider-assigned
+        // and renumbering them would re-arm every reset alert already sent. But nothing
+        // upstream promises that pair is unique, and when two windows collapse to one
+        // identity they share an episode and its tier keys — the exact defect per-window
+        // episodes exist to fix, reappearing inside the aliasing group.
+        //
+        // The first window is exhausted, so it claims warning, critical and exhausted for
+        // that identity, and only the strongest carries text. The second is merely low. If
+        // they share an identity its warning finds the key already spent and says nothing.
+        val publisher = publisher()
+
+        val lines = publisher.sync(
+            listOf(twoAliasingWindows(firstRemaining = 0.0, secondRemaining = 15.0)),
+            settings,
+            now,
+        )
+
+        assertTrue(
+            "the second window's warning must not be swallowed by the first's claim: $lines",
+            lines.any { it.contains("15%") || it.contains("low") || it.contains("20%") },
+        )
+    }
+
+    @Test
+    fun `aliasing windows keep separate episodes across syncs`() {
+        // The consequence over time, not just in one pass: each window has to be able to
+        // cross its own thresholds later without finding the other's keys in the way.
+        val publisher = publisher()
+        publisher.sync(
+            listOf(twoAliasingWindows(firstRemaining = 0.0, secondRemaining = 60.0)),
+            settings,
+            now,
+        )
+
+        // The second window now runs out on its own. It must be able to say so.
+        val lines = publisher.sync(
+            // A NEW fetch, not the same snapshot re-delivered: quota edges are deliberately
+            // evaluated once per fetch, so reusing the timestamp would test the dedup rather
+            // than the identity.
+            listOf(
+                twoAliasingWindows(
+                    firstRemaining = 0.0,
+                    secondRemaining = 0.0,
+                    fetchedAt = now + 1,
+                ),
+            ),
+            settings,
+            now + 1,
+        )
+
+        assertTrue(
+            "the second window running out must be announced: $lines",
+            lines.isNotEmpty(),
+        )
+    }
+
+    // endregion
 }

@@ -42,9 +42,22 @@ class DeleteDuringRefreshTest {
 
     private val now = 1_757_000_000_000L
 
-    /** Blocks the token response until released, so the delete lands mid-refresh. */
-    private fun heldTokenClient(released: CompletableDeferred<Unit>) = OkHttpClient.Builder()
+    /**
+     * Blocks the token response until released, and announces that it has started.
+     *
+     * The announcement is what makes this test deterministic rather than a coin flip. The
+     * interceptor only runs once the refresh already holds the credential lock, so waiting for
+     * it before signing out guarantees the interleaving the test is about. Without it the two
+     * coroutines raced: sign-out sometimes took the lock first, deleted, and the refresh then
+     * found nothing to save — a pass that proved nothing, and one I got on a full-suite run
+     * after the targeted run had gone green.
+     */
+    private fun heldTokenClient(
+        entered: CompletableDeferred<Unit>,
+        released: CompletableDeferred<Unit>,
+    ) = OkHttpClient.Builder()
         .addInterceptor { chain ->
+            entered.complete(Unit)
             runBlocking { released.await() }
             Response.Builder()
                 .request(chain.request())
@@ -117,17 +130,21 @@ class DeleteDuringRefreshTest {
 
     @Test
     fun `a sign-out during a refresh is not undone by the refresh's write`() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
         val released = CompletableDeferred<Unit>()
         val store = Store(expiring)
         val engine = SyncEngine(
             repository = UsageRepository(EmptyAccountDao(), EmptySnapshotDao()),
             credentialStore = store,
-            registry = ProviderRegistry(HttpClient(heldTokenClient(released))),
+            registry = ProviderRegistry(HttpClient(heldTokenClient(entered, released))),
             nowMs = { now },
         )
 
         // The refresh gets past its existence check and blocks on the token response.
         val refresh = async(Dispatchers.IO) { engine.validCredentials(account) }
+
+        // Only once the refresh is demonstrably inside the lock and parked on the network.
+        entered.await()
 
         // Sign-out, taking the same lock. It must therefore wait for the refresh to finish
         // rather than interleave with it — which is exactly the guarantee being tested.
