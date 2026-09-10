@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UsageLimitsKit
 
 /// Signing in, from a phone.
@@ -29,6 +30,7 @@ struct AddAccountSheet: View {
     @State private var stage: Stage = .choosing
     @State private var login: Task<Void, Never>?
     @State private var loopback = LoopbackSignIn()
+    @State private var copied = false
 
     var body: some View {
         NavigationStack {
@@ -122,15 +124,24 @@ struct AddAccountSheet: View {
                 .font(.footnote)
                 .foregroundStyle(UsageColors.textSecondary)
 
-            Button("Open sign-in page") {
-                // The pre-filled page when the provider offers one, so the code does not have to
-                // be typed at all. Both URLs came from the provider and were checked against its
-                // own host before this screen vouched for either.
-                let target = challenge.verificationURIComplete ?? challenge.verificationURI
-                if let url = URL(string: target) { openURL(url) }
+            HStack(spacing: 10) {
+                Button(copied ? "Copied" : "Copy code") {
+                    UIPasteboard.general.string = challenge.userCode
+                    copied = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(UsageColors.terracotta)
+
+                Button("Open sign-in page") {
+                    // The pre-filled page when the provider offers one, so the code does not have
+                    // to be typed at all. Both URLs came from the provider and were checked
+                    // against its own host before this screen vouched for either.
+                    let target = challenge.verificationURIComplete ?? challenge.verificationURI
+                    if let url = URL(string: target) { openURL(url) }
+                }
+                .buttonStyle(.bordered)
+                .tint(UsageColors.terracotta)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(UsageColors.terracotta)
 
             HStack(spacing: 8) {
                 ProgressView()
@@ -142,6 +153,13 @@ struct AddAccountSheet: View {
             Text("The browser opens \(provider.displayName)'s own sign-in page. This app never sees your password.")
                 .font(.caption)
                 .foregroundStyle(UsageColors.textTertiary)
+        }
+        // On the clipboard before either button is pressed: the browser is opened for the user,
+        // so the next thing they do is paste, and a code they have to go back and copy first is
+        // a code they will type by hand.
+        .onAppear {
+            UIPasteboard.general.string = challenge.userCode
+            copied = true
         }
     }
 
