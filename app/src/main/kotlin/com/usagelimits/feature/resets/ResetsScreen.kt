@@ -22,6 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.usagelimits.core.time.Countdown
@@ -99,7 +101,10 @@ fun ResetsScreen(
                 item(key = "header-$date") {
                     SectionHeader(title = dayLabel(date, today))
                 }
-                items(dayResets.size, key = { i -> dayResets[i].let { "${it.accountId}-${it.windowLabel}-${it.resetAt}" } }) { index ->
+                // Keyed on the window id, never its label: two windows on one account can
+                // share a display name and a reset instant, and a duplicate LazyColumn key
+                // throws out of composition and takes the whole tab down.
+                items(dayResets.size, key = { i -> dayResets[i].let { "${it.accountId}-${it.windowId}" } }) { index ->
                     ResetRow(dayResets[index], nowMs, zone)
                 }
             }
@@ -112,8 +117,19 @@ private fun ResetRow(reset: UpcomingReset, nowMs: Long, zone: ZoneId) {
         Instant.ofEpochMilli(reset.resetAt).atZone(zone)
             .format(DateTimeFormatter.ofPattern("HH:mm"))
     }
+    val statusLabel = SeverityPalette.label(reset.severity)
+    val countdown = Countdown.format(reset.resetAt - nowMs)
 
-    UsageCard {
+    UsageCard(
+        // The severity dot is a bare Box: it emits no semantics node, so the status was
+        // absent from the accessibility tree entirely and the row was spoken as four
+        // disconnected fragments. One merged sentence, status included — the same treatment
+        // UsageWindowRow gives a quota row.
+        modifier = Modifier.semantics(mergeDescendants = true) {
+            contentDescription = "$time, ${reset.windowLabel}, ${reset.accountLabel}, " +
+                "$statusLabel, resets in $countdown"
+        },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = time,
@@ -150,11 +166,22 @@ private fun ResetRow(reset: UpcomingReset, nowMs: Long, zone: ZoneId) {
                     maxLines = 1,
                 )
             }
-            Text(
-                text = Countdown.format(reset.resetAt - nowMs),
-                style = MaterialTheme.typography.labelLarge,
-                color = UsageColors.TextSecondary,
-            )
+            // Countdown over status word: colour alone would leave a colour-blind reader
+            // with two near-identical 6dp dots, which is what the palette note promises
+            // never happens.
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = countdown,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = UsageColors.TextSecondary,
+                )
+                Text(
+                    text = statusLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SeverityPalette.textColor(reset.severity),
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

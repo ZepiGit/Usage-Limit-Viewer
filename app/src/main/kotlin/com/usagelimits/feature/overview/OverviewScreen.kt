@@ -1,6 +1,7 @@
 package com.usagelimits.feature.overview
 
 import androidx.compose.foundation.background
+import com.usagelimits.core.model.percentLabel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -105,10 +106,16 @@ fun OverviewScreen(
         }
 
         items(
-            items = state.accounts.sortedByDescending { it.snapshot?.severity?.ordinal ?: 99 },
+            // Most urgent first, by the same ranking the widget uses — not by Severity's
+            // declaration order, which put stale and never-fetched cards above exhausted ones.
+            items = state.accounts.sortedBy {
+                it.snapshot?.severityAt(nowMs, state.staleAfterMs)?.urgency ?: Int.MAX_VALUE
+            },
             key = { it.account.localId },
         ) { usage ->
-            AccountCard(usage, nowMs) { onAccountClick(usage.account.localId) }
+            AccountCard(usage, nowMs, state.staleAfterMs) {
+                onAccountClick(usage.account.localId)
+            }
         }
 
         item { AddAccountCard(onAddAccount) }
@@ -174,7 +181,7 @@ private fun OverviewHeader(state: UsageUiState, nowMs: Long, onRefresh: () -> Un
  */
 @Composable
 private fun SummaryCard(state: UsageUiState, nowMs: Long) {
-    val severity = state.overallSeverity
+    val severity = state.overallSeverityAt(nowMs)
     val critical = state.mostCritical
 
     UsageCard(borderColor = SeverityPalette.container(severity)) {
@@ -192,7 +199,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "${state.healthyCount}/${state.accountCount}",
+                            text = "${state.healthyCountAt(nowMs)}/${state.accountCount}",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = SeverityPalette.accent(severity),
@@ -201,7 +208,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = headline(state),
+                            text = headline(state, nowMs),
                             style = MaterialTheme.typography.titleMedium,
                             color = UsageColors.TextPrimary,
                         )
@@ -221,7 +228,11 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 symbol = "◷",
                 tint = UsageColors.Terracotta,
                 container = UsageColors.TerracottaSurface,
-                value = state.nextReset?.let { Countdown.format(it - nowMs) } ?: "—",
+                // The reset of the account the card is ABOUT. Falls back to the fleet-wide
+                // soonest only when there is no most-depleted account to scope it to.
+                value = (critical?.first?.account?.localId?.let { state.nextResetAt(nowMs, it) }
+                    ?: critical?.let { null } ?: state.nextResetAt(nowMs))
+                    ?.let { Countdown.format(it - nowMs) } ?: "—",
                 label = "Next reset",
             )
 
@@ -232,7 +243,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 symbol = "▮",
                 tint = SeverityPalette.accent(critical?.second?.severity ?: Severity.STALE),
                 container = SeverityPalette.container(critical?.second?.severity ?: Severity.STALE),
-                value = critical?.second?.remainingPercent?.let { "${it.toInt()}%" } ?: "—",
+                value = percentLabel(critical?.second?.remainingPercent),
                 label = critical?.second?.label?.let { "$it left" } ?: "No data",
                 bar = critical?.second,
             )
@@ -291,11 +302,15 @@ private fun SummaryStat(
     }
 }
 
-private fun headline(state: UsageUiState): String = when {
-    state.accounts.isEmpty() -> "No accounts yet"
-    state.overallSeverity == Severity.HEALTHY -> "All systems good"
-    state.overallSeverity == Severity.EXHAUSTED -> "A limit is exhausted"
-    state.overallSeverity == Severity.ERROR -> "Needs attention"
+private fun headline(state: UsageUiState, nowMs: Long): String = when (
+    if (state.accounts.isEmpty()) null else state.overallSeverityAt(nowMs)
+) {
+    null -> "No accounts yet"
+    Severity.HEALTHY -> "All systems good"
+    Severity.EXHAUSTED -> "A limit is exhausted"
+    Severity.ERROR -> "Needs attention"
+    // Age is its own headline: green over day-old numbers is the failure this app prevents.
+    Severity.STALE -> "Data may be out of date"
     else -> "Running low"
 }
 
@@ -310,10 +325,11 @@ private fun headline(state: UsageUiState): String = when {
 fun AccountCard(
     usage: AccountUsage,
     nowMs: Long,
+    staleAfterMs: Long,
     onClick: () -> Unit,
 ) {
     val snapshot = usage.snapshot
-    val severity = snapshot?.severity ?: Severity.STALE
+    val severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE
 
     UsageCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -380,8 +396,10 @@ fun AccountCard(
             }
         }
 
-        val credits = snapshot?.resetCredits.orEmpty()
-        if (credits.isNotEmpty()) {
+        // The summary line reports what the user holds; whether any of it can be spent right
+        // now is a detail-screen concern, where the button lives.
+        val creditCount = snapshot?.heldResetCredits ?: 0
+        if (creditCount > 0) {
             HorizontalDivider(color = UsageColors.Outline, modifier = Modifier.padding(vertical = 6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -391,7 +409,7 @@ fun AccountCard(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "${credits.size} available",
+                    text = "$creditCount available",
                     style = MaterialTheme.typography.labelLarge,
                     color = UsageColors.Terracotta,
                 )

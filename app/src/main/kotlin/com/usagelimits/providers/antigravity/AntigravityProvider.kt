@@ -48,16 +48,23 @@ class AntigravityProvider(
      * leave the process. `@Volatile` because begin and complete may run on different threads.
      */
     @Volatile
+    private var server: LoopbackServer? = null
     private var pendingPkce: PkceCodes? = null
 
     @Volatile
     private var pendingState: String? = null
 
     override suspend fun beginLogin(): LoginChallenge {
+        // Bind the port BEFORE the authorization URL is handed back, so a conflict is reported
+        // instead of the browser being sent to mint a real authorization code that then has
+        // nowhere to land — or worse, lands on whatever squatted the port.
+        val boundServer = LoopbackServer(Antigravity.REDIRECT_PORT).also { it.start() }
+
         val codes = Pkce.generate()
         val state = Pkce.generateState()
         pendingPkce = codes
         pendingState = state
+        server = boundServer
 
         return LoginChallenge.Redirect(
             authorizationUrl = authorizationUrl(codes, state),
@@ -102,14 +109,18 @@ class AntigravityProvider(
             throw ProviderException.LoginCancelled("No login in progress")
         }
 
-        val server = LoopbackServer(Antigravity.REDIRECT_PORT)
+        val listener = server
+            ?: throw ProviderException.Unexpected("login was not started")
         val redirect = try {
-            server.start()
-            server.awaitRedirect(REDIRECT_TIMEOUT_MS)
+            listener.awaitRedirect(REDIRECT_TIMEOUT_MS)
         } finally {
             // The socket must not outlive the attempt: a stale listener would make the next
-            // login fail to bind the pinned port.
-            server.close()
+            // login fail to bind the pinned port. The verifier and state go with it — leaving
+            // them set would let an abandoned attempt's secrets be reused by the next one.
+            listener.close()
+            server = null
+            pendingPkce = null
+            pendingState = null
         }
 
         redirect.error?.let {
@@ -125,10 +136,7 @@ class AntigravityProvider(
         val code = redirect.code
             ?: throw ProviderException.LoginCancelled("Redirect carried no authorization code")
 
-        return exchangeCode(code, codes.codeVerifier).also {
-            pendingPkce = null
-            pendingState = null
-        }
+        return exchangeCode(code, codes.codeVerifier)
     }
 
     /**
@@ -176,6 +184,10 @@ class AntigravityProvider(
                     "grant_type" to "refresh_token",
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         // Google never returns a refresh token on a refresh; the original stays valid until it
@@ -200,13 +212,14 @@ class AntigravityProvider(
             ?: email
             ?: throw ProviderException.MalformedPayload("userinfo had no account identifier")
 
+        val (projectId, plan) = resolveProjectId(credentials)
+
         return ProviderProfile(
             externalAccountId = accountId,
             email = email,
             displayName = JsonSupport.string(payload, "name"),
-            // Antigravity does not report a plan name; the quota groups are the plan signal.
-            plan = null,
-            attributes = mapOf(ATTR_PROJECT_ID to resolveProjectId(credentials)),
+            plan = plan,
+            attributes = mapOf(ATTR_PROJECT_ID to projectId),
         )
     }
 
@@ -218,21 +231,63 @@ class AntigravityProvider(
      * account rather than to one refresh: without a project id the app can authenticate but
      * can never read a number.
      */
-    private suspend fun resolveProjectId(credentials: OAuthCredentials): String {
-        val response = http.request(
-            url = Antigravity.LOAD_CODE_ASSIST_URL,
-            method = "POST",
-            headers = authenticatedJsonHeaders(credentials),
-            body = HttpClient.jsonBody(LOAD_CODE_ASSIST_BODY),
-        )
-        val payload = JsonSupport.parseObject(response.body)
+    private suspend fun resolveProjectId(credentials: OAuthCredentials): Pair<String, String?> {
+        var lastError: ProviderException? = null
 
-        return JsonSupport.string(payload, "cloudaicompanionProject", "cloudaicompanion_project")
-            ?: JsonSupport.string(payload, "projectId", "project_id")
-            ?: JsonSupport.string(payload, "project")
-            ?: throw ProviderException.MalformedPayload(
-                "loadCodeAssist returned no GCP project id; this account may not have Antigravity enabled",
-            )
+        // Same reasoning as the quota read: which host serves a given account varies, and this
+        // call gates account creation, so a single pinned host turns a rollout difference into
+        // "you cannot add this account".
+        for (url in Antigravity.LOAD_CODE_ASSIST_URLS) {
+            try {
+                val response = http.request(
+                    url = url,
+                    method = "POST",
+                    headers = authenticatedJsonHeaders(credentials),
+                    body = HttpClient.jsonBody(LOAD_CODE_ASSIST_BODY),
+                )
+                val payload = JsonSupport.parseObject(response.body)
+                extractProjectId(payload)?.let { return it to extractTierName(payload) }
+            } catch (e: ProviderException) {
+                lastError = e
+            }
+        }
+
+        lastError?.let { throw it }
+        throw ProviderException.MalformedPayload(
+            "loadCodeAssist returned no GCP project id. If this account has never used " +
+                "Antigravity, sign in to the desktop client once to provision it, then add it here.",
+        )
+    }
+
+    private fun extractTierName(payload: JsonObject?): String? {
+        for (key in arrayOf("currentTier", "current_tier", "paidTier", "paid_tier")) {
+            val tier = JsonSupport.obj(payload, key) ?: continue
+            val name = JsonSupport.string(tier, "name")?.takeIf { it.isNotBlank() }
+                ?: JsonSupport.string(tier, "id")?.takeIf { it.isNotBlank() }
+            if (name != null) return name
+        }
+        return null
+    }
+
+    /**
+     * Reads the project id, which arrives either as a bare string or as an object carrying an
+     * `id`.
+     *
+     * Upstream handles both shapes (CLIProxyAPI internal/auth/antigravity/auth.go:93-112 —
+     * `case string` and `case map[string]any`). Reading only the string form fails the login
+     * with the id sitting in plain view in the response body.
+     */
+    private fun extractProjectId(payload: JsonObject?): String? {
+        val keys = arrayOf(
+            "cloudaicompanionProject",
+            "cloudaicompanion_project",
+            "projectId",
+            "project_id",
+            "project",
+        )
+        JsonSupport.string(payload, *keys)?.let { return it }
+        val nested = JsonSupport.obj(payload, *keys) ?: return null
+        return JsonSupport.string(nested, "id", "projectId", "project_id")
     }
 
     override suspend fun fetchUsage(
@@ -252,6 +307,7 @@ class AntigravityProvider(
         // The quota hosts are rolled out at different speeds and which one serves a given
         // account varies, so they are tried in order and only the last failure is reported.
         var lastError: ProviderException? = null
+        var emptyHosts = 0
         for (url in Antigravity.QUOTA_URLS) {
             try {
                 val response = http.request(
@@ -261,12 +317,32 @@ class AntigravityProvider(
                     body = body,
                 )
                 val payload = JsonSupport.parseObject(response.body)
-                return UsageResult(windows = AntigravityQuotaParser.parse(payload, nowMs()))
+                val windows = AntigravityQuotaParser.parse(payload, nowMs())
+
+                // An empty 2xx means this host does not serve the account, not that the
+                // account has no quota — the daily hosts answer for everyone but only carry
+                // data for some. Returning here would render zero windows, which the model
+                // reads as ERROR: the same failure shape as an outage, from a successful call.
+                // Upstream continues to the next host on both a missing and an empty `groups`.
+                if (windows.isNotEmpty()) {
+                    return UsageResult(windows = windows)
+                }
+                emptyHosts++
             } catch (e: ProviderException) {
                 lastError = e
             }
         }
-        throw lastError ?: ProviderException.Unexpected("no Antigravity quota host configured")
+
+        // Every host answered, none had data: report it as a payload problem rather than
+        // silently showing an account with no limits.
+        lastError?.let { throw it }
+        throw ProviderException.MalformedPayload(
+            if (emptyHosts > 0) {
+                "Antigravity returned no quota groups for this project"
+            } else {
+                "no Antigravity quota host configured"
+            },
+        )
     }
 
     private fun authenticatedJsonHeaders(credentials: OAuthCredentials): Map<String, String> = mapOf(
@@ -307,7 +383,12 @@ class AntigravityProvider(
             JsonObject.serializer(),
             buildJsonObject {
                 putJsonObject("metadata") {
-                    put("ideType", "IDE_UNSPECIFIED")
+                    // ideType selects which product's onboarding record Cloud Code returns.
+                    // IDE_UNSPECIFIED is the *Gemini Code Assist* value; sending it here
+                    // returns the Gemini view, whose project carries none of the Antigravity
+                    // quota groups. CLIProxyAPI-Quota-Inspector keeps both maps side by side
+                    // (providers.go:43-52), which is what makes the distinction unambiguous.
+                    put("ideType", "ANTIGRAVITY")
                     put("platform", "PLATFORM_UNSPECIFIED")
                     put("pluginType", "GEMINI")
                 }

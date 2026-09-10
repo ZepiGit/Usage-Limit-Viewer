@@ -47,7 +47,7 @@ object ProviderEndpoints {
          */
         const val USER_AGENT = "codex-tui/0.149.1 (Android; arm64) UsageLimits"
 
-        /** Scopes the exchange requests; the device flow itself takes none. */
+        /** Sent on the refresh grant only. Neither the device flow nor the code exchange uses it. */
         const val SCOPE = "openid email profile offline_access"
 
         /** Sent on the usage and reset-credit calls to select the account. */
@@ -149,8 +149,15 @@ object ProviderEndpoints {
             "https://www.googleapis.com/auth/experimentsandconfigs",
         )
 
-        const val LOAD_CODE_ASSIST_URL =
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        /**
+         * Tried in order. The stable host is first because this call gates account creation:
+         * CLIProxyAPI and the Quota Inspector both use `cloudcode-pa` for it, and only the
+         * quota read needs the daily hosts' wider rollout.
+         */
+        val LOAD_CODE_ASSIST_URLS = listOf(
+            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+        )
 
         /**
          * Tried in order until one answers. The daily/sandbox hosts are rolled out ahead of

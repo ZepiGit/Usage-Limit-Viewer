@@ -1,0 +1,214 @@
+name: iOS
+
+# The split this workflow exists to serve:
+#
+#   UsageLimitsKit  — Foundation only, no Apple SDK. Builds and tests on Linux, so the quota
+#                     engine is verified on every push without needing a Mac at all.
+#   UsageLimits app — SwiftUI, WidgetKit, Keychain, ASWebAuthenticationSession. Needs the real
+#                     iOS SDK, so a macOS runner is the only thing that can honestly say it
+#                     compiles.
+#
+# That is not an arbitrary boundary. On the Android side every real defect found — inverted
+# percentages, a missing `config` envelope, windows classified by payload position — was in a
+# parser. None was in a view. So the layer that can be tested without Apple hardware is also
+# the layer where the bugs actually live.
+
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit-linux:
+    name: UsageLimitsKit (Linux)
+    runs-on: ubuntu-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 20
+    container: swift:6.0.3
+    steps:
+      - uses: actions/checkout@v4
+      # The macOS job below is the real build. This is the cheap one that runs first: it
+      # type-checks the same app and widget sources against stand-ins for the Apple
+      # frameworks, in about twenty seconds, on a runner that costs a tenth as much.
+      #
+      # It was written when the macOS job could not start at all, and it earned its place
+      # then — it is what caught five declarations deleted from a widget file while every
+      # call site stayed. It keeps its place now for a duller reason: a missing name fails
+      # here before a macOS runner is spent on it.
+      - name: The app and widget type-check against framework shims
+        run: ./ios/Tools/typecheck-app.sh
+      - name: Build
+        working-directory: ios/UsageLimitsKit
+        run: swift build -v
+      - name: Test
+        working-directory: ios/UsageLimitsKit
+        run: swift test --parallel
+
+  kit-macos:
+    name: UsageLimitsKit (macOS)
+    runs-on: macos-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        working-directory: ios/UsageLimitsKit
+        run: swift test --parallel
+
+  app-ios:
+    name: iOS app (real SDK)
+    runs-on: macos-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 45
+    # The project is generated from project.yml rather than committed: a .pbxproj conflicts on
+    # every branch and nobody can review a diff of one. This job is the only place the SwiftUI
+    # and WidgetKit code is compiled at all, since the environment it was written in has no
+    # Apple SDK — so a failure here is the real signal, not a formality.
+    #
+    # It deliberately carries no `if:` guard. It had one — `hashFiles(...) != ''`, meaning "only
+    # if the spec is there" — and `hashFiles` is not available in a JOB-level condition: it reads
+    # the workspace, which does not exist before a job checks anything out. GitHub rejected the
+    # whole workflow at startup, so all three jobs never ran and every push for a day reported a
+    # failure with no logs and no job list to explain it. The spec is committed; the guard was
+    # protecting against nothing.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: xcodebuild -version && xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the project
+        working-directory: ios/UsageLimits
+        run: xcodegen generate
+      # A GENERIC destination for the build, not a named device. `name=iPhone 16` failed on the
+      # runner for a reason that had nothing to do with the code: Xcode 26 ships simulators for
+      # the iPhone 17 family and the 16 is simply not among them, so xcodebuild exited before
+      # compiling a single file. Any pinned model rots the same way at the next Xcode bump.
+      - name: Build for simulator
+        working-directory: ios/UsageLimits
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -scheme UsageLimits \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Compiling the widget proves nothing about shipping it. The extension is a separate
+      # target, and building both in the scheme leaves the .appex NEXT TO the app rather than
+      # inside it — the installed bundle then has no widget at all, the tile never appears in
+      # the system picker, and every other check in this workflow still passes. That is the
+      # whole feature missing from the artefact with nothing to show for it, so the artefact
+      # is what gets inspected here.
+      - name: The widget is embedded in the app bundle
+        working-directory: ios/UsageLimits
+        run: |
+          set -euo pipefail
+          # Resolved from the build settings and selected BY TARGET. `-showBuildSettings`
+          # emits a section for EVERY target in the scheme, so the previous
+          # `awk ... END{print}` kept whichever came last — the widget — and this step
+          # went looking for `UsageLimitsWidget.appex/PlugIns/`. It reported a missing
+          # widget on a build that had embedded the widget perfectly well.
+          settings=$(xcodebuild -showBuildSettings -json \
+            -scheme UsageLimits \
+            -destination 'generic/platform=iOS Simulator' 2>/dev/null | sed -n '/^\[/,$p')
+          app=$(printf '%s' "$settings" | jq -r \
+            'map(select(.target == "UsageLimits")) | last | .buildSettings
+             | "\(.BUILT_PRODUCTS_DIR)/\(.FULL_PRODUCT_NAME)"')
+          products=$(dirname "$app")
+          echo "app bundle: $app"
+          # The guard that would have made that failure explain itself. A lookup that
+          # selects the wrong target, or no target at all, now says so instead of
+          # blaming the widget.
+          case "$app" in
+            *.app) ;;
+            *) echo "::error::resolved '$app', which is not an app bundle - the build-settings lookup picked the wrong target" >&2
+               exit 1 ;;
+          esac
+          appex="$app/PlugIns/UsageLimitsWidget.appex"
+          if [ ! -d "$appex" ]; then
+            echo "::error::UsageLimitsWidget.appex is not embedded in the app bundle" >&2
+            # Both halves of the picture: what is in the app, and whether the .appex is
+            # sitting BESIDE it instead - which is exactly the mistake being checked for.
+            echo "-- contents of the app bundle:" >&2; ls -1 "$app" >&2 || true
+            echo "-- .appex in the products dir:" >&2; ls -1d "$products"/*.appex >&2 || true
+            exit 1
+          fi
+          point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex/Info.plist")
+          echo "extension point: $point"
+          [ "$point" = "com.apple.widgetkit-extension" ] || {
+            echo "::error::wrong NSExtensionPointIdentifier: $point" >&2; exit 1; }
+
+      # The device is DISCOVERED, for the same reason the build destination is generic: any
+      # hardcoded model is a future failure that has nothing to do with the code. This picks
+      # whatever iPhone the installed Xcode actually has, and fails loudly if there is none
+      # rather than silently skipping the tests below.
+      - name: Pick and boot a simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))] | last | .udid')
+          if [ -z "$udid" ] || [ "$udid" = "null" ]; then
+            echo "no available iPhone simulator on this runner" >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+
+      # The only step that RUNS the app. Everything above proves the types line up; this proves
+      # the binary launches, the tab bar appears, and each screen opens on a fresh install with
+      # nothing signed in — the failures a user meets before any of the others.
+      - name: Run the app on the simulator
+        working-directory: ios/UsageLimits
+        run: |
+          set -o pipefail
+          # These flags are insurance, not a diagnosis. They were added after this step was
+          # cancelled twice while I believed it had hung; the timestamps say it had run for
+          # four and a half minutes, which for a first build of the test target is ordinary.
+          # They stay because each one is worth having on its own terms:
+          #
+          # -test-timeouts-enabled with an allowance: a test that hangs — waiting on a system
+          #   alert nobody will dismiss, or on an app that never becomes responsive — now FAILS,
+          #   and a failure names the test. Without it XCTest waits indefinitely and the only
+          #   signal is a job that never ends.
+          # -parallel-testing-enabled NO: one simulator, one runner. Cloned simulators are how a
+          #   single booted device turns into several that each need booting.
+          # -resultBundlePath: a fixed path in the workspace. The bundle was being globbed out of
+          #   DerivedData, which is why the upload reported "no files found" on the run that
+          #   failed before any test executed.
+          xcodebuild test \
+            -scheme UsageLimits \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -resultBundlePath "$GITHUB_WORKSPACE/ios-tests.xcresult" \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 180 \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Kept on failure only, because a UI test that fails is unreadable from console output
+      # alone: the bundle carries the screenshot and the view hierarchy at the moment it broke.
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-test-results
+          path: ios-tests.xcresult
+          if-no-files-found: ignore

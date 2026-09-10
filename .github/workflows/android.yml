@@ -1,0 +1,95 @@
+name: Android
+
+# The Android app had no CI at all, which on this project is the wrong way round: it is the
+# primary deliverable, its parsers are where every real defect has been found, and it is the
+# half that can actually be built on a free Linux runner. The iOS workflow existed first only
+# because the shared Swift package happens to compile on Linux too.
+#
+# Two jobs rather than one, because they answer different questions. `test` says the logic is
+# right and is the fast signal on every push; `assemble` says the app still packages, which
+# catches the manifest, resource and Proguard-shaped faults a unit test never sees.
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # 17 because the module compiles against it explicitly (sourceCompatibility,
+      # targetCompatibility and the Kotlin jvmTarget all say 17). A newer default JDK on the
+      # runner would have Gradle and AGP disagree about the target rather than fail cleanly.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      # Uploaded on failure only, and always: a red unit test is unreadable from the console
+      # output alone, and the HTML report is the thing that says which assertion and with what
+      # values.
+      - name: Upload the test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+
+  assemble:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble
+        run: ./gradlew --no-daemon assembleDebug
+
+      # The point of the job: something a maintainer can install on a phone and look at, from a
+      # build nobody ran by hand. Debug-signed, so it is for testing rather than distribution.
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

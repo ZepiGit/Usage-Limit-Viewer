@@ -35,9 +35,12 @@ The dependency rule is that arrows point *down* this list, and it holds where it
   testable in a plain JVM test with no Robolectric, and it is worth defending.
 - `providers/` depends on `core/` and on nothing above it. A provider cannot reach a screen,
   a widget, or the database.
-- `widget/` imports only `core.model`, `core.time.Countdown`, `core.database.AccountUsage`
-  and `core.sync.SyncWorker`. It has no import of `core.auth` and no import of `providers` —
-  the point of §"Two stores" below, and a property you can re-verify with one grep.
+- `widget/` has no import of `core.auth` and no import of `providers` — the point of
+  §"Two stores" below, and a property you can re-verify with one grep. What it does import is
+  `core.model`, `core.time.Countdown`, `core.database` (`AccountUsage`, `WidgetConfigEntity`),
+  `core.sync.SyncWorker` and `ui/`, plus `MainActivity` for the tap target and
+  `providerSymbol`/`providerTint` from `feature/overview` so a tile and a card cannot disagree
+  about a provider's glyph or colour — a third upward edge, and the least defensible of them.
 
 Two edges deliberately point back up, and both are at the composition seam rather than inside
 a layer:
@@ -133,10 +136,12 @@ concept a provider does not have.
 above 50% healthy, 20–50% medium, above zero but at or below 20% low, zero exhausted, plus
 `STALE` and `ERROR`. The enum is ordered best-to-worst so "the worst window in this account"
 is `maxOf`, and both the app and the widgets read the same enum — which is why a card and a
-widget tile can never disagree about whether something is low. One honest gap:
-`Severity.STALE_AFTER_MS` (one hour) is declared but not yet applied anywhere. Old data is
-currently shown with its true age via `Countdown.freshnessLabel` rather than being downgraded
-to `STALE`, and `STALE` appears only as the fallback for an account that has never synced.
+widget tile can never disagree about whether something is low. `Severity.STALE_AFTER_MS`
+(one hour) is applied by `UsageSnapshot.severityAt(nowMs)`, which downgrades a snapshot to
+`STALE` once it is that old; `ERROR` still wins over age, because a failed fetch is the more
+specific thing to say. Every screen and both widgets call `severityAt` rather than the
+age-blind `severity`, and `Countdown.freshnessLabel` shows the true age beside it. `STALE` is
+also the fallback for an account that has never synced.
 
 ## Two stores, and why widgets can only reach one
 
@@ -180,7 +185,7 @@ a restore anyway, and the usage cache is re-derived on the next sync.
    |   - failure keeps previous numbers             |      +--------------------------+
    +----------------------+------------------------+
                           |  UsageSnapshot            SyncEngine is the ONLY
-                          v                           caller of core/auth
+                          v                           reader of a credential
    +-----------------------------------------------+
    |  core/database/UsageRepository  (Room)         |  holds no tokens, only a
    |  accounts | usage_snapshots | widget_configs   |  credential *reference*
@@ -197,6 +202,20 @@ a restore anyway, and the usage cache is re-derived on the next sync.
    core/sync/SyncWorker  (WorkManager) -+  a normal sync pass
 ```
 
+**Who touches `core/auth`, and why it is three callers rather than one.**
+`SyncEngine.validCredentials` is the only code that *loads* a credential. Every request-time
+use of a token goes through it — including the reset-credit spend, where
+`UsageViewModel.consumeResetCredit` asks the engine for credentials rather than the store, and
+so inherits the per-reference refresh mutex along with them.
+
+The other two callers are account lifecycle, not request time, and they only write.
+`AddAccountViewModel` calls `credentialStore.save` once, after a login has produced an account
+row; `UsageViewModel.removeAccount` calls `credentialStore.delete` once, before the row it
+belongs to goes. Those two cannot live in the engine: a login and a logout are the moments a
+credential starts and stops existing, which is a lifecycle event rather than a sync, and the
+ordering against the account row is the whole correctness argument. `docs/security.md` sets
+out both orderings and why they are deliberately opposite.
+
 `SyncEngine` is reached two ways, and the distinction is worth knowing.
 
 `SyncWorker` (WorkManager) runs the periodic pass at the user's interval, floored at 15
@@ -205,17 +224,17 @@ widget's refresh button. That work is unique with `ExistingWorkPolicy.KEEP`, so 
 triggers in a row collapse into one pass, and every request carries a
 `NetworkType.CONNECTED` constraint.
 
-The foreground actions — pull-to-refresh, a single account's refresh button, the sync that
+The foreground actions — the refresh button, a single account's refresh button, the sync that
 follows a login, and the re-sync after a reset credit is spent — call `SyncEngine` directly
 from the ViewModel's scope instead. That is right for a user-initiated action, which should
 run now and report its own outcome rather than being queued behind a constraint, and these
 calls still inherit isolation and the refresh mutex because they go through the same engine.
-Two consequences follow, and neither is currently handled: a foreground refresh does not wait
-for connectivity (it fails fast and shows the error, which is arguably what the user wants),
-and — less defensibly — it does **not** refresh the widgets, because `WidgetUpdater.refreshAll`
-is called only from `SyncWorker.doWork`. Pull-to-refresh in the app therefore leaves the home
-screen showing the older numbers until the next worker pass. Calling `refreshAll` after a
-foreground sync, or routing these through the worker, would close that.
+One consequence is deliberate and one was a defect. The deliberate one: a foreground refresh
+does not wait for connectivity — it fails fast and shows the error, which is what someone who
+just tapped refresh wants. The defect: `WidgetUpdater.refreshAll` was originally reachable only
+from `SyncWorker.doWork`, so the in-app refresh button left the home screen on older numbers
+until the next worker pass. Every foreground path — the refresh button, a per-account refresh,
+a completed login, a spent reset credit, a removed account — now calls `refreshAll` itself.
 
 **Per-account isolation.** `syncAll()` launches one coroutine per account and awaits them all;
 `syncAccount()` catches `ProviderException` *and* every other exception, records the failure
@@ -229,7 +248,7 @@ request rate.
 **The refresh mutex.** Token refresh is serialised per `credentialReference` through a map of
 mutexes, and — importantly — the expiry is re-checked *inside* the lock. The race this
 prevents is specific and nasty. Providers rotate refresh tokens: presenting one invalidates it
-and returns a new one. Suppose the periodic pass and a pull-to-refresh both notice the access
+and returns a new one. Suppose the periodic pass and a the refresh button both notice the access
 token is near expiry at the same moment. Both call `refresh()` with refresh token `A`. One of
 them wins, gets `B`, and stores it. The other's request either fails, or succeeds and stores a
 result derived from an already-spent token; either way the last writer can leave the store

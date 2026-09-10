@@ -38,10 +38,13 @@ private val INTERVAL_CHOICES = listOf(15, 30, 60, 180)
 fun SettingsScreen(
     state: UsageUiState,
     onSyncIntervalChange: (Int) -> Unit,
-    onNotifyLowUsage: (Boolean) -> Unit,
+    onNotifyBelow20: (Boolean) -> Unit,
+    onNotifyBelow10: (Boolean) -> Unit,
     onNotifyExhausted: (Boolean) -> Unit,
     onNotifyResetCredit: (Boolean) -> Unit,
     onNotifyAuthExpired: (Boolean) -> Unit,
+    onNotifyResetApproaching: (Boolean) -> Unit,
+    onNotifyCreditExpiring: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
@@ -92,10 +95,16 @@ fun SettingsScreen(
         item {
             UsageCard {
                 ToggleRow(
-                    title = "Low usage",
-                    subtitle = "When a limit drops below ${settings.lowUsageThreshold}% remaining",
-                    checked = settings.notifyOnLowUsage,
-                    onChange = onNotifyLowUsage,
+                    title = "Below 20% left",
+                    subtitle = "Once, the first time a limit drops under a fifth remaining",
+                    checked = settings.notifyBelow20Percent,
+                    onChange = onNotifyBelow20,
+                )
+                ToggleRow(
+                    title = "Below 10% left",
+                    subtitle = "Once more when it gets tight, even after the 20% warning",
+                    checked = settings.notifyBelow10Percent,
+                    onChange = onNotifyBelow10,
                 )
                 ToggleRow(
                     title = "Limit exhausted",
@@ -108,6 +117,19 @@ fun SettingsScreen(
                     subtitle = "When Codex reports a usable rate-limit reset credit",
                     checked = settings.notifyOnResetCreditAvailable,
                     onChange = onNotifyResetCredit,
+                )
+                ToggleRow(
+                    title = "Reset approaching",
+                    subtitle = "About ${settings.resetApproachingMinutes} minutes before a " +
+                        "window rolls over",
+                    checked = settings.notifyOnResetApproaching,
+                    onChange = onNotifyResetApproaching,
+                )
+                ToggleRow(
+                    title = "Reset credit expiring",
+                    subtitle = "Before an unused Codex reset credit lapses",
+                    checked = settings.notifyOnResetCreditExpiring,
+                    onChange = onNotifyCreditExpiring,
                 )
                 ToggleRow(
                     title = "Sign-in expired",

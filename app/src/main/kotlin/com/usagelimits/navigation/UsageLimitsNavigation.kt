@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -37,6 +38,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.delay
 import com.usagelimits.core.di.AppContainer
 import com.usagelimits.feature.UsageViewModel
 import com.usagelimits.feature.accounts.AccountDetailScreen
@@ -50,6 +52,14 @@ import com.usagelimits.feature.settings.SettingsScreen
 import com.usagelimits.ui.ConstrainedContent
 import com.usagelimits.ui.NavigationLayout
 import com.usagelimits.ui.theme.UsageColors
+
+/**
+ * How often relative times refresh.
+ *
+ * Countdowns are rendered at minute resolution, so a shorter tick would recompose without
+ * changing a single character; a longer one would let "1m" sit on screen after it became "now".
+ */
+private const val TICK_INTERVAL_MS = 30_000L
 
 private sealed class Destination(val route: String) {
     data object Overview : Destination("overview")
@@ -170,7 +180,15 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
             }
         },
     ) { padding ->
-        val nowMs = System.currentTimeMillis()
+        // A plain System.currentTimeMillis() read is not a Compose state read, so with no
+        // data change every countdown on screen froze at whatever the tab was composed with.
+        // For an app made of countdowns that is visible within a minute.
+        val nowMs by produceState(initialValue = System.currentTimeMillis()) {
+            while (true) {
+                value = System.currentTimeMillis()
+                delay(TICK_INTERVAL_MS)
+            }
+        }
 
         ConstrainedContent(
             modifier = Modifier
@@ -206,10 +224,13 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                     SettingsScreen(
                         state = state,
                         onSyncIntervalChange = viewModel::setSyncInterval,
-                        onNotifyLowUsage = viewModel::setNotifyLowUsage,
+                        onNotifyBelow20 = viewModel::setNotifyBelow20,
+                        onNotifyBelow10 = viewModel::setNotifyBelow10,
                         onNotifyExhausted = viewModel::setNotifyExhausted,
                         onNotifyResetCredit = viewModel::setNotifyResetCredit,
                         onNotifyAuthExpired = viewModel::setNotifyAuthExpired,
+                        onNotifyResetApproaching = viewModel::setNotifyResetApproaching,
+                        onNotifyCreditExpiring = viewModel::setNotifyCreditExpiring,
                     )
                 }
 
@@ -244,6 +265,7 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                     AccountDetailScreen(
                         usage = usage,
                         nowMs = nowMs,
+                        staleAfterMs = state.staleAfterMs,
                         resetInFlight = resetInFlight == accountId,
                         supportsResetCredits = supportsCredits,
                         onRefresh = { accountId?.let(viewModel::refreshAccount) },

@@ -43,14 +43,21 @@ class ClaudeProvider(
     // exchange happens in a second call that still needs the verifier and the state. They are
     // therefore held on the instance across the browser round-trip. They stay in memory, are
     // never persisted or logged, and are cleared the moment the redirect comes back.
+    private var server: LoopbackServer? = null
     private var pendingCodes: PkceCodes? = null
     private var pendingState: String? = null
 
     override suspend fun beginLogin(): LoginChallenge {
+        // Bind the port BEFORE the authorization URL is handed back, so a conflict is
+        // reported instead of the browser being sent to mint a real authorization code
+        // that then has nowhere to land — or worse, lands on whatever squatted the port.
+        val boundServer = LoopbackServer(Claude.REDIRECT_PORT).also { it.start() }
+
         val codes = Pkce.generate()
         val state = Pkce.generateState()
         pendingCodes = codes
         pendingState = state
+        server = boundServer
 
         val params = linkedMapOf(
             // Selects the code-returning variant of the authorize endpoint. Without it the
@@ -88,14 +95,15 @@ class ClaudeProvider(
             throw ProviderException.Unexpected("Login was not started on this provider instance")
         }
 
-        val server = LoopbackServer(Claude.REDIRECT_PORT)
+        val listener = server
+            ?: throw ProviderException.Unexpected("login was not started")
         val response = try {
-            server.start()
-            server.awaitRedirect(REDIRECT_TIMEOUT_MS)
+            listener.awaitRedirect(REDIRECT_TIMEOUT_MS)
         } finally {
             // One redirect, one attempt: the port is released and the verifier discarded even
             // when the browser never comes back.
-            server.close()
+            listener.close()
+            server = null
             pendingCodes = null
             pendingState = null
         }
@@ -173,6 +181,10 @@ class ClaudeProvider(
                     },
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         val refreshed = toCredentials(JsonSupport.parseObject(response.body))

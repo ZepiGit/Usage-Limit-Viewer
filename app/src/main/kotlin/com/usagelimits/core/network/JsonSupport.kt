@@ -42,16 +42,24 @@ object JsonSupport {
     fun obj(source: JsonObject?, vararg names: String): JsonObject? =
         field(source, *names)?.let { runCatching { it.jsonObject }.getOrNull() }
 
+    // Trimmed, as the Swift twin's is. Untrimmed, a `kind` of " session" failed every
+    // comparison in the Claude parser — wrong id, wrong category, no duration — and the two
+    // platforms produced different windows for one payload.
     fun string(source: JsonObject?, vararg names: String): String? =
         field(source, *names)
             ?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
-            ?.takeIf { it.isNotBlank() && it != "null" }
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != "null" }
 
     /** Accepts a JSON number or a numeric string, since providers mix the two. */
     fun double(source: JsonObject?, vararg names: String): Double? {
         val element = field(source, *names) ?: return null
         val primitive = runCatching { element.jsonPrimitive }.getOrNull() ?: return null
-        return primitive.doubleOrNull ?: primitive.content.trim().toDoubleOrNull()
+        // Finite only. Kotlin's toDoubleOrNull accepts "Infinity" and "NaN", and an infinite
+        // used-percent became an EXHAUSTED window — an exhaustion alert from garbage. The Swift
+        // twin refuses non-finite values; now both do.
+        return (primitive.doubleOrNull ?: primitive.content.trim().toDoubleOrNull())
+            ?.takeIf { it.isFinite() }
     }
 
     fun long(source: JsonObject?, vararg names: String): Long? {

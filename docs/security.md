@@ -168,15 +168,23 @@ real login page from a fake one.
 ## Transport
 
 `HttpClient` is the only outbound HTTP path in the app and it refuses to send a plaintext
-request. The exception, and there is exactly one, is a loopback URL — `http://localhost…` or
-`http://127.0.0.1…` — which is the OAuth redirect that arrives on the app's own listening
-socket. That connection never leaves the device and cannot be given a TLS certificate anyone
+request. The exception, and there is exactly one, is a loopback host — the parsed host must be
+exactly `localhost`, `127.0.0.1` or `::1`, which is the OAuth redirect that arrives on the
+app's own listening socket. This started as a `startsWith("http://localhost")` prefix test,
+which would also have accepted `http://localhost.attacker.example/` — an ordinary remote host.
+Comparing the parsed host is the difference between a rule and the appearance of one. That connection never leaves the device and cannot be given a TLS certificate anyone
 would trust, which is why RFC 8252 §7.3 endorses it. Everything else must be `https://` or the
 request throws before a byte is sent.
 
 The `LoopbackServer` binds explicitly to `InetAddress.getByName("127.0.0.1")` with a backlog of
 one, so nothing on the network can reach it, serves exactly one request, and is closed in a
-`finally` block. It parses only the request line and answers with a small static page.
+`finally` block. It parses only the request line.
+
+The page it answers with is **not** static, and an earlier version of this document called it
+that. It interpolates the provider's `error_description`, which is attacker-influenced: any
+local app can open `http://127.0.0.1:54545/?error=<img src=x onerror=…>` while the listener is
+up and get script execution at that origin. Those values are now HTML-escaped. Response
+splitting was never possible, since `Content-Length` is computed from the rendered body.
 
 xAI is the one provider whose endpoints are discovered rather than hardcoded, via its OIDC
 discovery document. Because that document arrives over the network, both endpoints it names
@@ -186,9 +194,28 @@ is what stops `notx.ai` and `x.ai.example.com` from passing. Without this check,
 to influence that document — a compromised CDN, a captive portal, a poisoned cache — could
 name its own `token_endpoint` and the app would post a refresh token straight to it.
 
-No certificate pinning is implemented. The platform trust store is used as-is. Pinning four
-providers' certificate chains would create an outage every time one of them rotates, and the
-value against a device-local attacker who can already install a CA is limited.
+No certificate pinning is implemented; the platform trust store is used as-is. An earlier
+version of this document justified that by saying pinning buys little against an attacker who
+can install a CA. That reasoning was wrong, because the threat it names does not reach this
+app. There is no `network_security_config`, and `targetSdk` is 35, so the default policy for
+API 24 and above applies: only the **system** CA store is trusted. A CA the user adds — or is
+socially engineered into adding — is already not trusted for these connections, pinned or not.
+
+The case pinning would genuinely address is a CA in the *system* store: an MDM-managed device
+whose administrator installed one, or a rooted device where that store can be written. That is
+precisely the "rooted device, or a compromised OS" row of the threat model above, which this
+app explicitly does not take on. Someone who can add a system CA can equally ask the Keystore
+to decrypt on the app's behalf, so a pin is not what would be standing between them and the
+tokens.
+
+What is left is cost, and it is real. The four providers are fourteen distinct hosts between
+them in `ProviderEndpoints` — two for Codex, three for Claude, six for Antigravity once the
+`cloudcode-pa` fallbacks are counted, three for xAI — and most of those are undocumented
+internal APIs whose chains rotate on schedules nobody publishes and whose operators owe this
+app no notice. There is no channel to ship a new pin faster than a store release, so a stale
+pin is a total, self-inflicted outage for that provider, indistinguishable to the user from
+the provider being down. Not pinning fourteen undocumented, independently-rotating endpoints
+with no rotation channel is the right call.
 
 ## Concurrency and credential lifecycle
 
@@ -288,15 +315,27 @@ Both providers pin their redirect URIs in client registration, so the app cannot
 ephemeral port; it must bind exactly what the provider will redirect to.
 
 Two consequences. First, availability: if another process holds the port, login fails.
-`LoopbackServer.start()` binds up front, before the browser is launched, so the user gets a
-clear "another app may be using this port" message instead of a browser tab that hangs.
+`LoopbackServer.start()` is called from `beginLogin`, so the port is bound *before* the
+authorization URL is handed back and the browser is launched. That ordering matters and was
+originally wrong: the browser was opened first and the socket bound afterwards, so the flow
+could mint a real authorization code and only then discover it had nowhere to land. The
+user-facing message is still weaker than this section once claimed — `ProviderException.Unexpected`
+maps through `userMessage()` to a fixed string, so the specific port text does not reach the
+snackbar. Binding early is the part that actually protects the flow.
 Second, and more interesting: while the listener is open, *any* local process could connect to
 it and deliver a fabricated `code`/`state`. The state check is what defeats that — an attacker
 would have to guess the 32-byte random state to have their code accepted — and the window is
 narrow: the socket accepts exactly one request, has a backlog of one, and is closed in a
-`finally` block. A hostile local app could also squat the port before the user logs in and
-capture the real code; but PKCE means the captured code is not redeemable without the verifier
-that never left this process.
+`finally` block.
+
+That single-accept behaviour is not purely a mitigation, and it is worth stating plainly: a
+local app that connect-polls the port can win the one `accept()` the server performs, after
+which Claude and Antigravity login can never complete while that app is installed. The failure
+is denial of login, not compromise — and the error the user sees blames the wrong thing.
+
+A hostile local app could also squat the port before the user logs in and capture the real
+code; PKCE means the captured code is not redeemable without the verifier that never left this
+process.
 
 Rejected alternatives: an ephemeral port (the provider would redirect to the registered port
 regardless, so nothing would arrive); a custom URI scheme or Android App Link (would have to be

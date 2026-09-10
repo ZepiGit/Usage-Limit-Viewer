@@ -13,31 +13,107 @@ import androidx.core.content.ContextCompat
 import com.usagelimits.MainActivity
 import com.usagelimits.R
 import com.usagelimits.core.database.AccountUsage
-import com.usagelimits.core.model.Severity
-import com.usagelimits.core.model.SnapshotStatus
-import com.usagelimits.core.settings.AppSettings
+import com.usagelimits.core.database.NotificationDao
+import com.usagelimits.core.database.NotificationEventEntity
+import com.usagelimits.core.database.NotificationStateEntity
+import com.usagelimits.core.notifications.NotificationEvaluator
 import com.usagelimits.core.settings.SettingsStore
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /**
  * Turns a completed sync into at most one notification.
  *
- * The rule that keeps this from becoming spam: every finding across every account is folded
- * into a single grouped notification posted to a stable id, so a later sync replaces the
- * previous one instead of stacking. Nothing is posted when there is nothing to say.
+ * Two rules keep this from becoming spam. Every finding across every account is folded into a
+ * single grouped notification posted to a stable id, so a later sync replaces the previous one
+ * instead of stacking. And edge-triggered alerts — crossing a threshold, a reset drawing near,
+ * a credit about to lapse — are claimed in the database before they are posted, so a limit the
+ * user has already been told about stays quiet on the next sync.
+ *
+ * Claiming before posting is deliberate. A database write cannot commit atomically with
+ * `NotificationManager.notify`, so one of two failures has to be chosen: an alert lost to a
+ * crash in the gap, or an alert repeated every fifteen minutes. The first is recoverable; the
+ * second is what makes people switch notifications off.
  */
 class NotificationPublisher(
     private val context: Context,
     private val settingsStore: SettingsStore,
+    private val notificationDao: NotificationDao,
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
 
     suspend fun publishFor(accounts: List<AccountUsage>) {
-        if (!hasPermission()) return
         val settings = settingsStore.settings.first()
+        val nowMs = now()
 
-        val findings = accounts.flatMap { findingsFor(it, settings) }
+        val outcome = NotificationEvaluator.evaluate(
+            accounts = accounts,
+            settings = settings,
+            states = notificationDao.allStates().associate {
+                it.accountId to NotificationEvaluator.AccountState(
+                    accountId = it.accountId,
+                    lowQuotaEpisode = it.lowQuotaEpisode,
+                    lowQuotaActive = it.lowQuotaActive,
+                    lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                    windows = decodeWindows(it.windowsJson),
+                )
+            },
+            nowMs = nowMs,
+        )
+
+        // Claim first, and advance state, whether or not anything can be posted. Skipping this
+        // when permission is missing would replay every threshold the account ever crossed the
+        // moment permission was granted.
+        val claimed = outcome.events.filter { event ->
+            notificationDao.claim(
+                NotificationEventEntity(
+                    eventKey = event.key,
+                    accountId = event.accountId,
+                    consumedAt = nowMs,
+                ),
+            ) != -1L
+        }
+
+        notificationDao.upsertStates(
+            outcome.states.map {
+                NotificationStateEntity(
+                    accountId = it.accountId,
+                    lowQuotaEpisode = it.lowQuotaEpisode,
+                    lowQuotaActive = it.lowQuotaActive,
+                    lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                    windowsJson = json.encodeToString(WINDOWS_SERIALIZER, it.windows),
+                )
+            },
+        )
+        notificationDao.pruneEventsBefore(nowMs - EVENT_RETENTION_MS)
+
+        if (!hasPermission()) return
+
+        // Newly claimed events lead: the six-line cap must not push a fresh escalation below a
+        // standing fact the user has already seen.
+        val alerts = claimed.map { it.line }.filter { it.isNotBlank() }
+        val findings = alerts + outcome.standingFindings
+
+        // A standing fact — "1 reset credit available" — is re-derived every sync. Posting it
+        // again every thirty minutes meant a notification the user had DISMISSED came back,
+        // silently, for ever, and the only way to be rid of it was the toggle that turns the
+        // feature off — which is the outcome the feature exists to avoid. It is re-posted only
+        // when it changes; the fingerprint of what was last posted is what says whether it did.
+        val standingPrefs = context.getSharedPreferences(STANDING_PREFS, Context.MODE_PRIVATE)
+        val lastStanding = standingPrefs.getString(STANDING_FINGERPRINT, null)
+        val standingNow = fingerprint(outcome.standingFindings)
+        if (!shouldPost(alerts, outcome.standingFindings, lastStanding)) return
+        standingPrefs.edit().putString(STANDING_FINGERPRINT, standingNow).apply()
+
         if (findings.isEmpty()) {
-            NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+            // Nothing new to say, and NOTHING is taken down. This used to cancel the
+            // notification, which deleted an alert the user had not yet seen: an
+            // edge-triggered "Weekly exhausted" was posted at one sync and cancelled by the
+            // next, thirty minutes later, phone face-down in a pocket — and because its key
+            // was already claimed it could never be posted again. The alert lives until the
+            // user dismisses it or a later refresh has something to replace it with.
             return
         }
 
@@ -59,6 +135,9 @@ class NotificationPublisher(
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
         )
 
+        // A refresh that only restates standing facts replaces the notification silently.
+        // setOnlyAlertOnce cannot do this job: it would also mute a genuine escalation from
+        // 18 % to 8 % while the earlier notification is still on screen.
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
@@ -66,42 +145,12 @@ class NotificationPublisher(
             .setContentIntent(intent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setSilent(alerts.isEmpty())
             .build()
 
         runCatching {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
         }
-    }
-
-    private fun findingsFor(usage: AccountUsage, settings: AppSettings): List<String> {
-        val snapshot = usage.snapshot ?: return emptyList()
-        val name = usage.account.label
-        val findings = mutableListOf<String>()
-
-        if (settings.notifyOnAuthExpired &&
-            snapshot.status == SnapshotStatus.FAILED &&
-            snapshot.errorMessage?.contains("expired", ignoreCase = true) == true
-        ) {
-            return listOf("$name needs to be reconnected")
-        }
-
-        val worst = snapshot.windows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
-        val remaining = worst?.remainingPercent
-
-        when {
-            settings.notifyOnExhausted && worst != null && worst.severity == Severity.EXHAUSTED ->
-                findings += "$name · ${worst.label} exhausted"
-
-            settings.notifyOnLowUsage && remaining != null &&
-                remaining <= settings.lowUsageThreshold ->
-                findings += "$name · ${worst.label} at ${remaining.toInt()}% left"
-        }
-
-        if (settings.notifyOnResetCreditAvailable && snapshot.resetCredits.isNotEmpty()) {
-            findings += "$name · ${snapshot.resetCredits.size} reset credit available"
-        }
-
-        return findings
     }
 
     private fun ensureChannel() {
@@ -122,11 +171,42 @@ class NotificationPublisher(
             PackageManager.PERMISSION_GRANTED
     }
 
-    private companion object {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** A map that cannot be read is an empty map: every window starts its own episode afresh. */
+    private fun decodeWindows(raw: String?): Map<String, NotificationEvaluator.WindowState> =
+        raw?.let { runCatching { json.decodeFromString(WINDOWS_SERIALIZER, it) }.getOrNull() }.orEmpty()
+
+    companion object {
+        private val WINDOWS_SERIALIZER = MapSerializer(String.serializer(), NotificationEvaluator.WindowState.serializer())
+        private const val STANDING_PREFS = "usage_limits_notifications"
+        private const val STANDING_FINGERPRINT = "standing_fingerprint"
+
+        /** Order-independent identity of a set of standing lines; empty set is the empty string. */
+        fun fingerprint(standing: List<String>): String = standing.sorted().joinToString("\u0000")
+
+        /**
+         * Whether this refresh has anything to say to the shade.
+         *
+         * A new alert always posts. With no new alert, standing findings post only if they
+         * differ from what was last posted — a dismissed one must not come back unchanged —
+         * and a refresh with nothing at all says nothing, leaving whatever is in the shade.
+         */
+        fun shouldPost(alerts: List<String>, standing: List<String>, lastStandingFingerprint: String?): Boolean =
+            alerts.isNotEmpty() || (standing.isNotEmpty() && fingerprint(standing) != lastStandingFingerprint)
+
         const val CHANNEL_ID = "usage_alerts"
 
         /** Fixed, so each sync replaces the previous alert rather than adding to a pile. */
         const val NOTIFICATION_ID = 1001
         const val MAX_LINES = 6
+
+        /**
+         * How long a consumed event is remembered.
+         *
+         * Long enough that a monthly window's reset timestamp is still known when the next
+         * month's schedule is published, so the same reset cannot be announced twice.
+         */
+        const val EVENT_RETENTION_MS = 90L * 24 * 60 * 60 * 1000
     }
 }

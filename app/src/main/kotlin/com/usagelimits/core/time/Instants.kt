@@ -23,7 +23,9 @@ object Instants {
         if (raw.isEmpty()) return null
 
         raw.toLongOrNull()?.let { return fromEpochNumber(it) }
-        raw.toDoubleOrNull()?.let { return fromEpochNumber(it.toLong()) }
+        // Finite only: "Infinity".toDouble() is +Inf, whose toLong() saturates to Long.MAX and
+        // would have made a reset in the year 292 million the snapshot's "next reset".
+        raw.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { return fromEpochNumber(it.toLong()) }
 
         // Trim sub-millisecond precision, which java.time accepts but some providers overrun.
         val normalized = raw.replace(Regex("(\\.\\d{3})\\d+"), "$1")

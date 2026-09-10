@@ -126,12 +126,17 @@ class XaiProvider(
             // endpoint ride along so completeLogin stays stateless and cannot end up polling
             // an endpoint a second discovery call might have changed under it.
             userCode = listOf(userCode, deviceCode, tokenEndpoint).joinToString(CODE_SEPARATOR),
-            verificationUri = verificationUri,
+            // Both URLs are opened in the user's browser under a screen that tells them to
+            // sign in there, so they get the app's endorsement. They arrive from the same
+            // provider response as everything else and are held to the same host rule as the
+            // token endpoint — otherwise a compromised or MITM'd discovery response could
+            // point the user at a phishing page the app has just vouched for.
+            verificationUri = validateEndpoint(verificationUri, "verification_uri"),
             verificationUriComplete = JsonSupport.string(
                 payload,
                 "verification_uri_complete",
                 "verificationUriComplete",
-            ),
+            )?.let { validateEndpoint(it, "verification_uri_complete") },
             expiresAt = nowMs() + expiresIn * 1000,
             // The provider's interval is honoured but never allowed below the floor, so a
             // bad or missing value cannot turn the poll into a hot loop.
@@ -236,6 +241,10 @@ class XaiProvider(
                     "refresh_token" to refreshToken,
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         val refreshed = toCredentials(JsonSupport.parseObject(response.body), tokenEndpoint)
@@ -341,7 +350,8 @@ class XaiProvider(
      *
      * Lowercase names and a wildcard accept mirror the first-party CLI, which is what the
      * proxy answers billing JSON for. The version marker is a compatibility signal, not a
-     * disguise: the user agent still names this app.
+     * disguise, though note the UA is the Grok CLI's own string and does not name this
+     * app — unlike Codex's, which appends UsageLimits.
      */
     private fun usageHeaders(credentials: OAuthCredentials): Map<String, String> = buildMap {
         put("Authorization", "Bearer ${credentials.accessToken}")
