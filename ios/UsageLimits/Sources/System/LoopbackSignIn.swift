@@ -50,8 +50,33 @@ final class LoopbackSignIn: NSObject {
             group.addTask { try await self.interceptedCode(for: challenge) }
 
             defer { group.cancelAll(); self.session?.cancel(); self.session = nil }
-            guard let code = try await group.next() else { throw CancellationError() }
-            return code
+
+            // The first SUCCESS wins, not the first result.
+            //
+            // `group.next()` reports whichever child finished first, including one that
+            // finished by throwing — so rethrowing it made whichever path failed FASTEST
+            // load-bearing, which is precisely what racing two of them was meant to avoid.
+            // A listener that cannot bind its port (another app holds it, or a previous
+            // sign-in has not released it) would end a sign-in that the interception path
+            // could have completed without any port at all.
+            //
+            // So a failure retires one path and the other keeps going. Both are bounded:
+            // the listener has its own deadline, and the browser task gives up shortly
+            // after the sheet closes, so this cannot wait for ever.
+            var failure: (any Error)?
+            while true {
+                do {
+                    guard let code = try await group.next() else { break }
+                    return code
+                } catch is CancellationError {
+                    // Says only that a path stopped, never why. It fills an empty slot so
+                    // something is thrown at the end, but never displaces a real reason.
+                    if failure == nil { failure = CancellationError() }
+                } catch {
+                    failure = error
+                }
+            }
+            throw failure ?? CancellationError()
         }
     }
 

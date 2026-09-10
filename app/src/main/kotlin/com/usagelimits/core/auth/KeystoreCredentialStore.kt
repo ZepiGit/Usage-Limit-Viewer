@@ -26,7 +26,8 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * `EncryptedSharedPreferences` would cover the same ground, but it is deprecated in
  * androidx.security 1.1.x and would still need this class's per-record shape, so the two
- * primitives it wraps (Keystore key + AEAD) are used directly instead.
+ * primitives it wraps (Keystore key + AEAD) are used directly instead — and that library is
+ * therefore not a dependency of this module at all.
  */
 class KeystoreCredentialStore(
     context: Context,
