@@ -25,6 +25,9 @@ public actor UsageLimitsContainer {
     private let containerDirectory: URL
     private let now: @Sendable () -> Date
 
+    /// The one-time install check, kept so concurrent callers join it rather than repeat it.
+    private var preparation: Task<Void, any Error>?
+
     /// - Parameters:
     ///   - directory: the shared container. Both the account cache and the widget snapshot are
     ///     written here, so the widget process reads what the app last knew.
@@ -339,6 +342,61 @@ public actor UsageLimitsContainer {
     public func purgeCredentialsFromPreviousInstall() async throws {
         try await credentials.removeAll()
     }
+
+    /// Runs the install check, at most once, and waits for any run already under way.
+    ///
+    /// `purgeCredentialsFromPreviousInstall` existed for a while with no caller at all, which
+    /// meant the guarantee above was written down and not implemented: deleting the app and
+    /// reinstalling left every account connected. Everything that reads or writes an account
+    /// now waits on this, so a purge can never run underneath a login that is already storing
+    /// a credential.
+    ///
+    /// The marker cannot simply mean "purge whenever absent". Every installation that predates
+    /// it also lacks one, and treating those as fresh would sign out every existing user on the
+    /// upgrade that introduced the marker. An existing `accounts.json` is what tells the two
+    /// apart: a container carrying accounts belongs to an install that is already running, so it
+    /// adopts the marker without purging. Only a container with neither is genuinely new, and
+    /// that is exactly the reinstall case.
+    ///
+    /// The marker is written after the purge succeeds, never before, so a cleanup interrupted
+    /// half way is retried on the next launch rather than recorded as done.
+    public func prepareForUse() async throws {
+        if let preparation { return try await preparation.value }
+        let task = Task<Void, any Error> { [containerDirectory, credentials, repository] in
+            let marker = containerDirectory.appendingPathComponent(Self.installMarkerName)
+            let fileManager = FileManager.default
+
+            // `fileExists` and not a read that could throw: an unreadable marker is present,
+            // and treating a read failure as absence would purge a working install.
+            if fileManager.fileExists(atPath: marker.path) { return }
+
+            let accountsFile = containerDirectory
+                .appendingPathComponent(AccountRepository.fileName)
+            // The file first, because it answers without decoding; the loaded accounts as a
+            // fallback in case a caller pointed the repository at a different name.
+            var isExistingInstall = fileManager.fileExists(atPath: accountsFile.path)
+            if !isExistingInstall {
+                isExistingInstall = await !repository.accounts().isEmpty
+            }
+
+            if !isExistingInstall {
+                try await credentials.removeAll()
+            }
+
+            try Data().write(to: marker, options: ContainerFile.writingOptions)
+        }
+        preparation = task
+        do {
+            try await task.value
+        } catch {
+            // A failed preparation is not remembered as done: the next launch tries again.
+            preparation = nil
+            throw error
+        }
+    }
+
+    /// The empty file whose presence means "this install has already been checked".
+    static let installMarkerName = "install-marker"
 
     /// Publishes with the threshold the user's own sync interval implies.
     ///

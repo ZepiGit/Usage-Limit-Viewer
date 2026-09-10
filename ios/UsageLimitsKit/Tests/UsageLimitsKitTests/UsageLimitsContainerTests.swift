@@ -478,6 +478,70 @@ final class UsageLimitsContainerTests: XCTestCase {
         XCTAssertNil(left)
     }
 
+    // MARK: - The install check
+
+    func testAReinstallDoesNotInheritTheCredentialsOfThePreviousInstall() async throws {
+        // Keychain items outlive the app being deleted; the container does not. A user who
+        // deletes the app to revoke its access and reinstalls therefore arrives with an empty
+        // container and a keychain still holding every token. `purgeCredentialsFromPreviousInstall`
+        // was written for exactly this and then never called from anywhere, so the guarantee was
+        // documented and absent.
+        let store = InMemoryCredentialStore(
+            credentials: ["ref-a": OAuthCredentials(
+                accessToken: "left-behind", refreshToken: "left-behind-refresh")])
+        let (subject, _) = container([], credentials: store)
+
+        try await subject.prepareForUse()
+
+        let references = try await store.allReferences()
+        XCTAssertEqual(references, [], "a fresh container means a reinstall: nothing carries over")
+    }
+
+    func testAnExistingInstallKeepsItsAccountsWhenTheMarkerFirstAppears() async throws {
+        // The half that makes the purge safe to ship. Every installation that predates the
+        // marker also lacks one, so "no marker means purge" would sign out every existing user
+        // on the upgrade that introduced it. An existing accounts file is what distinguishes an
+        // install already in use from a genuinely new container.
+        let store = InMemoryCredentialStore(
+            credentials: ["ref-a": OAuthCredentials(
+                accessToken: "synthetic-access", refreshToken: "synthetic-refresh")])
+        let (subject, _) = container([], credentials: store)
+        try await subject.add(account())
+
+        // A second container over the same directory: the app relaunching after the upgrade.
+        let upgraded = UsageLimitsContainer(
+            directory: directory,
+            credentials: store,
+            transport: Transport([]),
+            now: { [now] in now })
+        try await upgraded.prepareForUse()
+
+        let references = try await store.allReferences()
+        XCTAssertEqual(references, ["ref-a"], "an install with accounts must not be purged")
+        let accounts = await upgraded.usage()
+        XCTAssertEqual(accounts.count, 1)
+    }
+
+    func testTheInstallCheckRunsOnceAndIsNotRepeatedAfterALogin() async throws {
+        // The marker is what stops the purge running a second time. Without it, the next launch
+        // would find no marker again and wipe the credentials the user has just signed in with.
+        let store = InMemoryCredentialStore(credentials: [:])
+        let (subject, _) = container([], credentials: store)
+        try await subject.prepareForUse()
+
+        try await subject.add(account())
+
+        let relaunched = UsageLimitsContainer(
+            directory: directory,
+            credentials: store,
+            transport: Transport([]),
+            now: { [now] in now })
+        try await relaunched.prepareForUse()
+
+        let accounts = await relaunched.usage()
+        XCTAssertEqual(accounts.count, 1, "the marker must survive to the next launch")
+    }
+
     /// Refuses to delete, so the ordering inside `remove` can be observed.
     private actor RefusingCredentialStore: CredentialStore {
         private struct Refused: Error {}
