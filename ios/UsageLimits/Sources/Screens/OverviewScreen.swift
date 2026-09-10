@@ -42,7 +42,7 @@ private struct SummaryCard: View {
     var body: some View {
         UsageCard {
             HStack(alignment: .firstTextBaseline) {
-                Text(SeverityPalette.label(snapshot.overallSeverity))
+                Text(healthyLabel)
                     .font(.system(size: 30, weight: .bold))
                     .foregroundStyle(SeverityPalette.text(snapshot.overallSeverity))
                 Spacer()
@@ -54,18 +54,24 @@ private struct SummaryCard: View {
             Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(UsageColors.textSecondary)
-
-            if snapshot.headlineShort != nil || snapshot.headlineLong != nil {
-                Divider().overlay(UsageColors.outline).padding(.vertical, 4)
-            }
-
-            if let short = snapshot.headlineShort {
-                WindowRow(row: short, now: now)
-            }
-            if let long = snapshot.headlineLong {
-                WindowRow(row: long, now: now)
-            }
         }
+    }
+
+    /// Healthy over total, coloured by the fleet's worst severity.
+    ///
+    /// This card used to lead with the severity WORD — "Exhausted" — printed in the colour that
+    /// already said so, and then repeat the two tightest windows underneath. Both went: the
+    /// account cards below carry every window with its own bar, so the summary was restating the
+    /// first card. What is left is the pair of numbers that cannot be read off anything else,
+    /// how many accounts are fine and when the next limit rolls over.
+    ///
+    /// Counted through `severity(at:staleAfter:)` rather than the stored value, so an account
+    /// whose numbers went stale while this screen was open stops counting as healthy.
+    private var healthyLabel: String {
+        let healthy = snapshot.accounts.filter {
+            $0.severity(at: now, staleAfter: snapshot.staleAfter) == .healthy
+        }.count
+        return "\(healthy)/\(snapshot.accountCount)"
     }
 
     private var subtitle: String {

@@ -160,16 +160,6 @@ fun SettingsScreen(
             }
         }
 
-        item { SectionHeader("Security") }
-        item {
-            UsageCard {
-                InfoRow("Credential storage", "AES-GCM key held in the Android Keystore")
-                InfoRow("Cloud backup", "Disabled — credentials never leave the device")
-                InfoRow("Widget data", "Reads the local usage cache only, never tokens")
-                InfoRow("Network", "HTTPS enforced for every provider request")
-            }
-        }
-
         item { SectionHeader("Diagnostics") }
         item {
             UsageCard {

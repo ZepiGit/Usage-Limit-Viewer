@@ -1,7 +1,6 @@
 package com.usagelimits.feature.overview
 
 import androidx.compose.foundation.background
-import com.usagelimits.core.model.percentLabel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +42,6 @@ import com.usagelimits.feature.UsageUiState
 import com.usagelimits.ui.components.IconBadge
 import com.usagelimits.ui.components.SectionHeader
 import com.usagelimits.ui.components.StatusPill
-import com.usagelimits.ui.components.UsageBar
 import com.usagelimits.ui.components.UsageCard
 import com.usagelimits.ui.components.UsageWindowRow
 import com.usagelimits.ui.theme.SeverityPalette
@@ -176,8 +174,13 @@ private fun OverviewHeader(state: UsageUiState, nowMs: Long, onRefresh: () -> Un
 }
 
 /**
- * The three numbers worth knowing before scrolling: how many accounts are fine, when the next
- * limit rolls over, and how depleted the tightest window currently is.
+ * The two numbers worth knowing before scrolling: how many accounts are fine, and when the next
+ * limit rolls over.
+ *
+ * It used to carry a third stat — the tightest window's remaining percent — and a sentence
+ * naming the overall severity. Both were dropped as noise: the per-account cards below already
+ * show every window with its own bar, so the summary was restating the first card, and the
+ * sentence restated the colour of the ring beside it.
  */
 @Composable
 private fun SummaryCard(state: UsageUiState, nowMs: Long) {
@@ -206,18 +209,11 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                         )
                     }
                     Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = headline(state, nowMs),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = UsageColors.TextPrimary,
-                        )
-                        Text(
-                            text = "Healthy accounts",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = UsageColors.TextSecondary,
-                        )
-                    }
+                    Text(
+                        text = "Healthy accounts",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = UsageColors.TextPrimary,
+                    )
                 }
             }
 
@@ -234,18 +230,6 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                     ?: critical?.let { null } ?: state.nextResetAt(nowMs))
                     ?.let { Countdown.format(it - nowMs) } ?: "—",
                 label = "Next reset",
-            )
-
-            VerticalRule()
-
-            SummaryStat(
-                modifier = Modifier.weight(0.9f),
-                symbol = "▮",
-                tint = SeverityPalette.accent(critical?.second?.severity ?: Severity.STALE),
-                container = SeverityPalette.container(critical?.second?.severity ?: Severity.STALE),
-                value = percentLabel(critical?.second?.remainingPercent),
-                label = critical?.second?.label?.let { "$it left" } ?: "No data",
-                bar = critical?.second,
             )
         }
     }
@@ -270,7 +254,6 @@ private fun SummaryStat(
     value: String,
     label: String,
     modifier: Modifier = Modifier,
-    bar: com.usagelimits.core.model.UsageWindow? = null,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -291,27 +274,7 @@ private fun SummaryStat(
                 )
             }
         }
-        if (bar != null) {
-            UsageBar(
-                remainingPercent = bar.remainingPercent,
-                severity = bar.severity,
-                modifier = Modifier.fillMaxWidth(),
-                height = 6.dp,
-            )
-        }
     }
-}
-
-private fun headline(state: UsageUiState, nowMs: Long): String = when (
-    if (state.accounts.isEmpty()) null else state.overallSeverityAt(nowMs)
-) {
-    null -> "No accounts yet"
-    Severity.HEALTHY -> "All systems good"
-    Severity.EXHAUSTED -> "A limit is exhausted"
-    Severity.ERROR -> "Needs attention"
-    // Age is its own headline: green over day-old numbers is the failure this app prevents.
-    Severity.STALE -> "Data may be out of date"
-    else -> "Running low"
 }
 
 /**
