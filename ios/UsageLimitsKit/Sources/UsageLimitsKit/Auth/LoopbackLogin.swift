@@ -220,7 +220,10 @@ public struct LoopbackLogin: Sendable {
             return ProviderProfile(
                 externalAccountID: id,
                 email: email,
-                displayName: JSONSupport.string(account, "display_name", "displayName"),
+                // `full_name` as the fallback Android has always read; without it the same
+                // profile named the account on one phone and left it blank on the other.
+                displayName: JSONSupport.string(account, "display_name", "displayName")
+                    ?? JSONSupport.string(account, "full_name", "fullName"),
                 plan: ClaudeUsageParser.parsePlan(payload))
 
         case .antigravity:

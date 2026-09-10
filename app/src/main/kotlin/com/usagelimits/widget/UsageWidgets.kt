@@ -153,7 +153,11 @@ class CompactUsageWidget : GlanceAppWidget() {
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Tile(
-                        label = "Weekly",
+                        // The row already knows what it is. Hardcoding "Weekly" here labelled a
+                        // monthly credit bucket as a week: the user paced their spending against
+                        // a reset days away that was actually a month away, while the larger
+                        // widget beside it, using the row's own label, said "Monthly".
+                        label = snapshot.headlineLong?.label ?: "Weekly",
                         value = snapshot.headlineLong?.let(::percentText) ?: "—",
                         row = snapshot.headlineLong,
                         modifier = GlanceModifier.defaultWeight(),
@@ -319,7 +323,10 @@ class DetailedUsageWidget : GlanceAppWidget() {
             Text(
                 // "As of 12:40", not "2m ago": an age composed once and left on the home screen
                 // for three hours goes on claiming the numbers are two minutes old.
-                text = Countdown.asOfLabel(snapshot.updatedAt).removePrefix("As of "),
+                // And the DATE once it is no longer today. "09:15" on a Wednesday afternoon
+                // reads as this morning; the numbers were from Monday.
+                text = Countdown.asOfLabel(snapshot.updatedAt, nowMs = System.currentTimeMillis())
+                    .removePrefix("As of "),
                 style = TextStyle(
                     color = androidx.glance.unit.ColorProvider(W.TextSecondary),
                     fontSize = 11.sp,
@@ -375,6 +382,29 @@ class DetailedUsageWidget : GlanceAppWidget() {
                 ),
                 maxLines = 1,
             )
+            // The one line that carries staleness. Row severities never do — they are computed
+            // from the percentage alone — so without this a two-day-old snapshot rendered every
+            // bar in healthy green with nothing on the tile saying the numbers were old. The
+            // compact widget already surfaces this; the larger one did not.
+            when (account.severity) {
+                Severity.STALE -> Text(
+                    text = "Stale — not refreshed recently",
+                    style = TextStyle(
+                        color = androidx.glance.unit.ColorProvider(W.textColor(Severity.STALE)),
+                        fontSize = 11.sp,
+                    ),
+                    maxLines = 1,
+                )
+                Severity.ERROR -> Text(
+                    text = "Refresh failed — showing last known numbers",
+                    style = TextStyle(
+                        color = androidx.glance.unit.ColorProvider(W.textColor(Severity.ERROR)),
+                        fontSize = 11.sp,
+                    ),
+                    maxLines = 1,
+                )
+                else -> Unit
+            }
             // Provider and plan are not unique: two accounts on the same plan render an
             // identical title, and the masked address is the only thing that tells them apart.
             account.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->

@@ -276,9 +276,11 @@ public enum ClaudeUsageParser {
             let id = key
                 .replacingOccurrences(of: "_", with: "-")
                 .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-            // Blank, not merely empty: Kotlin's `isBlank` counts a key of " " or "\t" as no
-            // key at all, and a window labelled with a tab helps nobody.
-            guard !id.isEmpty, !key.allSatisfy(\.isWhitespace) else { return nil }
+            // Blank, not merely empty — and tested on the ID, which is what Kotlin's `isBlank`
+            // tests. Testing the key instead let " -" through: the key is not all whitespace,
+            // but its id is " ", and a window whose id is a single space was a real row on iOS
+            // and no row on Android.
+            guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
             return window(
                 id: id,
@@ -315,6 +317,10 @@ public enum ClaudeUsageParser {
     /// `nimbus_quill` reads as "Nimbus Quill" — the only label an undocumented key can have.
     private static func humanize(_ key: String) -> String {
         key.split(whereSeparator: { $0 == "_" || $0 == "-" })
+            // Blank parts dropped, not just empty ones: `split` omits empty subsequences but
+            // keeps " ", so "nimbus_ _quill" read "Nimbus   Quill" here and "Nimbus Quill" on
+            // Android.
+            .filter { !$0.allSatisfy(\.isWhitespace) }
             .map { $0.prefix(1).uppercased() + $0.dropFirst() }
             .joined(separator: " ")
     }

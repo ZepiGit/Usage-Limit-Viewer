@@ -111,11 +111,22 @@ object Countdown {
         fetchedAt: Long?,
         zone: ZoneId = ZoneId.systemDefault(),
         locale: Locale = Locale.getDefault(),
+        /**
+         * When supplied, a stamp that is not from today carries its date. A time alone is read
+         * as today's — "09:15" on a Wednesday afternoon means this morning to anyone looking —
+         * and a widget left on the home screen shows exactly such a stamp for days.
+         */
+        nowMs: Long? = null,
     ): String {
         if (fetchedAt == null) return "Never updated"
-        val stamp = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
-            .withLocale(locale)
-            .format(Instant.ofEpochMilli(fetchedAt).atZone(zone))
-        return "As of $stamp"
+        val at = Instant.ofEpochMilli(fetchedAt).atZone(zone)
+        val sameDay = nowMs == null ||
+            Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate() == at.toLocalDate()
+        val style = if (sameDay) {
+            DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+        } else {
+            DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT, FormatStyle.SHORT)
+        }
+        return "As of ${style.withLocale(locale).format(at)}"
     }
 }
