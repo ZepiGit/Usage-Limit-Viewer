@@ -78,8 +78,8 @@ final class LoopbackSignIn: NSObject {
             let session = ASWebAuthenticationSession(
                 url: url, callbackURLScheme: "http"
             ) { callback, error in
-                if let error as? ASWebAuthenticationSessionError,
-                   error.code == .canceledLogin {
+                if let sessionError = error as? ASWebAuthenticationSessionError,
+                   sessionError.code == .canceledLogin {
                     // The user closed the sheet. Not a failure to report — the listener may
                     // still have the answer.
                     continuation.resume(returning: nil)
