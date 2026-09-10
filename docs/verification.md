@@ -32,6 +32,28 @@ No real defect appears in the first layer's column; every defect below passed th
 | Several notification paths stayed silent instead of firing | Adversarial audit | A limit event the user is never told about |
 | Concurrent token refreshes were not serialised, against providers that rotate the refresh token on use | Adversarial audit | Presenting a spent refresh token commonly revokes the whole grant — losing access to a paid account, with nothing locally corrupted to point at |
 | The widget re-derived the snapshot's severity on read, using rules that had drifted from the app's | Adversarial audit | The same data reads one way in the app and another on the home screen |
+| The iOS widget took any remaining percentage at or below 1 to be a fraction already | Verified audit (3/3) | 1 % left rendered as "100%" with a full bar — the worst number the app can show |
+| Every Antigravity account added on iOS failed every refresh: the login never resolved the GCP project the quota RPC is addressed by | Verified audit | A permanent error card for a provider that works on Android |
+| The low-quota episode was per account, not per window | Verified audit, then Gemini map | The five-hour window running out silenced the weekly window's 20 %, 10 % and 0 % crossings for good |
+| The publisher cancelled the notification on any refresh with nothing new to say | Verified audit | An unread "Weekly exhausted" deleted from the shade within thirty minutes, never re-posted |
+| A standing "reset credit available" finding was re-posted every sync | Verified audit | A dismissed notification that came back every thirty minutes until the feature was switched off |
+| The overview sorted by `Severity.ordinal`, and "Next reset" was a fleet-wide minimum beside one account's window | Verified audit | Stale and never-fetched cards above the exhausted one; "Next reset 12m" next to a weekly limit that returns on Tuesday |
+| The Room foreign-key guard and the write it protected were two statements | Delegated audit, then a demonstrating test | "Refresh now" then "Remove account" raised the very constraint violation the guard existed to prevent |
+| `commit()`'s result was discarded when saving a rotated refresh token | Delegated audit | A spent token on disk and the live one only in memory: the account dead on next launch, with no record of why |
+| The xAI parser read spend from `used` alone and substituted zero when absent | Verified audit, patched by GPT-6-Astra | "0 % used / 100 % remaining" in healthy green for an account 90 % spent |
+| A local process could stall the Android loopback listener for ever by connecting and sending nothing | Review of my own fix | A sign-in that can neither finish nor time out — worse than the denial of service the fix addressed |
+| The iOS sign-in race was resolved by whichever path FAILED first | Reading the code | A port already in use ended a sign-in that the other path needed no port to complete |
+
+### How the audit findings were verified
+
+Single-model audits produce claims, and several of those claims were wrong on inspection — the
+migration chain being incomplete, a stale-token overwrite the sync engine's lock already
+prevents, a "defect" that was a deliberate security trade-off. So the later audits were run as
+a workflow: one reviewer per subsystem, and every finding then handed to three independent
+skeptics, each prompted to *refute* it from the source and to default to refuted when they
+could not confirm it. A finding survives on a majority. "Verified audit (3/3)" above means all
+three failed to refute it. Findings that were fixed after a hand check against the code, when
+the skeptic quota ran out, are marked as such in the commit that fixed them.
 
 ## Layer 4 — on a device, by a person
 
