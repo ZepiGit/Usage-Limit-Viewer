@@ -164,6 +164,32 @@ private enum SnapshotCache {
         guard let containerURL else { return .empty }
         return GlanceSnapshotCodec.read(fromDirectory: containerURL)
     }
+
+    /// Why there is nothing to show — which is not always the same reason.
+    ///
+    /// The container is written with `completeFileProtectionUntilFirstUserAuthentication`,
+    /// so between a reboot and the first unlock the file is present and unreadable. That is
+    /// deliberate. The snapshot carries no tokens, but it does carry which services this
+    /// person pays for and how hard they lean on them, and dropping to `noFileProtection` to
+    /// win a tile back in that one window trades a real privacy property for a narrow
+    /// convenience. What was NOT acceptable is what the tile said meanwhile: "No accounts
+    /// yet", to someone with four connected accounts.
+    ///
+    /// `fileExists` answers even when the contents cannot be opened, so the two cases are
+    /// exactly distinguishable and each can be told the truth.
+    static func emptyReason() -> EmptyReason {
+        guard let containerURL else { return .noAccounts }
+        let file = containerURL.appendingPathComponent(GlanceSnapshotCodec.fileName)
+        return FileManager.default.fileExists(atPath: file.path) ? .locked : .noAccounts
+    }
+}
+
+/// The two ways a tile can have nothing to render.
+private enum EmptyReason {
+    /// No snapshot has ever been written: the app has not run, or has no accounts.
+    case noAccounts
+    /// A snapshot is there, and this process cannot open it until the device is unlocked.
+    case locked
 }
 
 // MARK: - Snapshot lead
@@ -299,20 +325,25 @@ private struct QuotaBar: View {
 
 /// What both tiles show when there is nothing to show.
 ///
-/// Deliberately not a blank tile. An empty snapshot has three quite different causes — no
-/// accounts connected yet, a snapshot the app has not written, and a file the widget cannot
-/// read because the device has not been unlocked since boot — and none of them means "you
-/// have quota left". Naming the one action that resolves all three is the honest rendering.
+/// Deliberately not a blank tile, and deliberately not one message for every cause. An
+/// empty snapshot means either that nothing has been written yet or that the file cannot be
+/// read until the device is unlocked, and telling the second person "No accounts yet" — with
+/// four accounts connected — reads as data loss. Neither case means "you have quota left".
 private struct WidgetEmptyStateView: View {
+
+    var reason: EmptyReason = SnapshotCache.emptyReason()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: "gauge.with.needle")
+            Image(systemName: reason == .locked ? "lock" : "gauge.with.needle")
                 .font(.title3)
                 .foregroundColor(UsageColors.textSecondary)
-            Text("No accounts yet")
+            Text(reason == .locked ? "Locked" : "No accounts yet")
                 .font(.headline)
                 .foregroundColor(UsageColors.textPrimary)
-            Text("Open UsageLimits to see how much quota is left")
+            Text(reason == .locked
+                 ? "Unlock this device to see how much quota is left"
+                 : "Open UsageLimits to see how much quota is left")
                 .font(.caption)
                 .foregroundColor(UsageColors.textSecondary)
         }
