@@ -113,6 +113,7 @@ addresses. There is no instrumented (`androidTest`) source set.
 | Document | What it covers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layering, the `UsageProvider` abstraction, the normalised model, the sync pipeline, and the two deliberate deviations from convention |
+| [docs/verification.md](docs/verification.md) | How the app checks it is telling the truth: the three layers of verification, what each can and cannot catch, and the defects each one actually found |
 | [docs/security.md](docs/security.md) | Threat model, credential storage, the no-tokens-in list, PKCE and state validation, and a frank accepted-risks section |
 | [docs/widgets.md](docs/widgets.md) | The two widget sizes, the configuration model, the Room-only data path, and the Glance constraints that shaped the layout |
 | [docs/compatibility.md](docs/compatibility.md) | Android version floor, foldables, window size classes, RTL and accessibility |
