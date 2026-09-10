@@ -921,4 +921,32 @@ class NotificationEvaluatorTest {
     }
 
     // endregion
+
+    @Test
+    fun `state for an account missing from this sync is carried through, not dropped`() {
+        // The outcome is built from a map that must be SEEDED with everything handed in, not
+        // started empty. Starting empty reads more naturally — the outcome is
+        // `newStates.values`, and seeding means a deleted account's state lingers until the
+        // caller evicts it — which is exactly why this needs a test rather than a comment.
+        //
+        // If it were emptied, an account absent from one partial sync would lose its state:
+        // `lastProcessedFetchedAt` back to nothing so every snapshot re-evaluates, and episode
+        // numbering back to the start, minting keys the ledger has already swallowed. The
+        // account would then go permanently silent — no threshold, no recovery, ever again.
+        val seeded = run(listOf(usage(remaining = 15.0)), emptyMap()).stateMap()
+        assertTrue("precondition: the first pass must produce state", seeded.isNotEmpty())
+
+        // A second sync that does not mention that account at all — a provider returning a
+        // partial response, or one account removed from the batch.
+        val outcome = run(
+            listOf(usage(remaining = 80.0, id = "other")),
+            seeded,
+            nowMs = now + 1,
+        )
+
+        assertTrue(
+            "the absent account's state must survive: ${outcome.states.map { it.accountId }}",
+            outcome.states.any { it.accountId == "acct" },
+        )
+    }
 }
