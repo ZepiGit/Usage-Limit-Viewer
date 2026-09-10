@@ -90,6 +90,18 @@ class NotificationPublisher(
         // standing fact the user has already seen.
         val alerts = claimed.map { it.line }.filter { it.isNotBlank() }
         val findings = alerts + outcome.standingFindings
+
+        // A standing fact — "1 reset credit available" — is re-derived every sync. Posting it
+        // again every thirty minutes meant a notification the user had DISMISSED came back,
+        // silently, for ever, and the only way to be rid of it was the toggle that turns the
+        // feature off — which is the outcome the feature exists to avoid. It is re-posted only
+        // when it changes; the fingerprint of what was last posted is what says whether it did.
+        val standingPrefs = context.getSharedPreferences(STANDING_PREFS, Context.MODE_PRIVATE)
+        val lastStanding = standingPrefs.getString(STANDING_FINGERPRINT, null)
+        val standingNow = fingerprint(outcome.standingFindings)
+        if (!shouldPost(alerts, outcome.standingFindings, lastStanding)) return
+        standingPrefs.edit().putString(STANDING_FINGERPRINT, standingNow).apply()
+
         if (findings.isEmpty()) {
             // Nothing new to say, and NOTHING is taken down. This used to cancel the
             // notification, which deleted an alert the user had not yet seen: an
@@ -154,7 +166,23 @@ class NotificationPublisher(
             PackageManager.PERMISSION_GRANTED
     }
 
-    private companion object {
+    companion object {
+        private const val STANDING_PREFS = "usage_limits_notifications"
+        private const val STANDING_FINGERPRINT = "standing_fingerprint"
+
+        /** Order-independent identity of a set of standing lines; empty set is the empty string. */
+        fun fingerprint(standing: List<String>): String = standing.sorted().joinToString("\u0000")
+
+        /**
+         * Whether this refresh has anything to say to the shade.
+         *
+         * A new alert always posts. With no new alert, standing findings post only if they
+         * differ from what was last posted — a dismissed one must not come back unchanged —
+         * and a refresh with nothing at all says nothing, leaving whatever is in the shade.
+         */
+        fun shouldPost(alerts: List<String>, standing: List<String>, lastStandingFingerprint: String?): Boolean =
+            alerts.isNotEmpty() || (standing.isNotEmpty() && fingerprint(standing) != lastStandingFingerprint)
+
         const val CHANNEL_ID = "usage_alerts"
 
         /** Fixed, so each sync replaces the previous alert rather than adding to a pile. */

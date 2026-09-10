@@ -1,6 +1,7 @@
 package com.usagelimits.feature.overview
 
 import androidx.compose.foundation.background
+import com.usagelimits.core.model.percentLabel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -238,7 +239,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 symbol = "▮",
                 tint = SeverityPalette.accent(critical?.second?.severity ?: Severity.STALE),
                 container = SeverityPalette.container(critical?.second?.severity ?: Severity.STALE),
-                value = critical?.second?.remainingPercent?.let { "${it.toInt()}%" } ?: "—",
+                value = percentLabel(critical?.second?.remainingPercent),
                 label = critical?.second?.label?.let { "$it left" } ?: "No data",
                 bar = critical?.second,
             )
