@@ -51,6 +51,15 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // Robolectric needs the merged resources to inflate anything, and Compose needs
+            // them to resolve a theme. Without this every UI test fails on a missing resource
+            // rather than on the thing it was written to check.
+            isIncludeAndroidResources = true
+        }
+    }
+
     packaging {
         resources.excludes += setOf(
             "/META-INF/{AL2.0,LGPL2.1}",
@@ -111,4 +120,10 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.turbine)
+    // Compose UI tests, run on the JVM under Robolectric. This environment has no KVM, so an
+    // emulator is not available; Robolectric is what makes the screens testable at all, and an
+    // app whose screens are never rendered anywhere is an app nobody has run.
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
