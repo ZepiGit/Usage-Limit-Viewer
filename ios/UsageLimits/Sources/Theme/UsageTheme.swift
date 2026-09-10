@@ -1,4 +1,8 @@
 import SwiftUI
+// `Severity` lives in the kit and is named throughout this file. Swift imports are per-file, so
+// another file in the same target importing it buys this one nothing — which is how a file that
+// looked fine failed to build in two targets at once.
+import UsageLimitsKit
 
 /// The palette, kept numerically identical to the Android one.
 ///
