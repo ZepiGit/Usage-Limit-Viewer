@@ -17,6 +17,15 @@ struct UsageLimitsApp: App {
         }
     }
 
+    /// Whether the process was started by the UI test bundle.
+    ///
+    /// One flag, read in one place. It suppresses a system permission prompt and nothing else —
+    /// it must never change what the app computes or displays, or the tests would be checking a
+    /// different app from the one that ships.
+    static var isUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("-ui-testing")
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -30,7 +39,14 @@ struct UsageLimitsApp: App {
                     // Asked once, and only after the first screen is up: a permission sheet in
                     // front of an empty app asks the user to approve something they have not
                     // seen the point of yet.
-                    _ = await NotificationScheduler.requestAuthorization()
+                    //
+                    // Never asked under UI test. The permission prompt is a SYSTEM alert, which
+                    // sits above the app's own window and fails every query behind it — so a
+                    // test written to check the tab bar would fail on the alert instead, for a
+                    // reason that reads as unrelated to what it was checking.
+                    if !Self.isUITesting {
+                        _ = await NotificationScheduler.requestAuthorization()
+                    }
                     await store.refresh()
                 }
         }

@@ -74,11 +74,10 @@ jobs:
       - name: Generate the project
         working-directory: ios/UsageLimits
         run: xcodegen generate
-      # A GENERIC destination, not a named device. `name=iPhone 16` failed on the runner for a
-      # reason that had nothing to do with the code: Xcode 26 ships simulators for the iPhone 17
-      # family and the 16 is simply not among them, so xcodebuild exited before compiling a
-      # single file. Any pinned model rots the same way at the next Xcode bump, and this job only
-      # needs to COMPILE for the simulator SDK — it never boots a device or runs a test.
+      # A GENERIC destination for the build, not a named device. `name=iPhone 16` failed on the
+      # runner for a reason that had nothing to do with the code: Xcode 26 ships simulators for
+      # the iPhone 17 family and the 16 is simply not among them, so xcodebuild exited before
+      # compiling a single file. Any pinned model rots the same way at the next Xcode bump.
       - name: Build for simulator
         working-directory: ios/UsageLimits
         run: |
@@ -87,3 +86,44 @@ jobs:
             -scheme UsageLimits \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
+
+      # The device is DISCOVERED, for the same reason the build destination is generic: any
+      # hardcoded model is a future failure that has nothing to do with the code. This picks
+      # whatever iPhone the installed Xcode actually has, and fails loudly if there is none
+      # rather than silently skipping the tests below.
+      - name: Pick and boot a simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))] | last | .udid')
+          if [ -z "$udid" ] || [ "$udid" = "null" ]; then
+            echo "no available iPhone simulator on this runner" >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+
+      # The only step that RUNS the app. Everything above proves the types line up; this proves
+      # the binary launches, the tab bar appears, and each screen opens on a fresh install with
+      # nothing signed in — the failures a user meets before any of the others.
+      - name: Run the app on the simulator
+        working-directory: ios/UsageLimits
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme UsageLimits \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Kept on failure only, because a UI test that fails is unreadable from console output
+      # alone: the bundle carries the screenshot and the view hierarchy at the moment it broke.
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-test-results
+          path: ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          if-no-files-found: ignore
