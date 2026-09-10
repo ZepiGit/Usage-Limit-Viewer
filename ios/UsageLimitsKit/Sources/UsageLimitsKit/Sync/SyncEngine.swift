@@ -66,7 +66,28 @@ public actor SyncEngine {
 
     /// One exchange in progress per credential reference. A caller that finds an entry awaits it
     /// rather than starting a rival exchange for the same rotating refresh token.
-    private var refreshes: [String: Task<OAuthCredentials, any Error>] = [:]
+    private var refreshes: [String: Task<Exchange, any Error>] = [:]
+
+    /// What one trip through `renewedCredentials` produced.
+    ///
+    /// `exchanged` distinguishes "I spent a rotation and here is the new pair" from "somebody
+    /// else had already refreshed this reference, so here is what they saved". A caller that
+    /// forced the exchange because the provider REJECTED the token needs to tell those apart:
+    /// joining a non-forced exchange that decided nothing needed doing hands back the same dead
+    /// token, and the account is then reported as revoked when it is merely stale.
+    private struct Exchange: Sendable {
+        let credentials: OAuthCredentials
+        let exchanged: Bool
+    }
+
+    /// How many times a rotated pair is offered to the store before giving up on writing it.
+    ///
+    /// Retried rather than surrendered, because by the time the write is attempted the OLD
+    /// refresh token is already dead: a failed save does not leave things as they were, it loses
+    /// the account. The keychain items are `AfterFirstUnlockThisDeviceOnly`, so the usual
+    /// transient cause — a locked device — cannot arise; what remains is worth a second attempt
+    /// and not worth a long one.
+    private static let saveAttempts = 3
 
     public init(providers: [String: any SyncProvider],
                 credentials: any CredentialStore,
@@ -163,7 +184,7 @@ public actor SyncEngine {
             usable = try await renewedCredentials(
                 reference: account.credentialReference,
                 provider: provider
-            )
+            ).credentials
         } else {
             // "Not known to be expired" deliberately includes an absent expiry — refreshing such an
             // account on every call would burn a rotating refresh token each time.
@@ -189,14 +210,25 @@ public actor SyncEngine {
             //
             // Once only. If the freshly exchanged pair is rejected too, the credential is
             // genuinely revoked and retrying is just a second way to fail.
-            let renewed = try await renewedCredentials(
+            var renewed = try await renewedCredentials(
                 reference: account.credentialReference,
                 provider: provider,
                 force: true
             )
+            if !renewed.exchanged {
+                // The force joined an exchange already in flight, and that one decided the
+                // stored pair looked fine and returned it unexchanged — which is precisely the
+                // pair the provider has just rejected. Retrying the fetch with it would report a
+                // healthy account as revoked. One more attempt, now that the earlier exchange
+                // has finished and cannot be joined again.
+                renewed = try await renewedCredentials(
+                    reference: account.credentialReference,
+                    provider: provider,
+                    force: true)
+            }
             try Task.checkCancellation()
             return try await provider.fetchUsage(
-                credentials: renewed, attributes: account.attributes)
+                credentials: renewed.credentials, attributes: account.attributes)
         }
     }
 
@@ -216,7 +248,7 @@ public actor SyncEngine {
     ///   the rejection path, where the provider has already said the token is dead.
     private func renewedCredentials(reference: String,
                                     provider: any SyncProvider,
-                                    force: Bool = false) async throws -> OAuthCredentials {
+                                    force: Bool = false) async throws -> Exchange {
         if let running = refreshes[reference] {
             return try await running.value
         }
@@ -225,7 +257,7 @@ public actor SyncEngine {
         // an exchange abandoned between the rotation and the save leaves the old refresh token
         // dead and the new one unwritten, losing the account outright. For the same reason the
         // body performs no cancellation check — once begun, an exchange runs to its save.
-        let task = Task<OAuthCredentials, any Error> {
+        let task = Task<Exchange, any Error> {
             // The entry lasts exactly as long as the exchange: a late arrival either joins this
             // exchange or re-reads a store this exchange has already written to.
             defer { self.refreshes[reference] = nil }
@@ -238,7 +270,7 @@ public actor SyncEngine {
                 // An exchange for this reference has already finished; the saved pair is fresh,
                 // and spending another rotation here is the very bug this routine exists to
                 // prevent.
-                return current
+                return Exchange(credentials: current, exchanged: false)
             }
 
             let response = try await provider.refresh(credentials: current)
@@ -252,14 +284,37 @@ public actor SyncEngine {
             // Persisted before it is used — by this exchange or by any account waiting on it. If
             // the process dies between the exchange and the fetch, the old refresh token is
             // already dead, and a pair that was never written back loses the account entirely.
-            try await self.credentials.save(renewed, reference: reference)
-            return renewed
+            //
+            // Which is also why a failing save is retried and then, if it still will not write,
+            // NOT allowed to fail the refresh. The rotation has already happened: the token in
+            // the store is dead whatever this code does next. Throwing here would discard the
+            // only working pair that exists and turn a storage fault into a signed-out paid
+            // account within the same second. Returning it means this session keeps working,
+            // and the sign-out is deferred to the next launch rather than caused now.
+            await self.persist(renewed, reference: reference)
+            return Exchange(credentials: renewed, exchanged: true)
         }
 
         // Nothing between the look-up above and this store suspends, so on this actor the
         // check-and-register is atomic: at most one exchange is ever registered per reference.
         refreshes[reference] = task
         return try await task.value
+    }
+
+    /// Writes a rotated pair, retrying, and never throwing. See the call site for why a failure
+    /// here must not fail the refresh.
+    private func persist(_ credentials: OAuthCredentials, reference: String) async {
+        for attempt in 1...Self.saveAttempts {
+            do {
+                try await self.credentials.save(credentials, reference: reference)
+                return
+            } catch {
+                guard attempt < Self.saveAttempts else { return }
+                // A short, fixed pause. The plausible causes are momentary; a long backoff would
+                // hold the exchange lock open while every other account waits on it.
+                try? await Task.sleep(nanoseconds: 100 * 1_000_000)
+            }
+        }
     }
 
     /// Delivers one outcome to the sink, best-effort.

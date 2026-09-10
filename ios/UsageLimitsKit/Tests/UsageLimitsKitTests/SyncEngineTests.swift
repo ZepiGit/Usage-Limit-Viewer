@@ -85,6 +85,52 @@ final class SyncEngineTests: XCTestCase {
         func setOmittingRefreshToken() { omitsRefreshTokenInResponse = true }
     }
 
+    /// Rotates like the one above, but its response never states an expiry — the case that
+    /// exposed the inherited-expiry loop.
+    private actor SilentExpiryProvider: SyncProvider {
+        nonisolated let providerID = "codex"
+        private var liveRefreshToken = "refresh-1"
+        private var generation = 1
+        private(set) var exchanges = 0
+
+        struct GrantRevoked: Error {}
+
+        func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
+            exchanges += 1
+            guard credentials.refreshToken == liveRefreshToken else { throw GrantRevoked() }
+            generation += 1
+            liveRefreshToken = "refresh-\(generation)"
+            // No `expires_in` in the response, which is a shape real endpoints do serve.
+            return OAuthCredentials(
+                accessToken: "access-\(generation)", refreshToken: liveRefreshToken)
+        }
+
+        func fetchUsage(
+            credentials: OAuthCredentials, attributes: [String: String]
+        ) async throws -> UsageResult {
+            UsageResult()
+        }
+    }
+
+    /// Accepts every read and refuses every write, so a rotation can be made to succeed while
+    /// the pair that came out of it cannot be stored.
+    private actor UnwritableCredentialStore: CredentialStore {
+        struct Unwritable: Error {}
+        private var stored: [String: OAuthCredentials]
+        private(set) var attemptedSaves = 0
+
+        init(_ stored: [String: OAuthCredentials]) { self.stored = stored }
+
+        func load(reference: String) async throws -> OAuthCredentials? { stored[reference] }
+        func save(_ credentials: OAuthCredentials, reference: String) async throws {
+            attemptedSaves += 1
+            throw Unwritable()
+        }
+        func delete(reference: String) async throws {}
+        func removeAll() async throws {}
+        func allReferences() async throws -> [String] { Array(stored.keys) }
+    }
+
     private actor RecordingSink: SyncSink {
         private(set) var outcomes: [SyncOutcome] = []
         func record(_ outcome: SyncOutcome, at time: Date) async { outcomes.append(outcome) }
@@ -299,5 +345,60 @@ final class SyncEngineTests: XCTestCase {
         }
         XCTAssertFalse(message.contains("synthetic-secret-access"))
         XCTAssertFalse(message.contains("synthetic-secret-refresh"))
+    }
+}
+
+// MARK: - What a refresh response that states no expiry must not cause
+
+extension SyncEngineTests {
+
+    func testAResponseWithNoExpiryDoesNotRefreshOnEverySync() async throws {
+        // The stored pair is expired and the provider's response omits `expires_in`. Carrying
+        // the old expiry forward would stamp a dead timestamp onto a brand-new access token, so
+        // the very next sync would judge it expired and exchange again — burning a rotation per
+        // sync, for ever, over a field the provider simply did not mention.
+        let provider = SilentExpiryProvider()
+        let store = InMemoryCredentialStore(credentials: [
+            "ref-a": OAuthCredentials(
+                accessToken: "access-1", refreshToken: "refresh-1",
+                expiresAt: Date(timeIntervalSince1970: 0)),
+        ])
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store,
+            sink: RecordingSink(), now: { [now] in now })
+
+        _ = try await engine.sync(accounts: [account("a")])
+        _ = try await engine.sync(accounts: [account("a")])
+        _ = try await engine.sync(accounts: [account("a")])
+
+        let exchanges = await provider.exchanges
+        XCTAssertEqual(exchanges, 1, "an unstated expiry must not mean 'expired'")
+    }
+
+    func testARotationThatCannotBeStoredStillCompletesTheSync() async throws {
+        // By the time the save runs, the OLD refresh token is already dead: a failed write does
+        // not leave things as they were, it loses the account. Throwing would discard the only
+        // working pair in existence and turn a storage fault into a signed-out paid account
+        // within the same second. The sign-out is deferred to the next launch instead.
+        let provider = RotatingProvider()
+        let store = UnwritableCredentialStore([
+            "ref-a": OAuthCredentials(
+                accessToken: "access-1", refreshToken: "refresh-1",
+                expiresAt: Date(timeIntervalSince1970: 0)),
+        ])
+        let sink = RecordingSink()
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+
+        let outcomes = try await engine.sync(accounts: [account("a")])
+
+        guard case .success = outcomes[0] else {
+            return XCTFail("an unwritable store must not fail the account: \(outcomes[0])")
+        }
+        // Retried rather than surrendered on the first refusal, since the plausible causes are
+        // momentary and the cost of not writing is the whole account.
+        let attempts = await store.attemptedSaves
+        XCTAssertGreaterThan(attempts, 1)
     }
 }

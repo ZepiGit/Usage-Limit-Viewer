@@ -286,6 +286,23 @@ final class ProviderTokenRefreshTests: XCTestCase {
         }
     }
 
+    func testCredentialsInADiscoveredURLAreRefused() {
+        // `https://x.ai@evil.example` is already caught by the host check — the host is
+        // evil.example — but `https://anything@auth.x.ai` passes it, and some HTTP stacks turn
+        // that userinfo into a Basic-auth header on a request carrying a refresh token.
+        XCTAssertThrowsError(try XaiClient.validated("https://someone@auth.x.ai/token"))
+        XCTAssertThrowsError(try XaiClient.validated("https://a:b@auth.x.ai/token"))
+    }
+
+    func testTheCodeCarryingSignInPageKeepsItsQuery() {
+        // `verification_uri_complete` is the sign-in page with the user's code already in it.
+        // Stripping the query would turn the one URL that saves them typing into the one that
+        // does not work.
+        XCTAssertEqual(
+            try XaiClient.validated("https://auth.x.ai/device?user_code=WXYZ"),
+            "https://auth.x.ai/device?user_code=WXYZ")
+    }
+
     func testTheRefusedEndpointIsNotEchoedBack() {
         // The rejected URL is attacker-controllable and this message reaches the account card.
         do {
