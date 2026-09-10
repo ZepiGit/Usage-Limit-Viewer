@@ -175,6 +175,87 @@ final class UsageLimitsContainerTests: XCTestCase {
         XCTAssertFalse(contents.contains("synthetic-refresh"))
     }
 
+    // MARK: - Signing in
+
+    /// A JWT payload carrying the claims Codex's profile reads. Synthetic throughout.
+    private func idToken() throws -> String {
+        let claims: [String: Any] = [
+            "sub": "user-1", "email": "someone@example.com",
+            "https://api.openai.com/auth": [
+                "chatgpt_account_id": "acct-1", "chatgpt_plan_type": "plus",
+            ],
+        ]
+        let encoded = try JSONSerialization
+            .data(withJSONObject: claims, options: [.sortedKeys])
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "header.\(encoded).signature"
+    }
+
+    func testSigningInStoresBothTheAccountAndItsCredentials() async throws {
+        // The end of the flow that makes every other part of the app reachable. An account with
+        // no credential is a row that can never sync and offers no way to repair itself.
+        let token = try idToken()
+        let (subject, credentials) = container([
+            (200, #"{"user_code": "ABCD", "device_auth_id": "d-1"}"#),
+            (200, #"{"authorization_code": "code-1", "code_verifier": "v-1"}"#),
+            (200, #"{"access_token": "acc", "refresh_token": "ref", "id_token": "\#(token)", "expires_in": 3600}"#),
+        ], credentials: InMemoryCredentialStore())
+
+        let challenge = try await subject.beginLogin(provider: .codex)
+        let account = try await subject.completeLogin(provider: .codex, challenge: challenge)
+
+        XCTAssertEqual(challenge.userCode, "ABCD")
+        XCTAssertEqual(account.externalAccountID, "acct-1")
+        XCTAssertEqual(account.email, "someone@example.com")
+        XCTAssertEqual(account.plan, "plus")
+        // The account id scopes team and enterprise quota, and travels as a header on the usage
+        // call — so it has to survive from the sign-in that learned it.
+        XCTAssertEqual(account.attributes["chatgpt_account_id"], "acct-1")
+
+        let stored = try await credentials.load(reference: account.credentialReference)
+        XCTAssertEqual(stored?.accessToken, "acc")
+    }
+
+    func testSigningInAgainUpdatesTheAccountRatherThanDuplicatingIt() async throws {
+        // Re-authenticating changes the tokens, not the identity. A second row for the same
+        // account would double every figure the overview adds up.
+        let token = try idToken()
+        let replies: [(status: Int, body: String)] = [
+            (200, #"{"user_code": "ABCD", "device_auth_id": "d-1"}"#),
+            (200, #"{"authorization_code": "code-1", "code_verifier": "v-1"}"#),
+            (200, #"{"access_token": "acc", "id_token": "\#(token)", "expires_in": 3600}"#),
+            (200, #"{"user_code": "EFGH", "device_auth_id": "d-2"}"#),
+            (200, #"{"authorization_code": "code-2", "code_verifier": "v-2"}"#),
+            (200, #"{"access_token": "acc-2", "id_token": "\#(token)", "expires_in": 3600}"#),
+        ]
+        let (subject, _) = container(replies, credentials: InMemoryCredentialStore())
+
+        let first = try await subject.beginLogin(provider: .codex)
+        _ = try await subject.completeLogin(provider: .codex, challenge: first)
+        let second = try await subject.beginLogin(provider: .codex)
+        _ = try await subject.completeLogin(provider: .codex, challenge: second)
+
+        let usage = await subject.usage()
+        XCTAssertEqual(usage.count, 1)
+    }
+
+    func testAProviderAPhoneCannotSignIntoSaysSoRatherThanFailingLater() async throws {
+        let (subject, _) = container([])
+
+        do {
+            _ = try await subject.beginLogin(provider: .claude)
+            XCTFail("Claude cannot be signed into from here")
+        } catch let error as DeviceLoginError {
+            guard case .unsupportedOnThisPlatform(let reason) = error else {
+                return XCTFail("expected unsupportedOnThisPlatform, got \(error)")
+            }
+            XCTAssertFalse(reason.isEmpty)
+        }
+    }
+
     // MARK: - Notifications
 
     /// A payload whose 5-hour window is nearly spent, so the evaluator has something to say.
