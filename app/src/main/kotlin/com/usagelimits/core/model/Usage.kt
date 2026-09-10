@@ -90,9 +90,17 @@ data class UsageSnapshot(
     val applicableResetCreditCount: Int? = null,
     val errorMessage: String? = null,
 ) {
-    /** How many credits the user holds, spendable or not — the number worth displaying. */
+    /**
+     * How many credits the user holds, spendable or not — the number worth displaying.
+     *
+     * The provider's count is authoritative when it states one, because the row list can be
+     * truncated or filtered while the count stays exact. Falling back to the rows counts only
+     * the AVAILABLE ones: a spent credit is still listed, and counting it told a user with one
+     * consumed credit and nothing else that they held one to spend.
+     */
     val heldResetCredits: Int
-        get() = resetCreditCount ?: resetCredits.size
+        get() = resetCreditCount
+            ?: resetCredits.count { it.status.equals("available", ignoreCase = true) }
 
     /**
      * How many credits can actually be spent right now — what the redeem button is gated on.

@@ -488,7 +488,15 @@ public enum NotificationEvaluator {
         into findings: inout [String]
     ) {
         guard settings.notifyOnResetCreditAvailable else { return }
-        let count = snapshot.resetCredits.filter { $0.status.lowercased() == "available" }.count
+
+        // The snapshot's own spendable figure, not a count of rows re-judged here.
+        //
+        // Two reasons, and each one alone is sufficient. Codex reports a COUNT and no rows —
+        // that is the shape of the copy embedded in its usage payload — so counting rows told a
+        // user holding two credits that they had none. And "spendable" already encodes which
+        // credits actually apply to the limit in force; re-deciding it at this call site with a
+        // cruder predicate meant announcing credits the provider would refuse to apply.
+        let count = snapshot.spendableResetCredits
         guard count > 0 else { return }
 
         let noun = count == 1 ? "reset credit" : "reset credits"

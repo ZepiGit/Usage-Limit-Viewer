@@ -234,4 +234,42 @@ final class PreferencesAndLedgerTests: XCTestCase {
 
         XCTAssertEqual(claimed.count, 1)
     }
+
+    // MARK: - What counts as a credit you have
+
+    private func snapshot(
+        rows: [ResetCredit], count: Int?, applicable: Int?
+    ) -> UsageSnapshot {
+        UsageSnapshot(
+            accountID: "a", fetchedAt: now, status: .ok, windows: [],
+            resetCredits: rows, resetCreditCount: count,
+            applicableResetCreditCount: applicable)
+    }
+
+    func testACountWithoutRowsStillCounts() {
+        // The shape Codex actually serves in its usage payload: a count and no rows at all.
+        // Counting rows told a user holding two credits that they had none.
+        let stored = snapshot(rows: [], count: 2, applicable: 2)
+
+        XCTAssertEqual(stored.heldResetCredits, 2)
+        XCTAssertEqual(stored.spendableResetCredits, 2)
+    }
+
+    func testASpentCreditIsNotOneYouHold() {
+        // A consumed credit is still listed. Counting it says the user has one to spend.
+        let stored = snapshot(
+            rows: [ResetCredit(id: "c1", grantedAt: nil, expiresAt: nil, status: "consumed")],
+            count: nil, applicable: nil)
+
+        XCTAssertEqual(stored.heldResetCredits, 0)
+    }
+
+    func testHoldingCreditsIsNotTheSameAsBeingAbleToSpendOne() {
+        // The distinction the whole applicable count exists for: two in the balance, none that
+        // applies to the limit in force.
+        let stored = snapshot(rows: [], count: 2, applicable: 0)
+
+        XCTAssertEqual(stored.heldResetCredits, 2)
+        XCTAssertEqual(stored.spendableResetCredits, 0)
+    }
 }

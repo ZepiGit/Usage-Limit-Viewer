@@ -28,7 +28,10 @@ public enum Countdown {
 
         if days > 0 { return hours > 0 ? "\(days)d \(hours)h" : "\(days)d" }
         if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
-        return "\(max(minutes, 1))m"
+        // "<1m", not "1m". Rounding the last fifty-nine seconds up to a minute invents time
+        // the user does not have, on a countdown whose entire job is to say when something
+        // comes back — and it disagreed with the Kotlin twin, which has always said "<1m".
+        return minutes > 0 ? "\(minutes)m" : "<1m"
     }
 
     /// The absolute local time, for a surface that cannot tick.
