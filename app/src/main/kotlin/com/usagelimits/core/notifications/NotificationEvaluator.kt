@@ -47,10 +47,26 @@ object NotificationEvaluator {
      */
     data class AccountState(
         val accountId: String,
+        /** The highest episode any window of this account has reached — a summary, kept for the row. */
         val lowQuotaEpisode: Int = 0,
+        /** Whether ANY window of this account is mid-episode. */
         val lowQuotaActive: Boolean = false,
         val lastProcessedFetchedAt: Long? = null,
+        /**
+         * The episode each WINDOW is in, keyed by [windowKey].
+         *
+         * Per window, not per account, because the episode is the unit of deduplication and
+         * an account has several windows that run out independently. With one episode per
+         * account, the five-hour window running out claimed every tier — and the weekly
+         * window then crossing 20 %, 10 % and 0 % said nothing at all, because every key was
+         * already spent and the episode only ended when EVERY window had recovered.
+         */
+        val windows: Map<String, WindowState> = emptyMap(),
     )
+
+    /** One window's place in the dedup cycle. */
+    @kotlinx.serialization.Serializable
+    data class WindowState(val episode: Int = 0, val active: Boolean = false)
 
     /**
      * What the evaluator produced for one sync.
@@ -194,63 +210,64 @@ object NotificationEvaluator {
         settings: AppSettings,
         previous: AccountState,
     ): Pair<AccountState, List<Event>> {
-        val windows = snapshot.windows
-        val worst = windows.filter { it.remainingPercent != null }
-            .minByOrNull { it.remainingPercent!! }
-        val remaining = worst?.remainingPercent
-        val exhaustedWindow = windows.firstOrNull { it.severity == Severity.EXHAUSTED }
-
-        // An unknown percentage does not block recovery. Treating it as low did: one window
-        // whose figure the provider stopped reporting vetoed recovery for good, so the episode
-        // never ended and the account never alerted again. Unknown is an absence of evidence,
-        // and the account already reads as ERROR on screen — adding permanent silence on top
-        // of that helps nobody. `all` over an empty list is true, which is the same judgement:
-        // an account reporting nothing is not an account known to be low.
-        val recovered = exhaustedWindow == null &&
-            windows.all { (it.remainingPercent ?: WARNING_PERCENT) >= WARNING_PERCENT }
-
-        if (recovered) {
-            return previous.copy(lowQuotaActive = false) to emptyList()
-        }
-
-        val belowWarning = remaining != null && remaining < WARNING_PERCENT
-        val belowCritical = remaining != null && remaining < CRITICAL_PERCENT
-
-        val reached = when {
-            exhaustedWindow != null -> listOf(Tier.WARNING, Tier.CRITICAL, Tier.EXHAUSTED)
-            belowCritical -> listOf(Tier.WARNING, Tier.CRITICAL)
-            belowWarning -> listOf(Tier.WARNING)
-            else -> emptyList()
-        }
-        if (reached.isEmpty()) return previous to emptyList()
-
-        // An episode is the unit of deduplication. Starting one here — rather than at the first
-        // notification — keeps the keys stable even while every setting is off.
-        val state = if (previous.lowQuotaActive) {
-            previous
-        } else {
-            previous.copy(lowQuotaEpisode = previous.lowQuotaEpisode + 1, lowQuotaActive = true)
-        }
-        val episode = state.lowQuotaEpisode
         val account = snapshot.accountId
+        val windowStates = previous.windows.toMutableMap()
+        val events = mutableListOf<Event>()
 
-        val condition = reached.last()
-        val label = (exhaustedWindow ?: worst)?.label ?: return state to emptyList()
-        val line = if (reached.any { it.enabled(settings) }) {
-            condition.message(name, label)
-        } else {
-            ""
+        // Each window decides for itself. Judging the account by its worst window meant one
+        // exhausted window spoke for all of them: its episode claimed every tier, and a
+        // second window crossing the same thresholds later found nothing left to claim.
+        for (window in snapshot.windows) {
+            val id = windowKey(window)
+            val state = windowStates[id] ?: WindowState()
+            val remaining = window.remainingPercent
+            val exhausted = window.severity == Severity.EXHAUSTED
+
+            // An unknown percentage does not hold a window low. Unknown is an absence of
+            // evidence, and the account already reads as ERROR on screen; permanent silence on
+            // top of that helps nobody.
+            val recovered = !exhausted && (remaining ?: WARNING_PERCENT) >= WARNING_PERCENT
+            if (recovered) {
+                if (state.active) windowStates[id] = state.copy(active = false)
+                continue
+            }
+
+            val reached = when {
+                exhausted -> listOf(Tier.WARNING, Tier.CRITICAL, Tier.EXHAUSTED)
+                remaining != null && remaining < CRITICAL_PERCENT -> listOf(Tier.WARNING, Tier.CRITICAL)
+                remaining != null && remaining < WARNING_PERCENT -> listOf(Tier.WARNING)
+                else -> emptyList()
+            }
+            if (reached.isEmpty()) continue
+
+            // An episode is the unit of deduplication. Starting one here — rather than at the
+            // first notification — keeps the keys stable even while every setting is off.
+            val current = if (state.active) state else WindowState(state.episode + 1, active = true)
+            windowStates[id] = current
+
+            val condition = reached.last()
+            val line = if (reached.any { it.enabled(settings) }) {
+                condition.message(name, window.label)
+            } else {
+                ""
+            }
+            for (tier in reached) {
+                events += Event(
+                    account,
+                    key(account, id, current.episode, tier.key),
+                    // Only the strongest reached tier carries the text: the weaker ones exist
+                    // to be consumed so a later dip cannot re-announce a threshold already passed.
+                    if (tier == condition) line else "",
+                )
+            }
         }
 
-        return state to reached.map { tier ->
-            Event(
-                account,
-                key(account, episode, tier.key),
-                // Only the strongest reached tier carries the text: the weaker ones exist to be
-                // consumed so a later dip cannot re-announce a threshold already passed.
-                if (tier == condition) line else "",
-            )
-        }
+        val state = previous.copy(
+            windows = windowStates,
+            lowQuotaActive = windowStates.values.any { it.active },
+            lowQuotaEpisode = maxOf(previous.lowQuotaEpisode, windowStates.values.maxOfOrNull { it.episode } ?: 0),
+        )
+        return state to events
     }
 
     /**

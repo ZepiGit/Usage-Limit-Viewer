@@ -141,4 +141,13 @@ data class NotificationStateEntity(
     val lowQuotaEpisode: Int,
     val lowQuotaActive: Boolean,
     val lastProcessedFetchedAt: Long?,
+    /**
+     * Per-window episodes as a JSON object keyed by window identity, added in version 5.
+     *
+     * A column rather than a table, matching how `usage_snapshots` stores its windows: the
+     * map is read and written whole, nothing queries inside it, and a window that a provider
+     * stops reporting simply ages out of the map rather than leaving an orphaned row.
+     */
+    @androidx.room.ColumnInfo(defaultValue = "{}")
+    val windowsJson: String = "{}",
 )

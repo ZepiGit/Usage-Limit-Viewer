@@ -109,16 +109,54 @@ public enum NotificationEvaluator {
         /// and cannot re-fire its edges.
         public var lastProcessedFetchedAt: Date? = nil
 
+        /// The episode each WINDOW is in, keyed by `windowKey`.
+        ///
+        /// Per window, not per account, because the episode is the unit of deduplication and
+        /// an account has several windows that run out independently. With one episode per
+        /// account, the five-hour window running out claimed every tier — and the weekly
+        /// window then crossing 20 %, 10 % and 0 % said nothing, because every key was
+        /// already spent and the episode only ended when EVERY window had recovered. The
+        /// account-level fields above are kept as a summary: any window active, highest
+        /// episode reached.
+        public var windows: [String: WindowState] = [:]
+
         public init(
             accountId: String,
             lowQuotaEpisode: Int = 0,
             lowQuotaActive: Bool = false,
-            lastProcessedFetchedAt: Date? = nil
+            lastProcessedFetchedAt: Date? = nil,
+            windows: [String: WindowState] = [:]
         ) {
             self.accountId = accountId
             self.lowQuotaEpisode = lowQuotaEpisode
             self.lowQuotaActive = lowQuotaActive
             self.lastProcessedFetchedAt = lastProcessedFetchedAt
+            self.windows = windows
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case accountId, lowQuotaEpisode, lowQuotaActive, lastProcessedFetchedAt, windows
+        }
+
+        /// Lenient on the new key: a ledger written before per-window state has no `windows`
+        /// and must still load, or every account would restart from nothing on upgrade.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            accountId = try c.decode(String.self, forKey: .accountId)
+            lowQuotaEpisode = try c.decodeIfPresent(Int.self, forKey: .lowQuotaEpisode) ?? 0
+            lowQuotaActive = try c.decodeIfPresent(Bool.self, forKey: .lowQuotaActive) ?? false
+            lastProcessedFetchedAt = try c.decodeIfPresent(Date.self, forKey: .lastProcessedFetchedAt)
+            windows = try c.decodeIfPresent([String: WindowState].self, forKey: .windows) ?? [:]
+        }
+    }
+
+    /// One window's place in the dedup cycle.
+    public struct WindowState: Sendable, Equatable, Codable {
+        public var episode: Int
+        public var active: Bool
+        public init(episode: Int = 0, active: Bool = false) {
+            self.episode = episode
+            self.active = active
         }
     }
 
@@ -215,49 +253,65 @@ public enum NotificationEvaluator {
                 continue
             }
 
-            let windows = snapshot.windows
-            let exhaustedWindow = windows.first { $0.exhausted }
-            let worst = windows
-                .filter { $0.remainingPercent != nil }
-                .min { ($0.remainingPercent ?? 0) < ($1.remainingPercent ?? 0) }
-            let lowestKnownRemaining = worst?.remainingPercent
+            // Each window decides for itself — see `AccountState.windows` for what judging the
+            // account by its worst window cost.
+            for window in snapshot.windows {
+                let id = windowKey(window)
+                var windowState = state.windows[id] ?? WindowState()
+                let remaining = window.remainingPercent
+                let exhausted = window.exhausted
 
-            // Recovery is decided BEFORE any tier is emitted, and short-circuits. Emitting
-            // first and then closing the episode would re-announce a threshold on the very
-            // sync that reports the account healthy again.
-            if hasRecovered(windows) {
-                state.lowQuotaActive = false
-            } else {
-                let belowThreshold = exhaustedWindow != nil
-                    || (lowestKnownRemaining.map { $0 < warningPercent } ?? false)
-
-                if belowThreshold {
-                    if !state.lowQuotaActive {
-                        state.lowQuotaEpisode += 1
-                        state.lowQuotaActive = true
+                // An unknown percentage does not hold a window low: unknown is an absence of
+                // evidence, and the account already reads as error on screen.
+                let recovered = !exhausted && (remaining ?? warningPercent) >= warningPercent
+                if recovered {
+                    if windowState.active {
+                        windowState.active = false
+                        state.windows[id] = windowState
                     }
-                    appendQuotaEvents(
-                        accountId: id,
-                        accountLabel: account.label,
-                        episode: state.lowQuotaEpisode,
-                        exhaustedLabel: exhaustedWindow?.label,
-                        worstLabel: worst?.label,
-                        lowestKnownRemaining: lowestKnownRemaining,
-                        settings: settings,
-                        into: &events
-                    )
+                    continue
                 }
+
+                let reached: [Tier]
+                if exhausted {
+                    reached = [.warning, .critical, .exhausted]
+                } else if let remaining, remaining < criticalPercent {
+                    reached = [.warning, .critical]
+                } else if let remaining, remaining < warningPercent {
+                    reached = [.warning]
+                } else {
+                    continue
+                }
+
+                // An episode is the unit of deduplication. Starting one here — rather than at
+                // the first notification — keeps the keys stable even while every setting is off.
+                if !windowState.active {
+                    windowState = WindowState(episode: windowState.episode + 1, active: true)
+                }
+                state.windows[id] = windowState
+
+                appendQuotaEvents(
+                    accountId: account.accountId,
+                    accountLabel: account.label,
+                    windowKey: id,
+                    windowLabel: window.label,
+                    episode: windowState.episode,
+                    reached: reached,
+                    settings: settings,
+                    into: &events
+                )
             }
+            state.lowQuotaActive = state.windows.values.contains { $0.active }
+            state.lowQuotaEpisode = max(state.lowQuotaEpisode, state.windows.values.map(\.episode).max() ?? 0)
 
             appendResetApproachingEvents(
                 accountId: id,
                 accountLabel: account.label,
-                windows: windows,
+                windows: snapshot.windows,
                 settings: settings,
                 now: now,
                 into: &events
             )
-
             appendCreditExpiringEvents(
                 accountId: id,
                 accountLabel: account.label,
@@ -266,7 +320,6 @@ public enum NotificationEvaluator {
                 now: now,
                 into: &events
             )
-
             appendCreditsAvailableFinding(
                 accountLabel: account.label,
                 settings: settings,
@@ -339,34 +392,25 @@ public enum NotificationEvaluator {
     private static func appendQuotaEvents(
         accountId: String,
         accountLabel: String,
+        windowKey: String,
+        windowLabel: String,
         episode: Int,
-        exhaustedLabel: String?,
-        worstLabel: String?,
-        lowestKnownRemaining: Double?,
+        reached: [Tier],
         settings: NotificationSettings,
         into events: inout [Event]
     ) {
-        let reached: [Tier]
-        if exhaustedLabel != nil {
-            reached = [.warning, .critical, .exhausted]
-        } else if let remaining = lowestKnownRemaining, remaining < criticalPercent {
-            reached = [.warning, .critical]
-        } else if let remaining = lowestKnownRemaining, remaining < warningPercent {
-            reached = [.warning]
-        } else {
-            reached = []
-        }
-
-        guard let condition = reached.last, let label = exhaustedLabel ?? worstLabel else { return }
+        guard let condition = reached.last else { return }
 
         let line = reached.contains(where: { $0.enabled(settings) })
-            ? condition.message(accountLabel, label)
+            ? condition.message(accountLabel, windowLabel)
             : ""
 
         for tier in reached {
             events.append(Event(
                 accountId: accountId,
-                key: "\(accountId)|\(episode)|\(tier.key)",
+                // The window's identity is part of the key, as it is on Android:
+                // "<account>|<category>:<label>|<episode>|<tier>".
+                key: "\(accountId)|\(windowKey)|\(episode)|\(tier.key)",
                 // Only the strongest reached tier carries the text: the weaker ones exist to be
                 // consumed so a later dip cannot re-announce a threshold already passed.
                 line: tier == condition ? line : ""))
@@ -383,6 +427,11 @@ public enum NotificationEvaluator {
     ///
     /// `allSatisfy` over an empty list is true, which is the same judgement: an account
     /// reporting no windows is not an account known to be low.
+    /// A window's identity within its account: category and label, as on Android.
+    private static func windowKey(_ window: UsageWindow) -> String {
+        "\(window.category.rawValue):\(window.label)"
+    }
+
     private static func hasRecovered(_ windows: [UsageWindow]) -> Bool {
         guard !windows.contains(where: { $0.exhausted }) else { return false }
         return windows.allSatisfy { ($0.remainingPercent ?? warningPercent) >= warningPercent }

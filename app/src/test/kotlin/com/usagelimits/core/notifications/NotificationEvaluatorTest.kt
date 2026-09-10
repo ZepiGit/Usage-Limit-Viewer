@@ -117,6 +117,81 @@ class NotificationEvaluatorTest {
 
     // region low-quota tiers
 
+    /** An account with several windows, each with its own remaining percentage. */
+    private fun multi(
+        vararg windows: Pair<String, Double?>,
+        fetchedAt: Long = now,
+        id: String = "acct",
+    ) = AccountUsage(
+        account = account(id),
+        snapshot = UsageSnapshot(
+            accountId = id,
+            fetchedAt = fetchedAt,
+            status = SnapshotStatus.OK,
+            windows = windows.mapIndexed { i, (label, remaining) ->
+                UsageWindow(
+                    id = "w$i",
+                    label = label,
+                    category = if (i == 0) WindowCategory.FIVE_HOUR else WindowCategory.WEEKLY,
+                    usedPercent = remaining?.let { 100.0 - it },
+                    periodSeconds = if (i == 0) 18_000 else 604_800,
+                    resetAt = null,
+                    exhausted = remaining != null && remaining <= 0.0,
+                )
+            },
+        ),
+    )
+
+    @Test
+    fun `one window running out does not silence another window's crossings`() {
+        // The bug: the episode was per ACCOUNT. The five-hour window running out claimed every
+        // tier for the account, and the weekly window then crossing 20 %, 10 % and 0 % found
+        // nothing left to claim — the user was never told about the limit that matters most.
+        val publisher = publisher()
+
+        assertEquals(
+            listOf("Account acct · 5h limit exhausted"),
+            publisher.sync(listOf(multi("5h limit" to 0.0, "Weekly" to 60.0)), settings, now),
+        )
+        assertEquals(
+            listOf("Account acct · Weekly: less than 20% remaining"),
+            publisher.sync(listOf(multi("5h limit" to 0.0, "Weekly" to 18.0, fetchedAt = now + 1)), settings, now),
+        )
+        assertEquals(
+            listOf("Account acct · Weekly: less than 10% remaining"),
+            publisher.sync(listOf(multi("5h limit" to 0.0, "Weekly" to 8.0, fetchedAt = now + 2)), settings, now),
+        )
+        assertEquals(
+            listOf("Account acct · Weekly exhausted"),
+            publisher.sync(listOf(multi("5h limit" to 0.0, "Weekly" to 0.0, fetchedAt = now + 3)), settings, now),
+        )
+        // And a window that recovers re-arms on its own, without waiting for the other.
+        assertTrue(publisher.sync(listOf(multi("5h limit" to 90.0, "Weekly" to 0.0, fetchedAt = now + 4)), settings, now).isEmpty())
+        assertEquals(
+            listOf("Account acct · 5h limit: less than 20% remaining"),
+            publisher.sync(listOf(multi("5h limit" to 15.0, "Weekly" to 0.0, fetchedAt = now + 5)), settings, now),
+        )
+    }
+
+    @Test
+    fun `two windows crossing in one sync are both spoken`() {
+        val lines = run(listOf(multi("5h limit" to 8.0, "Weekly" to 18.0)), emptyMap()).lines()
+        assertEquals(
+            listOf(
+                "Account acct · 5h limit: less than 10% remaining",
+                "Account acct · Weekly: less than 20% remaining",
+            ),
+            lines,
+        )
+    }
+
+    @Test
+    fun `keys carry the window identity`() {
+        val keys = run(listOf(multi("5h limit" to 18.0, "Weekly" to 18.0)), emptyMap()).keys()
+        assertEquals(setOf("acct|FIVE_HOUR:5h limit|1|warning", "acct|WEEKLY:Weekly|1|warning"), keys)
+    }
+
+
     @Test
     fun `crossing below twenty percent warns once and then stays quiet`() {
         val publisher = publisher()
