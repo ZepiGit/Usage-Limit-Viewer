@@ -99,6 +99,32 @@ final class LoopbackRedirectTests: XCTestCase {
         XCTAssertFalse(message.contains("script"))
     }
 
+    func testAProviderErrorWithoutStateIsIgnored() {
+        // Deliberate, and the trade-off is real enough to write down.
+        //
+        // RFC 6749 §4.1.2.1 requires `state` on an error redirect, so a provider that omits it
+        // is already misbehaving. But the choice here is not "handle it nicely or not": every
+        // process on the device can reach this port, so ACCEPTING a stateless error is exactly
+        // the attack — any local app could end a sign-in in progress by sending
+        // `?error=access_denied`. Ignoring it is the only safe reading.
+        //
+        // The cost, stated plainly: if a provider ever does decline without echoing state, the
+        // listener waits instead of reporting it. The user's escape is closing the sheet, which
+        // cancels the whole attempt at once. That is a worse experience than an immediate
+        // "cancelled" and a better one than a sign-in any app on the phone can kill.
+        let outcome = interpret(get("/callback?error=access_denied"))
+
+        XCTAssertEqual(outcome, .ignored)
+    }
+
+    func testAProviderErrorWithTheWrongStateIsAlsoIgnored() {
+        // The same reasoning, and the case an attacker actually has access to: they cannot know
+        // the state, so a forged error must never end the attempt.
+        let outcome = interpret(get("/callback?error=access_denied&state=not-the-state"))
+
+        XCTAssertEqual(outcome, .ignored)
+    }
+
     func testAFaviconFetchIsIgnoredRatherThanFailed() {
         // A browser asks for this unprompted. Treating it as a failed sign-in would end the
         // attempt before the user had finished it.
