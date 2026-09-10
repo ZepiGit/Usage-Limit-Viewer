@@ -519,4 +519,70 @@ extension GlanceModelTests {
 
         XCTAssertEqual(snapshot.accounts[0].rows.map(\.label), ["Weekly"])
     }
+
+    // MARK: - Freshness that ages with the timeline
+
+    func testAnAccountGoesStaleAsTheTimelineAdvances() {
+        // A widget renders several timeline entries at different dates from ONE snapshot, and
+        // every entry used to carry the severity computed when the app wrote it. An account
+        // healthy at T0 therefore still read healthy at T0 plus a day when no background
+        // refresh had run — the tile aged without ever saying so, which is the one thing a
+        // quota display must not do.
+        let snapshot = GlanceModel.build(
+            [usage("a", .codex, usedPercent: 10)], now: now, scope: .allAccounts, accountID: nil)
+        let account = snapshot.accounts[0]
+
+        XCTAssertNotEqual(account.severity(at: now, staleAfter: 3600), .stale,
+                          "fresh at the moment it was written")
+        XCTAssertEqual(
+            account.severity(at: now.addingTimeInterval(7200), staleAfter: 3600), .stale,
+            "and stale two hours later, without the app having written anything")
+    }
+
+    func testAnErrorDoesNotDecayIntoMerelyStale() {
+        // A snapshot that failed to parse is not a snapshot that is simply old, and telling
+        // the user "stale" invites them to wait for a refresh that will not help.
+        let failed = AccountUsage(
+            account: account("a", .codex),
+            snapshot: UsageSnapshot(
+                accountID: "a", fetchedAt: now, status: .failed,
+                windows: [], errorMessage: "unreadable"))
+        let snapshot = GlanceModel.build(
+            [failed], now: now, scope: .allAccounts, accountID: nil)
+
+        XCTAssertEqual(
+            snapshot.accounts[0].severity(at: now.addingTimeInterval(86_400), staleAfter: 3600),
+            .error)
+    }
+
+    func testASnapshotWrittenBeforeFreshnessWasCarriedStillDecodes() throws {
+        // The upgrade case. A file from an earlier build has neither `fetchedAt` nor
+        // `staleAfter`, and a synthesised decoder would reject it — which is not an error
+        // anyone sees, it is every home-screen tile going blank at once.
+        //
+        // The old file is produced by encoding a current one and deleting the keys that did
+        // not exist then, rather than by hand-writing JSON: the on-disk spelling of `Severity`
+        // and `Date` is the codec's business, and a hand-written fixture only tests my guess
+        // at it. My first attempt did exactly that and decoded to nothing.
+        let current = GlanceModel.build(
+            [usage("a", .codex, usedPercent: 10)], now: now, scope: .allAccounts, accountID: nil)
+        var object = try JSONSerialization.jsonObject(
+            with: GlanceSnapshotCodec.encode(current)) as! [String: Any]
+        object.removeValue(forKey: "staleAfter")
+        var accounts = object["accounts"] as! [[String: Any]]
+        accounts[0].removeValue(forKey: "fetchedAt")
+        accounts[0].removeValue(forKey: "baseSeverity")
+        object["accounts"] = accounts
+
+        let decoded = GlanceSnapshotCodec.decode(
+            try JSONSerialization.data(withJSONObject: object))
+
+        XCTAssertEqual(decoded.accounts.count, 1, "an older file must still load")
+        XCTAssertNil(decoded.accounts[0].fetchedAt)
+        XCTAssertEqual(decoded.staleAfter, Severity.staleAfter)
+        XCTAssertEqual(
+            decoded.accounts[0].severity(at: now.addingTimeInterval(86_400), staleAfter: 3600),
+            decoded.accounts[0].severity,
+            "with no fetch instant there is nothing to age, so behaviour is unchanged")
+    }
 }
