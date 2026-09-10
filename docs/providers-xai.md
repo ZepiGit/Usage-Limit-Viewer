@@ -32,7 +32,11 @@ What is unverified beyond "it has never run":
   genuine permission failure mid-poll from a slow user; that case runs to the expiry deadline.
 - The exact field names in `/v1/billing`. `monthlyLimit`, `used`, `onDemandCap`,
   `onDemandUsed` and `billingPeriodEnd` are the shapes the reference client reads; the
-  parser accepts both spellings of each and drops anything it does not recognise.
+  parser accepts both spellings of each and drops anything it does not recognise. The
+  captured production shape carries spend as `includedUsed` (and `totalUsed`), which the
+  parser now reads alongside `used`. When a limit is present with no spend figure under any
+  of those names, the window is emitted with an UNKNOWN percentage — until 10 September both
+  platforms substituted zero and showed a 90 %-spent account as untouched.
 - Whether `/v1/me` is reachable with the granted scopes. It is only used when no ID token is
   issued, so a failure there is invisible in the common case.
 
