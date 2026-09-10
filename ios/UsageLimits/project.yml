@@ -51,6 +51,14 @@ targets:
           UIInterfaceOrientationLandscapeLeft
           UIInterfaceOrientationLandscapeRight
         TARGETED_DEVICE_FAMILY: "1,2"
+    # The app and the widget are separate processes; the shared container is the only thing
+    # they have in common, and a missing entitlement makes the container URL nil at runtime —
+    # which shows up as a permanently blank tile rather than as any kind of error.
+    entitlements:
+      path: UsageLimits.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.usagelimits.shared
 
   UsageLimitsWidget:
     type: app-extension
@@ -65,6 +73,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.widget
         INFOPLIST_KEY_CFBundleDisplayName: Usage Limits
         INFOPLIST_KEY_NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: UsageLimitsWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.usagelimits.shared
 
 schemes:
   UsageLimits:

@@ -13,7 +13,7 @@ public enum GlanceScope: String, Sendable, Codable {
 }
 
 /// One bar.
-public struct GlanceRow: Sendable, Equatable {
+public struct GlanceRow: Sendable, Equatable, Codable {
     public let label: String
     /// Carried so a headline can be chosen by horizon rather than by position in `rows`.
     public let category: WindowCategory
@@ -37,12 +37,26 @@ public struct GlanceRow: Sendable, Equatable {
 }
 
 /// One account block.
-public struct GlanceAccount: Sendable, Equatable, Identifiable {
+public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     public let title: String
     public let subtitle: String?
     public let rows: [GlanceRow]
     public let severity: Severity
+
+    public init(
+        id: String,
+        title: String,
+        subtitle: String?,
+        rows: [GlanceRow],
+        severity: Severity
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.rows = rows
+        self.severity = severity
+    }
 
     /// The tightest number this block actually shows. Used only for ordering.
     var tightestRemaining: Double {
@@ -54,7 +68,7 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable {
 ///
 /// Carries no tokens and no provider payloads, by construction: it is built only from
 /// normalised snapshots. That is what makes it safe to hand to a widget process.
-public struct GlanceSnapshot: Sendable, Equatable {
+public struct GlanceSnapshot: Sendable, Equatable, Codable {
     public let accounts: [GlanceAccount]
     public let accountCount: Int
     public let updatedAt: Date?
@@ -62,6 +76,24 @@ public struct GlanceSnapshot: Sendable, Equatable {
     public let overallSeverity: Severity
     public let headlineShort: GlanceRow?
     public let headlineLong: GlanceRow?
+
+    public init(
+        accounts: [GlanceAccount],
+        accountCount: Int,
+        updatedAt: Date?,
+        nextResetAt: Date?,
+        overallSeverity: Severity,
+        headlineShort: GlanceRow?,
+        headlineLong: GlanceRow?
+    ) {
+        self.accounts = accounts
+        self.accountCount = accountCount
+        self.updatedAt = updatedAt
+        self.nextResetAt = nextResetAt
+        self.overallSeverity = overallSeverity
+        self.headlineShort = headlineShort
+        self.headlineLong = headlineLong
+    }
 
     public static let empty = GlanceSnapshot(
         accounts: [], accountCount: 0, updatedAt: nil, nextResetAt: nil,
