@@ -91,6 +91,11 @@ public actor AccountRepository {
                 windows: result.windows,
                 resetCredits: result.resetCredits,
                 resetCreditCount: result.resetCreditCount,
+                // Carried through rather than dropped. The client goes to the trouble of reading
+                // this off the one source that reports it; losing it here would leave the redeem
+                // control gated on the held count, which is the exact bug that reading it was
+                // meant to fix.
+                applicableResetCreditCount: result.applicableResetCreditCount,
                 errorMessage: nil)
             if let plan = result.plan, plan != stored.account.plan {
                 stored.account = stored.account.withPlan(plan)
@@ -110,6 +115,7 @@ public actor AccountRepository {
                 windows: previous?.windows ?? [],
                 resetCredits: previous?.resetCredits ?? [],
                 resetCreditCount: previous?.resetCreditCount,
+                applicableResetCreditCount: previous?.applicableResetCreditCount,
                 errorMessage: message)
             records[accountID] = stored
         }

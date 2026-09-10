@@ -256,6 +256,83 @@ final class UsageLimitsContainerTests: XCTestCase {
         }
     }
 
+    // MARK: - Spending a reset credit
+
+    /// A Codex payload holding two credits, of which the provider says NONE applies right now.
+    private let creditsHeldButNoneApplicable = """
+    { "plan_type": "plus",
+      "rate_limit": { "allowed": false, "limit_reached": true,
+        "primary_window": { "used_percent": 100, "limit_window_seconds": 18000,
+                            "reset_after_seconds": 3600, "reset_at": 1757003600 } },
+      "rate_limit_reset_credits": { "available_count": 2, "applicable_available_count": 0 } }
+    """
+
+    /// The same account with one credit the provider says can be applied.
+    private let creditApplicable = """
+    { "plan_type": "plus",
+      "rate_limit": { "allowed": false, "limit_reached": true,
+        "primary_window": { "used_percent": 100, "limit_window_seconds": 18000,
+                            "reset_after_seconds": 3600, "reset_at": 1757003600 } },
+      "rate_limit_reset_credits": { "available_count": 2, "applicable_available_count": 1 } }
+    """
+
+    func testTheApplicableCountSurvivesIntoTheSnapshot() async throws {
+        // The client reads this off the one source that reports it. Losing it at the model
+        // boundary leaves the redeem control gated on the HELD count, which is the exact bug
+        // that reading it was meant to fix.
+        let (subject, _) = container([
+            (200, creditsHeldButNoneApplicable), (200, #"{"credits": [], "available_count": 2}"#),
+        ])
+        try await subject.add(account())
+
+        let usage = try await subject.refresh()
+
+        XCTAssertEqual(usage.first?.snapshot?.heldResetCredits, 2)
+        XCTAssertEqual(usage.first?.snapshot?.spendableResetCredits, 0)
+    }
+
+    func testCreditsHeldButNotApplicableCannotBeSpent() async throws {
+        // Two credits in the balance and none that applies. Offering the spend would take one
+        // against a refusal the user watches their balance absorb.
+        let (subject, _) = container([
+            (200, creditsHeldButNoneApplicable), (200, #"{"credits": [], "available_count": 2}"#),
+        ])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        do {
+            _ = try await subject.redeemResetCredit(accountID: "a")
+            XCTFail("a credit that does not apply must not be spent")
+        } catch let error as UsageLimitsContainer.ResetCreditError {
+            XCTAssertEqual(error, .noneApplicable)
+        }
+    }
+
+    func testAnApplicableCreditIsSpentAndTheAccountRefreshed() async throws {
+        let (subject, _) = container([
+            (200, creditApplicable), (200, #"{"credits": [], "available_count": 2}"#),
+            (200, "{}"),                                        // the redemption itself
+            (200, creditApplicable), (200, #"{"credits": [], "available_count": 1}"#),
+        ])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        let usage = try await subject.redeemResetCredit(accountID: "a")
+
+        XCTAssertEqual(usage.first?.snapshot?.status, .ok)
+    }
+
+    func testAnUnknownAccountCannotSpendAnything() async throws {
+        let (subject, _) = container([])
+
+        do {
+            _ = try await subject.redeemResetCredit(accountID: "ghost")
+            XCTFail("there is no such account")
+        } catch let error as UsageLimitsContainer.ResetCreditError {
+            XCTAssertEqual(error, .notAvailable)
+        }
+    }
+
     // MARK: - Notifications
 
     /// A payload whose 5-hour window is nearly spent, so the evaluator has something to say.

@@ -118,11 +118,12 @@ enum ProviderHTTP {
         method: String = "GET",
         headers: [String: String] = [:],
         body: Data? = nil,
-        endpoint: String
+        endpoint: String,
+        retries: Int? = nil
     ) async throws -> HTTPResponse {
         do {
             let response = try await client.request(
-                url: url, method: method, headers: headers, body: body)
+                url: url, method: method, headers: headers, body: body, retries: retries)
             try translate(status: response.status, endpoint: endpoint)
             return response
         } catch let error as HTTPError {
@@ -230,6 +231,46 @@ public struct CodexClient: SyncProvider, Sendable {
             applicableResetCreditCount: CodexUsageParser.applicableCreditCount(embedded),
             plan: plan
         )
+    }
+
+    /// Spends one reset credit, resetting the account's rate limit immediately.
+    ///
+    /// The one thing this app does that changes anything at a provider, so it is called only
+    /// from an explicit, confirmed action and never as part of a refresh.
+    ///
+    /// `redeem_request_id` is a fresh UUID per attempt, which is what makes the call idempotent
+    /// on the provider's side: a request replayed with the same id will not spend a second
+    /// credit. For the same reason the request is sent with no retries — a network error after
+    /// the server has already committed the spend is indistinguishable from one before it, and
+    /// a retry would risk burning a second credit to avoid reporting a first one that worked.
+    public func redeemResetCredit(
+        credentials: OAuthCredentials,
+        attributes: [String: String],
+        requestID: String = UUID().uuidString
+    ) async throws {
+        var headers: [String: String] = [
+            "Authorization": "Bearer \(credentials.accessToken)",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": ProviderEndpoints.Codex.userAgent,
+        ]
+        if let accountID = attributes["chatgpt_account_id"], !accountID.isEmpty {
+            headers[ProviderEndpoints.Codex.accountIDHeader] = accountID
+        }
+        // Only the reset-credit endpoints take these; the usage endpoint does not.
+        headers.merge(ProviderEndpoints.Codex.resetCreditHeaders) { current, _ in current }
+
+        let body = try JSONSerialization.data(
+            withJSONObject: ["redeem_request_id": requestID], options: [])
+
+        _ = try await ProviderHTTP.request(
+            httpClient,
+            url: ProviderEndpoints.Codex.resetCreditsConsumeURL,
+            method: "POST",
+            headers: headers,
+            body: body,
+            endpoint: "codex redeem",
+            retries: 0)
     }
 
     /// Fetches reset credits from their dedicated endpoint, falling back to the copy embedded

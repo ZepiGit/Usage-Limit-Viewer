@@ -18,6 +18,7 @@ public actor UsageLimitsContainer {
     public let repository: AccountRepository
     private let credentials: any CredentialStore
     private let engine: SyncEngine
+    private let http: UsageHTTPClient
     private let logins: [ProviderID: any DeviceLoginProvider]
     private let settingsStore: SettingsStore
     private let ledger: NotificationLedger
@@ -39,6 +40,7 @@ public actor UsageLimitsContainer {
         let http = UsageHTTPClient(transport: transport, now: now)
 
         self.containerDirectory = directory
+        self.http = http
         self.repository = repository
         self.credentials = credentials
         self.settingsStore = SettingsStore(directory: directory)
@@ -147,6 +149,58 @@ public actor UsageLimitsContainer {
 
         try await add(account)
         return account
+    }
+
+    // MARK: - Spending a reset credit
+
+    /// Spends one Codex reset credit for an account, then refreshes so the screen shows what it
+    /// bought.
+    ///
+    /// The only thing this app does that changes state at a provider. It is therefore never part
+    /// of a sync, never retried, and gated here as well as in the UI: the caller's own check can
+    /// be stale by the time the tap lands, and a spend the provider refuses still looks to the
+    /// user like a credit gone.
+    ///
+    /// The gate is the APPLICABLE count, not the held one. An account can hold three credits and
+    /// be able to apply none of them.
+    @discardableResult
+    public func redeemResetCredit(accountID: String) async throws -> [AccountUsage] {
+        guard let usage = await repository.usage().first(where: { $0.account.id == accountID }),
+              usage.account.provider == .codex
+        else {
+            throw ResetCreditError.notAvailable
+        }
+        guard (usage.snapshot?.spendableResetCredits ?? 0) > 0 else {
+            throw ResetCreditError.noneApplicable
+        }
+        guard let stored = try await credentials.load(
+            reference: usage.account.credentialReference)
+        else {
+            throw ResetCreditError.notAvailable
+        }
+
+        try await CodexClient(httpClient: http, now: now)
+            .redeemResetCredit(credentials: stored, attributes: usage.account.attributes)
+
+        // Refreshed straight away, because the whole point of the spend is the new limit — and
+        // because the credit count the screen is showing is now certainly wrong.
+        return try await refresh()
+    }
+
+    /// Why a redemption did not happen. Deliberately not `ProviderError`: none of these is a
+    /// provider fault, and all three are things the user can be told plainly.
+    public enum ResetCreditError: Error, LocalizedError, Equatable {
+        case notAvailable
+        case noneApplicable
+
+        public var errorDescription: String? {
+            switch self {
+            case .notAvailable:
+                return "This account cannot use reset credits."
+            case .noneApplicable:
+                return "No reset credit can be applied to this limit right now."
+            }
+        }
     }
 
     // MARK: - Settings
