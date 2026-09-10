@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
+
 /// Builds the object graph, and owns the one refresh path.
 ///
 /// In the kit rather than in the app for the same reason as everything else here: it can be
@@ -110,5 +114,16 @@ public actor UsageLimitsContainer {
         try? GlanceSnapshotCodec.write(
             GlanceModel.build(usage, now: now(), scope: .mostCritical),
             toDirectory: containerDirectory)
+
+        // Writing the file is only half of it. A widget extension does not watch the container,
+        // and WidgetKit reloads a timeline on its own budget — hours apart when nothing asks it
+        // otherwise. Without this the tile goes on showing whatever it last rendered however
+        // often the app syncs, which is the failure the whole snapshot mechanism exists to
+        // avoid. The reload is a request, not a command: WidgetKit still decides when, and
+        // throttles an app that asks too often — which is why it is asked exactly once per
+        // publish rather than per account.
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
     }
 }
