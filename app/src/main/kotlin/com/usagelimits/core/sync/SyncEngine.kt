@@ -8,6 +8,8 @@ import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.providers.ProviderRegistry
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -217,15 +219,32 @@ class SyncEngine(
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
 
-            val refreshed = provider.refresh(latest)
-            // The account can be removed while the refresh round-trip is in flight. Saving
-            // unconditionally would put a live, freshly rotated refresh token back into the
-            // store under a reference no account row names any more — nothing reads it and
-            // nothing ever deletes it, so it would outlive the account the user removed.
-            if (credentialStore.load(reference) != null) {
-                credentialStore.save(reference, refreshed)
+            // The exchange and the write that follows it are one indivisible step.
+            //
+            // A rotating provider invalidates `latest` the moment it answers. If the worker is
+            // cancelled while the response is in flight — a lost constraint, doze, the system
+            // reclaiming it — the result can be discarded on the way out of the IO dispatcher,
+            // or the coroutine can stop between receiving it and writing it. Either way the
+            // provider has moved on and the store still holds a pair that is now dead: the
+            // account is signed out, with nothing anywhere recording why, and the user's only
+            // route back is to notice and reconnect it by hand.
+            //
+            // Cancellation is honoured everywhere else, and is still honoured here — just
+            // AFTER the pair is safe. `withContext(NonCancellable)` covers only the exchange
+            // and its persistence, so a cancelled sync stops at the next suspension point
+            // rather than at the one place where stopping costs the account.
+            withContext(NonCancellable) {
+                val refreshed = provider.refresh(latest)
+                // The account can be removed while the refresh round-trip is in flight. Saving
+                // unconditionally would put a live, freshly rotated refresh token back into
+                // the store under a reference no account row names any more — nothing reads it
+                // and nothing ever deletes it, so it would outlive the account the user
+                // removed.
+                if (credentialStore.load(reference) != null) {
+                    credentialStore.save(reference, refreshed)
+                }
+                refreshed
             }
-            refreshed
         }
     }
 }
