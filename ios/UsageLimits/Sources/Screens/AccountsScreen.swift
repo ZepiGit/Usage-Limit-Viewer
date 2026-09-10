@@ -36,6 +36,7 @@ private struct AccountSummaryCard: View {
 
     @EnvironmentObject private var store: UsageStore
     @State private var isConfirmingRedeem = false
+    @State private var isConfirmingRemove = false
 
     let usage: AccountUsage
     let now: Date
@@ -57,6 +58,39 @@ private struct AccountSummaryCard: View {
                 }
                 Spacer()
                 StatusPill(severity: snapshot?.severity(at: now, staleAfter: store.settings.staleAfter) ?? .stale)
+                // Disconnecting has been possible in the container, and tested there, since
+                // before anything on screen could ask for it — so a user could connect an
+                // account and then had no way at all to disconnect it. Deleting the app was
+                // the only route, and keychain items outlive that, so it was not even a good
+                // one. A menu rather than a swipe: these cards are not a plain list, and an
+                // action this consequential should not be discoverable only by accident.
+                Menu {
+                    Button("Disconnect account", role: .destructive) {
+                        isConfirmingRemove = true
+                    }
+                    .disabled(store.isRemoving)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(UsageColors.textSecondary)
+                }
+                .accessibilityLabel("Account actions")
+            }
+            // The wording promises only what this app can actually do. Removing an account
+            // deletes what THIS DEVICE stores; it does not revoke the grant at the provider,
+            // and saying otherwise would leave someone believing they had cut off access they
+            // had not.
+            .confirmationDialog(
+                "Disconnect \(usage.account.label)?",
+                isPresented: $isConfirmingRemove,
+                titleVisibility: .visible
+            ) {
+                Button("Disconnect", role: .destructive) {
+                    Task { await store.removeAccount(accountID: usage.account.id) }
+                }
+                .disabled(store.isRemoving)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes the account from Usage Limits and deletes the sign-in stored on this device. It does not revoke access at the provider — do that in your account settings there.")
             }
 
             if let message = snapshot?.errorMessage {

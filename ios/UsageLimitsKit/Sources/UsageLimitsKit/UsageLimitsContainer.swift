@@ -227,14 +227,23 @@ public actor UsageLimitsContainer {
         guard (usage.snapshot?.spendableResetCredits ?? 0) > 0 else {
             throw ResetCreditError.noneApplicable
         }
-        guard let stored = try await credentials.load(
-            reference: usage.account.credentialReference)
-        else {
+        // Renewed if need be, through the same coordinator a sync uses, rather than sent as
+        // stored. Loading and sending straight away meant that leaving the app open past the
+        // access token's expiry made a perfectly legitimate redemption fail with 401 — with a
+        // usable refresh token in the store the whole time. The user was told their credit
+        // could not be spent for a reason entirely inside this app, and a spend is exactly the
+        // action where that is least acceptable.
+        let usable: OAuthCredentials
+        do {
+            usable = try await engine.usableCredentials(
+                reference: usage.account.credentialReference,
+                provider: usage.account.provider.rawValue)
+        } catch {
             throw ResetCreditError.notAvailable
         }
 
         try await CodexClient(httpClient: http, now: now)
-            .redeemResetCredit(credentials: stored, attributes: usage.account.attributes)
+            .redeemResetCredit(credentials: usable, attributes: usage.account.attributes)
 
         // Refreshed straight away, because the whole point of the spend is the new limit — and
         // because the credit count the screen is showing is now certainly wrong.

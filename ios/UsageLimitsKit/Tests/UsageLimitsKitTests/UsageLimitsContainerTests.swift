@@ -11,6 +11,19 @@ import FoundationNetworking
 /// single unit test can see actually live: a credential deleted in the wrong order, a widget
 /// snapshot that stops being written when the account list empties, a refresh that returns the
 /// figures from before the sync it just ran. None of those is visible from inside the parts.
+/// A clock a test can move, for the cases that are about time passing rather than a fixed
+/// instant. `Sendable` by lock rather than by actor so a `@Sendable` now-closure can read it.
+private final class MovableClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+    init(_ start: Date) { current = start }
+    var now: Date { lock.lock(); defer { lock.unlock() }; return current }
+    func advance(by seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        current = current.addingTimeInterval(seconds)
+    }
+}
+
 final class UsageLimitsContainerTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_757_000_000)
@@ -320,6 +333,47 @@ final class UsageLimitsContainerTests: XCTestCase {
         let usage = try await subject.redeemResetCredit(accountID: "a")
 
         XCTAssertEqual(usage.first?.snapshot?.status, .ok)
+    }
+
+    func testAnExpiredTokenIsRenewedBeforeTheCreditIsSpent() async throws {
+        // Redemption loaded the stored pair and sent it as-is. Leave the app open past the
+        // access token's expiry, tap redeem, and it failed with 401 while a perfectly usable
+        // refresh token sat in the store — the user told their credit could not be spent for
+        // a reason entirely inside this app, on the one action where that is least acceptable.
+        //
+        // Which is why the clock moves here rather than the credential starting expired: the
+        // token has to be good enough for the first sync and stale by the time the button is
+        // pressed, and that is precisely an app left open for an hour.
+        let clock = MovableClock(now)
+        let expiring = OAuthCredentials(
+            accessToken: "first-access",
+            refreshToken: "live-refresh",
+            expiresAt: now.addingTimeInterval(1800))
+        let store = InMemoryCredentialStore(credentials: ["ref-a": expiring])
+        let transport = Transport([
+            (200, creditApplicable), (200, #"{"credits": [], "available_count": 2}"#),
+            (200, #"{"access_token":"fresh-access","refresh_token":"live-refresh","expires_in":3600}"#),
+            (200, "{}"),                                        // the redemption itself
+            (200, creditApplicable), (200, #"{"credits": [], "available_count": 1}"#),
+        ])
+        let subject = UsageLimitsContainer(
+            directory: directory,
+            credentials: store,
+            transport: transport,
+            now: { clock.now })
+
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        // An hour passes with the app open. The stored access token is now past its expiry.
+        clock.advance(by: 3600)
+
+        let usage = try await subject.redeemResetCredit(accountID: "a")
+
+        XCTAssertEqual(usage.first?.snapshot?.status, .ok)
+        let stored = try await store.load(reference: "ref-a")
+        XCTAssertEqual(stored?.accessToken, "fresh-access",
+                       "the renewed pair must be the one that was persisted and sent")
     }
 
     func testAnUnknownAccountCannotSpendAnything() async throws {

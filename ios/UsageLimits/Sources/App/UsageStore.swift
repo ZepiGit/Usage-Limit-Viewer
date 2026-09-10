@@ -204,6 +204,35 @@ final class UsageStore: ObservableObject {
     }
 
 
+    /// Disconnects an account and deletes the credentials this device holds for it.
+    ///
+    /// The container has done this, and been tested doing it, since before there was a screen
+    /// that could ask — which meant a user could connect an account and then had no way to
+    /// disconnect it. Deleting the app was the only route, and that leaves keychain items
+    /// behind, so it was not even a good one.
+    ///
+    /// Reported through `lastError` rather than thrown: the caller is a button, and an account
+    /// that could not be removed has to stay on screen saying so, so the user can try again.
+    /// This removes what is stored HERE; it is not an OAuth revocation at the provider, and the
+    /// confirmation text says so rather than promising something this app cannot do.
+    @Published private(set) var isRemoving = false
+
+    func removeAccount(accountID: String) async {
+        guard let container, !isRemoving else { return }
+        isRemoving = true
+        defer { isRemoving = false }
+        do {
+            try await container.remove(id: accountID)
+            accounts = await container.usage()
+            lastError = nil
+        } catch {
+            // Deliberately not optimistic: the row stays until the removal actually succeeded,
+            // because a list that drops an account whose credentials are still on the device
+            // tells the user something untrue.
+            lastError = error.localizedDescription
+        }
+    }
+
     /// The one container this process uses, or nil when the App Group entitlement is missing
     /// and there is nowhere shared to write.
     ///
