@@ -55,6 +55,26 @@ final class UsageStore: ObservableObject {
             .sorted { ($0.1.resetAt ?? .distantFuture) < ($1.1.resetAt ?? .distantFuture) }
     }
 
+    /// Hands the widget what the app is showing.
+    ///
+    /// A widget extension is a separate process with no access to the app's data, so this file
+    /// is the entirety of what the home screen knows. It is written from the same
+    /// `GlanceModel` output the app renders, rather than from anything the widget recomputes —
+    /// one derivation, one answer, on both surfaces.
+    private func publishToWidget() {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Self.appGroupID) else { return }
+
+        // Best-effort. Failing to update the widget must never fail the refresh the user is
+        // watching; the tile keeps its previous contents, which is what it would show anyway.
+        try? GlanceSnapshotCodec.write(
+            GlanceModel.build(accounts, now: now, scope: .mostCritical),
+            toDirectory: container)
+    }
+
+    /// Shared with the widget extension, which names the same group.
+    static let appGroupID = "group.com.usagelimits.shared"
+
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -65,5 +85,6 @@ final class UsageStore: ObservableObject {
         // trusted about how much quota is left.
         lastError = nil
         now = Date()
+        publishToWidget()
     }
 }
