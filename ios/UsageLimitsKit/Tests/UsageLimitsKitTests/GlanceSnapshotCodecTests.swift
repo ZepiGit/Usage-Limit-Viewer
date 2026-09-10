@@ -102,6 +102,84 @@ final class GlanceSnapshotCodecTests: XCTestCase {
 
         XCTAssertEqual(GlanceSnapshotCodec.read(fromDirectory: directory), .empty)
     }
+
+    // MARK: - Which nothing it is
+
+    private func scratchDirectory() throws -> URL {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("glance-load-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    func testAReadableEmptySnapshotIsEmptyAndNotLocked() throws {
+        // The regression this whole enum exists for. A tile that had only "does the file
+        // exist" to go on called a perfectly readable empty snapshot a locked device, and
+        // told the user to unlock a phone that was already unlocked. An empty snapshot is
+        // the ORDINARY state as soon as the app refreshes with no accounts connected.
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try GlanceSnapshotCodec.write(.empty, toDirectory: directory)
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .empty)
+    }
+
+    func testAMissingFileIsMissingRatherThanLocked() throws {
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .missing)
+    }
+
+    func testAFileWithAccountsLoads() throws {
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try GlanceSnapshotCodec.write(snapshot(), toDirectory: directory)
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .loaded(snapshot()))
+    }
+
+    func testUndecodableContentIsCorruptRatherThanEmpty() throws {
+        // A build whose format this one does not understand, or a truncated write. Reporting
+        // it as "no accounts yet" invites the user to add accounts they already have.
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{\"nope\":1}".utf8).write(
+            to: directory.appendingPathComponent(GlanceSnapshotCodec.fileName))
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .corrupt)
+    }
+
+    func testAZeroByteFileIsCorruptRatherThanEmpty() throws {
+        // The atomic writer caught mid-replace. Zero bytes is not a decodable empty snapshot,
+        // and calling it one would render an all-clear built from nothing.
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data().write(to: directory.appendingPathComponent(GlanceSnapshotCodec.fileName))
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .corrupt)
+    }
+
+    func testAnUnopenableFileIsUnreadableRatherThanMissing() throws {
+        // The only case that unlocking actually fixes. A directory standing where the file
+        // should be reproduces "exists, cannot be read as data" without needing a device.
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent(GlanceSnapshotCodec.fileName),
+            withIntermediateDirectories: true)
+
+        XCTAssertEqual(GlanceSnapshotCodec.load(fromDirectory: directory), .unreadable)
+    }
+
+    func testEveryNonLoadedOutcomeStillRendersTheEmptySnapshot() throws {
+        // Whatever went wrong, a widget must still have something to draw, and it must never
+        // be an all-clear: `.empty` carries `.stale`.
+        for outcome in [GlanceSnapshotCodec.Load.empty, .missing, .unreadable, .corrupt] {
+            XCTAssertEqual(outcome.snapshot, .empty)
+            XCTAssertEqual(outcome.snapshot.overallSeverity, .stale)
+        }
+    }
 }
 
 private extension GlanceSnapshotCodec {

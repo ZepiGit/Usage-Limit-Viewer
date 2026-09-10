@@ -161,35 +161,15 @@ private enum SnapshotCache {
     /// snapshot, which renders as stale rather than as an all-clear. A widget cannot open a
     /// dialogue or ask for a retry, so the pessimistic reading is the only honest one.
     static func load() -> GlanceSnapshot {
-        guard let containerURL else { return .empty }
-        return GlanceSnapshotCodec.read(fromDirectory: containerURL)
+        loadResult().snapshot
     }
 
-    /// Why there is nothing to show — which is not always the same reason.
-    ///
-    /// The container is written with `completeFileProtectionUntilFirstUserAuthentication`,
-    /// so between a reboot and the first unlock the file is present and unreadable. That is
-    /// deliberate. The snapshot carries no tokens, but it does carry which services this
-    /// person pays for and how hard they lean on them, and dropping to `noFileProtection` to
-    /// win a tile back in that one window trades a real privacy property for a narrow
-    /// convenience. What was NOT acceptable is what the tile said meanwhile: "No accounts
-    /// yet", to someone with four connected accounts.
-    ///
-    /// `fileExists` answers even when the contents cannot be opened, so the two cases are
-    /// exactly distinguishable and each can be told the truth.
-    static func emptyReason() -> EmptyReason {
-        guard let containerURL else { return .noAccounts }
-        let file = containerURL.appendingPathComponent(GlanceSnapshotCodec.fileName)
-        return FileManager.default.fileExists(atPath: file.path) ? .locked : .noAccounts
+    /// The read outcome, so the tile can say which of the several nothings it got.
+    static func loadResult() -> GlanceSnapshotCodec.Load {
+        guard let containerURL else { return .missing }
+        return GlanceSnapshotCodec.load(fromDirectory: containerURL)
     }
-}
 
-/// The two ways a tile can have nothing to render.
-private enum EmptyReason {
-    /// No snapshot has ever been written: the app has not run, or has no accounts.
-    case noAccounts
-    /// A snapshot is there, and this process cannot open it until the device is unlocked.
-    case locked
 }
 
 // MARK: - Snapshot lead
@@ -325,25 +305,50 @@ private struct QuotaBar: View {
 
 /// What both tiles show when there is nothing to show.
 ///
-/// Deliberately not a blank tile, and deliberately not one message for every cause. An
-/// empty snapshot means either that nothing has been written yet or that the file cannot be
-/// read until the device is unlocked, and telling the second person "No accounts yet" — with
-/// four accounts connected — reads as data loss. Neither case means "you have quota left".
+/// Deliberately not a blank tile, and deliberately not one message for every cause.
+///
+/// A tile with nothing on it has several quite different causes, and each wants a different
+/// sentence. The message is taken from the read outcome the codec reports, never inferred
+/// here: an earlier version guessed from whether the file existed, and so told anyone with a
+/// readable but empty snapshot — the ordinary state with no accounts connected — that their
+/// device was locked, which unlocking could not fix. None of these says "you have quota left".
 private struct WidgetEmptyStateView: View {
 
-    var reason: EmptyReason = SnapshotCache.emptyReason()
+    var outcome: GlanceSnapshotCodec.Load = SnapshotCache.loadResult()
+
+    private var icon: String {
+        switch outcome {
+        case .unreadable: return "lock"
+        case .corrupt: return "exclamationmark.triangle"
+        default: return "gauge.with.needle"
+        }
+    }
+
+    private var title: String {
+        switch outcome {
+        case .unreadable: return "Locked"
+        case .corrupt: return "Can't read usage"
+        default: return "No accounts yet"
+        }
+    }
+
+    private var detail: String {
+        switch outcome {
+        case .unreadable: return "Unlock this device to see how much quota is left"
+        case .corrupt: return "Open UsageLimits to rebuild the data"
+        default: return "Open UsageLimits to see how much quota is left"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: reason == .locked ? "lock" : "gauge.with.needle")
+            Image(systemName: icon)
                 .font(.title3)
                 .foregroundColor(UsageColors.textSecondary)
-            Text(reason == .locked ? "Locked" : "No accounts yet")
+            Text(title)
                 .font(.headline)
                 .foregroundColor(UsageColors.textPrimary)
-            Text(reason == .locked
-                 ? "Unlock this device to see how much quota is left"
-                 : "Open UsageLimits to see how much quota is left")
+            Text(detail)
                 .font(.caption)
                 .foregroundColor(UsageColors.textSecondary)
         }
