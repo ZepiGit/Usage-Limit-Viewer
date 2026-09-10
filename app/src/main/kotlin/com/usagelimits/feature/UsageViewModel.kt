@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.di.AppContainer
+import com.usagelimits.core.sync.publishAfterSync
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
@@ -169,7 +170,7 @@ class UsageViewModel(
                     failures == outcomes.size -> "Refresh failed"
                     else -> "$failures of ${outcomes.size} accounts failed to refresh"
                 }
-                WidgetUpdater.refreshAll(appContext)
+                container.publishAfterSync(appContext)
             } finally {
                 refreshing.value = false
             }
@@ -181,7 +182,7 @@ class UsageViewModel(
             refreshing.value = true
             try {
                 container.syncEngine.syncAccount(accountId)
-                WidgetUpdater.refreshAll(appContext)
+                container.publishAfterSync(appContext)
             } finally {
                 refreshing.value = false
             }
@@ -211,7 +212,7 @@ class UsageViewModel(
                 // message must not say "applied" over a card still showing the pre-spend quota
                 // and an unspent-looking credit, or the user will try again.
                 val outcome = container.syncEngine.syncAccount(account)
-                WidgetUpdater.refreshAll(appContext)
+                container.publishAfterSync(appContext)
                 transientMessage.value = if (outcome.success) {
                     "Limit reset applied"
                 } else {
