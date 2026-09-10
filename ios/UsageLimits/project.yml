@@ -38,6 +38,13 @@ targets:
           - Widget/**
     dependencies:
       - package: UsageLimitsKit
+      # The widget must be EMBEDDED, not merely built. Listing both targets in the scheme
+      # compiles the extension and stops there: it produces a .appex next to the app rather
+      # than inside it, so the installed bundle has no widget at all and the tile never
+      # appears in the system picker. Nothing catches that — both targets compile, every test
+      # passes, and the feature is simply absent from the artefact.
+      - target: UsageLimitsWidget
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app
@@ -86,8 +93,17 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.widget
-        INFOPLIST_KEY_CFBundleDisplayName: Usage Limits
-        INFOPLIST_KEY_NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    # Written out rather than left to INFOPLIST_KEY_NSExtensionPointIdentifier. That build
+    # setting only reaches the bundle when Xcode is the one generating the Info.plist, and what
+    # an extension actually needs is a nested NSExtension dictionary — a shape no
+    # INFOPLIST_KEY_* spelling can express. An extension whose plist lacks it is not recognised
+    # as a widget provider, which looks exactly like a widget that was never installed.
+    info:
+      path: UsageLimitsWidget-Info.plist
+      properties:
+        CFBundleDisplayName: Usage Limits
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
     entitlements:
       path: UsageLimitsWidget.entitlements
       properties:
