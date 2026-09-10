@@ -177,4 +177,31 @@ final class LoopbackLoginTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Reading a callback the browser handed back
+
+    func testTheChallengeReadsItsOwnCallback() throws {
+        // The interception path: the sign-in session may complete with the callback URL rather
+        // than the redirect ever being issued. The challenge does the reading, so the caller
+        // never handles the state and cannot get the comparison wrong.
+        let (subject, _) = login(.claude)
+        let challenge = try subject.begin()
+        let state = challenge.url.absoluteString
+            .components(separatedBy: "state=")[1]
+            .components(separatedBy: "&")[0]
+
+        let callback = try XCTUnwrap(
+            URL(string: "http://localhost:54545/callback?code=the-code&state=\(state)"))
+
+        XCTAssertEqual(try challenge.code(fromCallback: callback), "the-code")
+    }
+
+    func testACallbackFromAnotherAttemptIsRefused() throws {
+        let (subject, _) = login(.claude)
+        let challenge = try subject.begin()
+        let callback = try XCTUnwrap(
+            URL(string: "http://localhost:54545/callback?code=the-code&state=someone-elses"))
+
+        XCTAssertThrowsError(try challenge.code(fromCallback: callback))
+    }
 }

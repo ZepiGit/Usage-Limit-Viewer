@@ -26,6 +26,16 @@ public struct LoopbackChallenge: Sendable {
     let path: String
     let redirectURI: String
 
+    /// Reads the authorisation code out of a callback URL, checking it belongs to THIS attempt.
+    ///
+    /// Exposed as a method rather than by making `state` public, so a caller cannot compare the
+    /// state itself — and cannot get the comparison wrong. The check is the same one the
+    /// listener applies, through the same function: constant time, and before anything else in
+    /// the URL is read.
+    public func code(fromCallback url: URL) throws -> String {
+        try OAuthFlows.code(from: url, expectedState: state)
+    }
+
     init(
         url: URL,
         port: UInt16,
