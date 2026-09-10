@@ -845,4 +845,80 @@ class NotificationEvaluatorTest {
             spoken,
         )
     }
+
+    // region parity with iOS
+
+    @Test
+    fun `a second entry for one account sees what the first decided`() {
+        // Nothing enforces that one evaluation sees an account only once, and reading the
+        // ORIGINAL state map for each entry meant a second entry ignored what the first had
+        // just decided. A recovery at t1 followed by a fresh dip at t2, in one pass, therefore
+        // re-emitted the episode the recovery had ended — which the ledger suppresses, so the
+        // user hears nothing about the dip. iOS carried the state forward and disagreed.
+        // Both entries must be NEWER than the state carried in, or the freshness guard skips
+        // them as already processed and the recovery never happens — which is what my first
+        // version of this test did, and it failed for that reason rather than the real one.
+        val first = run(listOf(usage(remaining = 15.0)), emptyMap())
+        val carriedIn = first.stateMap()
+
+        val recovered = usage(remaining = 50.0, fetchedAt = now + 1)
+        val dipped = usage(remaining = 15.0, fetchedAt = now + 2)
+
+        val outcome = run(listOf(recovered, dipped), carriedIn, nowMs = now + 2)
+
+        val episodes = outcome.keys().mapNotNull { it.split("|").getOrNull(2)?.toIntOrNull() }
+        assertTrue(
+            "the dip must open a NEW episode, not reuse the one the recovery ended: ${outcome.keys()}",
+            episodes.any { it > carriedIn.values.first().lowQuotaEpisode },
+        )
+    }
+
+    @Test
+    fun `a status that is not available in any case is not available`() {
+        // Kotlin asked `equals(ignoreCase = true)`, which folds a dotless i onto i; Swift's
+        // `lowercased()` does not. A provider sending "avaılable" was therefore spendable on
+        // Android and not on iOS. Both take the stricter reading now, and the same one.
+        val dotless = ResetCredit("c1", now - 1000, now + 3_600_000, "ava\u0131lable")
+        val snapshot = UsageSnapshot(
+            accountId = "acct",
+            fetchedAt = now,
+            status = SnapshotStatus.OK,
+            windows = emptyList(),
+            resetCredits = listOf(dotless),
+        )
+
+        assertEquals(0, snapshot.spendableResetCreditsAt(now))
+        assertEquals(0, snapshot.heldResetCredits)
+    }
+
+    @Test
+    fun `two spellings of one label are one window`() {
+        // Swift compares strings by canonical equivalence and Kotlin does not, so "Café"
+        // written as e-acute and as e-plus-combining-accent was one identity on iOS and two on
+        // Android — and the platforms then disagreed about episodes for the same account.
+        val precomposed = "Caf\u00e9"
+        val decomposed = "Cafe\u0301"
+        val windows = listOf(
+            UsageWindow("w1", precomposed, WindowCategory.OTHER, 40.0, null, null, false),
+            UsageWindow("w2", decomposed, WindowCategory.OTHER, 95.0, null, null, false),
+        )
+        val outcome = run(
+            listOf(
+                AccountUsage(
+                    account = account("acct"),
+                    snapshot = UsageSnapshot("acct", now, SnapshotStatus.OK, windows),
+                ),
+            ),
+            emptyMap(),
+        )
+
+        val identities = outcome.keys().map { it.split("|").getOrNull(1) }.toSet()
+        assertEquals(
+            "the two spellings must be recognised as one label, and so disambiguated by id: $identities",
+            identities.size,
+            identities.filterNotNull().count { it.contains("#") },
+        )
+    }
+
+    // endregion
 }

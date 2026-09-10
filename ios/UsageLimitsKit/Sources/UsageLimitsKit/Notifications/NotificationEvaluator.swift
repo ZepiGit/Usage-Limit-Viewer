@@ -458,11 +458,11 @@ public enum NotificationEvaluator {
     private static func windowKeys(_ windows: [UsageWindow]) -> [String: String] {
         var counts: [String: Int] = [:]
         for window in windows {
-            counts["\(window.category.rawValue):\(window.label)", default: 0] += 1
+            counts["\(window.category.rawValue):\(window.label.canonical)", default: 0] += 1
         }
         var keys: [String: String] = [:]
         for window in windows {
-            let base = "\(window.category.rawValue):\(window.label)"
+            let base = "\(window.category.rawValue):\(window.label.canonical)"
             keys[window.id] = counts[base] == 1 ? base : "\(base)#\(window.id)"
         }
         return keys
@@ -551,7 +551,7 @@ public enum NotificationEvaluator {
             guard let expiresAt = credit.expiresAt else { return false }
             let remaining = expiresAt.timeIntervalSince(now)
             guard remaining > 0, remaining <= lead else { return false }
-            guard credit.status.lowercased() == "available" else { return false }
+            guard credit.status.meansAvailable else { return false }
             if let grantedAt = credit.grantedAt, grantedAt > now { return false }
             return true
         }

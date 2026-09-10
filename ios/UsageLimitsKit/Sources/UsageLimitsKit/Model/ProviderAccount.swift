@@ -161,7 +161,7 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     /// consumed credit and nothing else that they held one to spend.
     public var heldResetCredits: Int {
         resetCreditCount
-            ?? resetCredits.filter { $0.status.lowercased() == "available" }.count
+            ?? resetCredits.filter { $0.status.meansAvailable }.count
     }
 
     /// How many can be spent right now — what a redeem control is gated on.
@@ -184,7 +184,7 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         if let applicable = applicableResetCreditCount { return applicable }
         if let count = resetCreditCount, resetCredits.isEmpty { return count }
         return resetCredits.filter {
-            $0.status.lowercased() == "available" && ($0.expiresAt.map { $0 > now } ?? true)
+            $0.status.meansAvailable && ($0.expiresAt.map { $0 > now } ?? true)
         }.count
     }
 
@@ -220,4 +220,27 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     public func isStale(at now: Date, staleAfter: TimeInterval = Severity.staleAfter) -> Bool {
         now.timeIntervalSince(fetchedAt) >= staleAfter
     }
+}
+
+extension String {
+    /// Whether a provider's status string means the credit can be spent.
+    ///
+    /// Trimmed and lowercased, matching Kotlin's `meansAvailable` exactly. Kotlin used to ask
+    /// `equals(ignoreCase = true)`, which folds a dotless "\u{0131}" onto "i" where
+    /// `lowercased()` does not — so "ava\u{0131}lable" counted as available on one platform
+    /// and not the other. One rule now, and the stricter one: a string that is not
+    /// "available" in some case is not available.
+    var meansAvailable: Bool {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "available"
+    }
+}
+
+extension String {
+    /// Composed form, matching Kotlin's `canonical()`.
+    ///
+    /// Swift already compares strings by canonical equivalence and Kotlin does not, so
+    /// normalising is a no-op for comparison here — it is done anyway so the KEY BYTES are the
+    /// same on both platforms. A key is written to a ledger and read back; two spellings of
+    /// one label must not produce two ledger entries on one platform and one on the other.
+    var canonical: String { precomposedStringWithCanonicalMapping }
 }

@@ -2,6 +2,7 @@ package com.usagelimits.core.notifications
 
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.model.Severity
+import com.usagelimits.core.model.meansAvailable
 import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.model.UsageWindow
@@ -108,7 +109,17 @@ object NotificationEvaluator {
 
         for (usage in accounts) {
             val id = usage.account.localId
-            val previous = states[id] ?: AccountState(accountId = id)
+            // Read from the state being BUILT, not from the input map.
+            //
+            // Nothing enforces that one evaluation sees an account only once, and reading the
+            // original map meant a second entry for the same account ignored what the first
+            // had just decided. A recovery at t1 followed by a fresh dip at t2 in one pass
+            // therefore re-emitted the episode the recovery had ended, which the ledger
+            // suppresses — so the user hears nothing about the dip. Carrying it forward
+            // processes the entries in the order they arrive, which is the only reading of
+            // "then" that makes sense. Swift already did this; the platforms disagreed on the
+            // resulting episode number and so on whether the user was told at all.
+            val previous = newStates[id] ?: AccountState(accountId = id)
             val snapshot = usage.snapshot
 
             // A failed refresh proves nothing about quota. Advancing state on one would let a
@@ -360,7 +371,7 @@ object NotificationEvaluator {
             val remainingMs = expiresAt - nowMs
             remainingMs > 0L &&
                 remainingMs <= leadMs &&
-                credit.status.equals("available", ignoreCase = true) &&
+                credit.status.meansAvailable() &&
                 (credit.grantedAt == null || credit.grantedAt <= nowMs)
         }
         if (expiring.isEmpty()) return emptyList()
@@ -441,7 +452,7 @@ object NotificationEvaluator {
      * limit, which is the thing this app exists to prevent.
      */
     private fun windowKeys(windows: List<UsageWindow>): Map<String, String> {
-        val base = windows.associate { it.id to "${it.category.name}:${it.label}" }
+        val base = windows.associate { it.id to "${it.category.name}:${it.label.canonical()}" }
         val counts = base.values.groupingBy { it }.eachCount()
         return base.mapValues { (id, key) ->
             if (counts.getValue(key) == 1) key else "$key#$id"
@@ -449,4 +460,14 @@ object NotificationEvaluator {
     }
 
     private fun key(vararg parts: Any): String = parts.joinToString("|")
+
+    /// Composed form, so two spellings of one label are one label.
+    ///
+    /// Swift compares strings by canonical equivalence and Kotlin does not, so a provider
+    /// sending "Café" as e-acute and later as e-plus-combining-accent gave iOS one window
+    /// identity and Android two. The two platforms then disagreed about episodes for the same
+    /// account. Normalising first makes the comparison the same question on both, and it is
+    /// the one users would expect: those are the same label.
+    private fun String.canonical(): String =
+        java.text.Normalizer.normalize(this, java.text.Normalizer.Form.NFC)
 }
