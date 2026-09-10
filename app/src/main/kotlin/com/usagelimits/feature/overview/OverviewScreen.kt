@@ -3,6 +3,8 @@ package com.usagelimits.feature.overview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,8 +30,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -75,9 +86,33 @@ fun OverviewScreen(
     onRefresh: () -> Unit,
     onAccountClick: (String) -> Unit,
     onAddAccount: () -> Unit,
+    onReorder: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val listState = rememberLazyListState()
+
+    // Drag state. `liveOrder` is the list as the finger has rearranged it — non-null only while
+    // a drag is in flight, and for the moment afterwards before the stored order comes back
+    // through the flow. Dropping it the instant the finger lifts would show the old order again
+    // for one frame, which reads as the drag having failed.
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var liveOrder by remember { mutableStateOf<List<AccountUsage>?>(null) }
+
+    val shown = liveOrder ?: state.orderedAccounts(nowMs)
+
+    LaunchedEffect(state.accounts, state.settings.accountsManuallyOrdered) {
+        val pending = liveOrder ?: return@LaunchedEffect
+        if (draggingId == null &&
+            state.orderedAccounts(nowMs).map { it.account.localId } ==
+            pending.map { it.account.localId }
+        ) {
+            liveOrder = null
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .background(UsageColors.Background),
@@ -103,17 +138,72 @@ fun OverviewScreen(
             }
         }
 
-        items(
-            // Most urgent first, by the same ranking the widget uses — not by Severity's
-            // declaration order, which put stale and never-fetched cards above exhausted ones.
-            items = state.accounts.sortedBy {
-                it.snapshot?.severityAt(nowMs, state.staleAfterMs)?.urgency ?: Int.MAX_VALUE
-            },
-            key = { it.account.localId },
-        ) { usage ->
-            AccountCard(usage, nowMs, state.staleAfterMs) {
-                onAccountClick(usage.account.localId)
-            }
+        items(items = shown, key = { it.account.localId }) { usage ->
+            val id = usage.account.localId
+            val dragging = draggingId == id
+
+            AccountCard(
+                usage = usage,
+                nowMs = nowMs,
+                staleAfterMs = state.staleAfterMs,
+                modifier = Modifier
+                    // Above its neighbours while it is being carried, or the cards it passes
+                    // over are drawn on top of it.
+                    .zIndex(if (dragging) 1f else 0f)
+                    .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
+                    .pointerInput(id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggingId = id
+                                dragOffset = 0f
+                                liveOrder = shown
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragOffset += amount.y
+
+                                val current = liveOrder ?: return@detectDragGesturesAfterLongPress
+                                val visible = listState.layoutInfo.visibleItemsInfo
+                                val self = visible.firstOrNull { it.key == id }
+                                    ?: return@detectDragGesturesAfterLongPress
+
+                                // Where the card's middle now sits, and whichever card that
+                                // point has landed inside is the one to trade places with.
+                                val centre = self.offset + self.size / 2f + dragOffset
+                                val over = visible.firstOrNull { other ->
+                                    other.key != id &&
+                                        centre >= other.offset &&
+                                        centre <= other.offset + other.size
+                                } ?: return@detectDragGesturesAfterLongPress
+
+                                val from = current.indexOfFirst { it.account.localId == id }
+                                val to = current.indexOfFirst { it.account.localId == over.key }
+                                if (from < 0 || to < 0 || from == to) {
+                                    return@detectDragGesturesAfterLongPress
+                                }
+
+                                liveOrder = current.toMutableList()
+                                    .apply { add(to, removeAt(from)) }
+                                // The card has swapped into the other's slot, so the finger's
+                                // travel so far is now measured from there. Without this the
+                                // card jumps by its own height on every swap.
+                                dragOffset -= (over.offset - self.offset)
+                            },
+                            onDragEnd = {
+                                draggingId = null
+                                dragOffset = 0f
+                                liveOrder?.let { order ->
+                                    onReorder(order.map { it.account.localId })
+                                }
+                            },
+                            onDragCancel = {
+                                draggingId = null
+                                dragOffset = 0f
+                                liveOrder = null
+                            },
+                        )
+                    },
+            ) { onAccountClick(id) }
         }
 
         item { AddAccountCard(onAddAccount) }
@@ -289,12 +379,15 @@ fun AccountCard(
     usage: AccountUsage,
     nowMs: Long,
     staleAfterMs: Long,
+    // Before `onClick`, so the trailing-lambda call sites keep binding their lambda to the
+    // click and not to this.
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val snapshot = usage.snapshot
     val severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE
 
-    UsageCard(modifier = Modifier.clickable(onClick = onClick)) {
+    UsageCard(modifier = modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconBadge(
                 symbol = providerSymbol(usage.account.provider),

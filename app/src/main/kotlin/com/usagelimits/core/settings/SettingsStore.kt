@@ -27,6 +27,14 @@ data class AppSettings(
     val resetApproachingMinutes: Int = DEFAULT_RESET_LEAD_MINUTES,
     val notifyOnResetCreditExpiring: Boolean = true,
     val resetCreditExpiryLeadMinutes: Int = DEFAULT_CREDIT_LEAD_MINUTES,
+    /**
+     * Whether the overview follows the order the user dragged the accounts into.
+     *
+     * False until they drag one. Until then the list is ranked by urgency, which is what the
+     * app is for — but once someone has arranged their accounts deliberately, rearranging them
+     * again on every sync is the app overruling them.
+     */
+    val accountsManuallyOrdered: Boolean = false,
 ) {
     companion object {
         /**
@@ -91,6 +99,16 @@ class SettingsStore(context: Context) {
         it[Keys.CREDIT_LEAD_MINUTES] = minutes.coerceIn(60, 7 * 24 * 60)
     }
 
+    /**
+     * Latched the first time an account is dragged, and never cleared on its own.
+     *
+     * Once someone has arranged their accounts deliberately, re-ranking them by urgency on the
+     * next sync would be the app overruling a choice they made by hand.
+     */
+    suspend fun setAccountsManuallyOrdered(ordered: Boolean) = edit {
+        it[Keys.ACCOUNTS_MANUAL_ORDER] = ordered
+    }
+
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)
     }
@@ -111,6 +129,7 @@ class SettingsStore(context: Context) {
         notifyOnResetCreditExpiring = this[Keys.NOTIFY_CREDIT_EXPIRING] ?: true,
         resetCreditExpiryLeadMinutes =
             this[Keys.CREDIT_LEAD_MINUTES] ?: AppSettings.DEFAULT_CREDIT_LEAD_MINUTES,
+        accountsManuallyOrdered = this[Keys.ACCOUNTS_MANUAL_ORDER] ?: false,
     )
 
     private object Keys {
@@ -126,5 +145,6 @@ class SettingsStore(context: Context) {
         val RESET_LEAD_MINUTES = intPreferencesKey("reset_approaching_minutes")
         val NOTIFY_CREDIT_EXPIRING = booleanPreferencesKey("notify_reset_credit_expiring")
         val CREDIT_LEAD_MINUTES = intPreferencesKey("reset_credit_expiry_lead_minutes")
+        val ACCOUNTS_MANUAL_ORDER = booleanPreferencesKey("accounts_manually_ordered")
     }
 }
