@@ -116,16 +116,37 @@ jobs:
         working-directory: ios/UsageLimits
         run: |
           set -euo pipefail
-          app=$(xcodebuild -scheme UsageLimits -showBuildSettings                   -destination 'generic/platform=iOS Simulator' 2>/dev/null                 | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{d=$2} / FULL_PRODUCT_NAME /{n=$2} END{print d"/"n}')
-          appex="$app/PlugIns/UsageLimitsWidget.appex"
+          # Resolved from the build settings and selected BY TARGET. `-showBuildSettings`
+          # emits a section for EVERY target in the scheme, so the previous
+          # `awk ... END{print}` kept whichever came last — the widget — and this step
+          # went looking for `UsageLimitsWidget.appex/PlugIns/`. It reported a missing
+          # widget on a build that had embedded the widget perfectly well.
+          settings=$(xcodebuild -showBuildSettings -json \
+            -scheme UsageLimits \
+            -destination 'generic/platform=iOS Simulator' 2>/dev/null | sed -n '/^\[/,$p')
+          app=$(printf '%s' "$settings" | jq -r \
+            'map(select(.target == "UsageLimits")) | last | .buildSettings
+             | "\(.BUILT_PRODUCTS_DIR)/\(.FULL_PRODUCT_NAME)"')
+          products=$(dirname "$app")
           echo "app bundle: $app"
+          # The guard that would have made that failure explain itself. A lookup that
+          # selects the wrong target, or no target at all, now says so instead of
+          # blaming the widget.
+          case "$app" in
+            *.app) ;;
+            *) echo "::error::resolved '$app', which is not an app bundle - the build-settings lookup picked the wrong target" >&2
+               exit 1 ;;
+          esac
+          appex="$app/PlugIns/UsageLimitsWidget.appex"
           if [ ! -d "$appex" ]; then
             echo "::error::UsageLimitsWidget.appex is not embedded in the app bundle" >&2
-            ls -R "$app/PlugIns" 2>/dev/null || echo "(no PlugIns directory at all)" >&2
+            # Both halves of the picture: what is in the app, and whether the .appex is
+            # sitting BESIDE it instead - which is exactly the mistake being checked for.
+            echo "-- contents of the app bundle:" >&2; ls -1 "$app" >&2 || true
+            echo "-- .appex in the products dir:" >&2; ls -1d "$products"/*.appex >&2 || true
             exit 1
           fi
-          plist="$appex/Info.plist"
-          point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$plist")
+          point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex/Info.plist")
           echo "extension point: $point"
           [ "$point" = "com.apple.widgetkit-extension" ] || {
             echo "::error::wrong NSExtensionPointIdentifier: $point" >&2; exit 1; }
