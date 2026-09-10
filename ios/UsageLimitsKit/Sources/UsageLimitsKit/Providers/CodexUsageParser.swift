@@ -210,16 +210,18 @@ public enum CodexUsageParser: Sendable {
         if shortIndex == nil,
            let primary = windows[0],
            longIndex != 0,
-           primary["limit_window_seconds"] == nil,
-           primary["limitWindowSeconds"] == nil {
+           // Absence of a DURATION, not of a key. `JSONSerialization` turns an explicit JSON
+           // null into `NSNull`, so the key is present and a key test blocks the fallback for a
+           // payload that carries no duration information at all — the exact case the fallback
+           // exists for.
+           periodSeconds(primary) == nil {
             shortIndex = 0
         }
 
         if longIndex == nil,
            let secondary = windows[1],
            shortIndex != 1,
-           secondary["limit_window_seconds"] == nil,
-           secondary["limitWindowSeconds"] == nil {
+           periodSeconds(secondary) == nil {
             longIndex = 1
         }
 

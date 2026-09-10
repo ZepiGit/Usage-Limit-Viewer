@@ -189,9 +189,23 @@ object CodexUsageParser {
             }
         }
 
-        // Legacy payloads omit limit_window_seconds; fall back to declared order.
-        if (shortWindow == null && primary != null && primary !== longWindow) shortWindow = primary
-        if (longWindow == null && secondary != null && secondary !== shortWindow) longWindow = secondary
+        // Position is meaningful ONLY for legacy payloads that omit the duration entirely.
+        //
+        // Without the absence check this fired for a window whose duration was stated and simply
+        // unfamiliar — a daily limit, say — and forced it into the five-hour slot, where it is
+        // labelled and read as the session limit. That is the same class of error as reading a
+        // week as five hours, which a live payload caught once already; a present but unfamiliar
+        // duration is not an omitted field, and the comment here has always said so.
+        if (shortWindow == null && primary != null && primary !== longWindow &&
+            periodSeconds(primary) == null
+        ) {
+            shortWindow = primary
+        }
+        if (longWindow == null && secondary != null && secondary !== shortWindow &&
+            periodSeconds(secondary) == null
+        ) {
+            longWindow = secondary
+        }
 
         return Classified(shortWindow, longWindow)
     }

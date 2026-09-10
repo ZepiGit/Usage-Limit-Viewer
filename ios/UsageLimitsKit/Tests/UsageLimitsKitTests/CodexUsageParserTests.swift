@@ -286,4 +286,39 @@ final class CodexUsageParserTests: XCTestCase {
     func testPlanTypeIsRead() {
         XCTAssertEqual(CodexUsageParser.parsePlan(payload(#"{"plan_type": "plus"}"#)), "plus")
     }
+
+    // MARK: - When position may stand in for a duration
+
+    func testAStatedButUnfamiliarDurationIsNotForcedIntoTheSessionSlot() {
+        // A daily limit is neither five-hourly nor weekly nor monthly. Reading it by POSITION
+        // labels it the session limit and reports a day's quota as five hours' — the same class
+        // of error as reading a week as five hours, which a live payload caught once already.
+        let windows = CodexUsageParser.parse(payload(#"""
+        {"rate_limit": {"primary_window": {"limit_window_seconds": 86400, "used_percent": 40}}}
+        """#), now: now)
+
+        XCTAssertTrue(
+            windows.allSatisfy { $0.id != "codex-short" },
+            "a stated duration must not be overridden by position")
+    }
+
+    func testALegacyWindowWithNoDurationStillFallsBackToPosition() {
+        // The case the fallback exists for, and it must keep working.
+        let windows = CodexUsageParser.parse(payload(#"""
+        {"rate_limit": {"primary_window": {"used_percent": 40}}}
+        """#), now: now)
+
+        XCTAssertEqual(windows.first?.id, "codex-short")
+    }
+
+    func testAnExplicitNullDurationCountsAsNoDuration() {
+        // `JSONSerialization` turns an explicit JSON null into `NSNull`, so a key test sees the
+        // key as PRESENT and blocks the fallback — for a payload that carries no duration
+        // information at all, which is exactly what the fallback is for.
+        let windows = CodexUsageParser.parse(payload(#"""
+        {"rate_limit": {"primary_window": {"limit_window_seconds": null, "used_percent": 40}}}
+        """#), now: now)
+
+        XCTAssertEqual(windows.first?.id, "codex-short")
+    }
 }
