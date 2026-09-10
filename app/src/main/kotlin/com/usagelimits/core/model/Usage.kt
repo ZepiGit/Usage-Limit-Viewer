@@ -102,7 +102,7 @@ data class UsageSnapshot(
      */
     val heldResetCredits: Int
         get() = resetCreditCount
-            ?: resetCredits.count { it.status.equals("available", ignoreCase = true) }
+            ?: resetCredits.count { it.status.meansAvailable() }
 
     /**
      * Credits that are available AND not past their own expiry at [nowMs].
@@ -118,7 +118,7 @@ data class UsageSnapshot(
         applicableResetCreditCount?.let { return it }
         if (resetCreditCount != null && resetCredits.isEmpty()) return resetCreditCount
         return resetCredits.count {
-            it.status.equals("available", ignoreCase = true) && (it.expiresAt == null || it.expiresAt > nowMs)
+            it.status.meansAvailable() && (it.expiresAt == null || it.expiresAt > nowMs)
         }
     }
 
@@ -173,6 +173,15 @@ data class UsageSnapshot(
  * Only credits the provider reports as available *and* of the Codex rate-limit type are
  * modelled; see CodexUsageParser.parseResetCredits for the filtering rules.
  */
+/// Whether a provider's status string means the credit can be spent.
+///
+/// `lowercase()` and not `equals(ignoreCase = true)`, which is not the same question. The
+/// JVM's case-insensitive comparison folds a dotless `\u0131` onto `i`, so a provider sending
+/// "ava\u0131lable" counted as available here and did not on iOS, where `lowercased()` leaves
+/// it alone. Both are now the stricter reading — a string that is not "available" in any case
+/// is not available — and, more to the point, both are the SAME reading.
+internal fun String.meansAvailable(): Boolean = trim().lowercase() == "available"
+
 data class ResetCredit(
     val id: String,
     val grantedAt: Long?,
