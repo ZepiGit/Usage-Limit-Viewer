@@ -39,6 +39,12 @@ jobs:
     container: swift:6.0.3
     steps:
       - uses: actions/checkout@v4
+      # Runs here, on the cheap Linux job, because it needs no Apple SDK — and because
+      # the app target it checks is compiled only by the macOS job below. When that job
+      # cannot run, this is the only thing standing between a deleted declaration and a
+      # broken build; one commit removed five and nothing noticed.
+      - name: App sources reference only declared types
+        run: python3 ios/Tools/check-private-symbols.py
       - name: Build
         working-directory: ios/UsageLimitsKit
         run: swift build -v

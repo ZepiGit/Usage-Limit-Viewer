@@ -188,6 +188,139 @@ private struct WidgetFocus {
     }
 }
 
+private enum QuotaFormatting {
+
+    /// A nil percentage is *unknown*, not zero. It renders as an em dash over an
+    /// empty bar; coercing it to "0 %" would cry wolf, and to "100 %" would invent
+    /// an all-clear the cache never made.
+    static func percentText(_ percent: Double?) -> String {
+        guard let percent else { return "—" }
+        let value = Int((fraction(percent) * 100).rounded())
+        return "\(value)%"
+    }
+
+    /// Normalises a 0…100 percentage to 0…1 for bar widths and labels.
+    ///
+    /// The previous version guessed the scale from the value — anything above 1 was
+    /// treated as a percentage and anything at or below 1 as a fraction already. But the
+    /// kit's `remainingPercent` is 0…100 everywhere (`UsageWindow.swift`, `min(max(100 -
+    /// used, 0), 100)`), so a quota with 1 % left arrived as `1.0`, was taken to be a
+    /// fraction, and rendered as "100%" with a completely full bar. The Android widget
+    /// showed "1%" for the identical snapshot. A nearly-exhausted quota reading as nearly
+    /// full is the single worst number this app can show, so the scale is no longer
+    /// inferred: the input is always a percentage. Clamping still stops a corrupt cache
+    /// value from overflowing the bar.
+    static func fraction(_ percent: Double) -> Double {
+        min(max(percent / 100, 0), 1)
+    }
+}
+
+/// Builds every time string the tiles show. Everything here is *absolute*.
+///
+/// The kit offers `Countdown.format` ("2d 4h") and the widget deliberately refuses
+/// it. A relative countdown is frozen at the moment WidgetKit last rendered, and it
+/// goes wrong in the one direction that matters: the limit can already have reset
+/// while the tile still insists "in 20m". A clock time ("Resets 14:05") was true
+/// when it was written and stays true whatever the system does next. The same
+/// argument forbids "5 min ago" styling — an age silently goes stale — so the data
+/// instead carries its own timestamp: "As of 12:40".
+private enum GlanceText {
+
+    /// "Resets Tue 09:00", or the boundary state once the reset has passed.
+    static func resetLine(resetAt: Date?, now: Date) -> String? {
+        guard let resetAt else { return nil }
+        if resetAt <= now {
+            // The cached numbers predate the reset, so the tile says so instead of
+            // implying a reset is still pending. The timeline requests fresh data
+            // moments after the boundary, so this state is short-lived.
+            return "Reset · refresh pending"
+        }
+        return "Resets \(Countdown.absolute(resetAt, now: now))"
+    }
+
+    /// "As of 12:40" — the data's own timestamp, or nothing if the cache states none.
+    static func asOfLine(updatedAt: Date?, now: Date) -> String? {
+        guard let updatedAt else { return nil }
+        return "As of \(Countdown.absolute(updatedAt, now: now))"
+    }
+}
+
+/// Tap destinations. Lock Screen accessories ignore these; the app registers the scheme.
+private enum DeepLink {
+    static let glance = URL(string: "usagelimits://glance")
+}
+
+// MARK: - Shared views
+
+/// One quota bar.
+///
+/// A fixed height on a *bar* is legitimate — the Dynamic Type rule concerns text —
+/// and `@ScaledMetric` grows the bar with the user's type size regardless.
+private struct QuotaBar: View {
+
+    let remainingPercent: Double?
+    let severity: Severity
+    /// Spoken context ("Claude, Messages") so the label below reads as a sentence.
+    let context: String
+
+    @ScaledMetric(relativeTo: .caption) private var barHeight = 5
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(UsageColors.progressTrack)
+                if let remainingPercent {
+                    // Unknown percentages draw the empty track only — never a 0 % sliver.
+                    Capsule()
+                        .fill(SeverityPalette.bar(remainingPercent: remainingPercent, severity: severity))
+                        .frame(width: proxy.size.width * QuotaFormatting.fraction(remainingPercent))
+                }
+            }
+        }
+        .frame(height: barHeight)
+        // A bar shape tells VoiceOver nothing; state the number in words.
+        .accessibilityElement()
+        .accessibilityLabel(spokenText)
+    }
+
+    private var spokenText: String {
+        guard let remainingPercent else {
+            return "\(context): remaining unknown"
+        }
+        return "\(context): \(QuotaFormatting.percentText(remainingPercent)) remaining"
+    }
+}
+
+/// Rendered whenever the cache is missing, unreadable or empty.
+///
+/// The widget cannot open a dialogue with the user, so its only honest message is
+/// that the app has the numbers — never a fabricated percentage to look busy.
+
+/// What both tiles show when there is nothing to show.
+///
+/// Deliberately not a blank tile. An empty snapshot has three quite different causes — no
+/// accounts connected yet, a snapshot the app has not written, and a file the widget cannot
+/// read because the device has not been unlocked since boot — and none of them means "you
+/// have quota left". Naming the one action that resolves all three is the honest rendering.
+private struct WidgetEmptyStateView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: "gauge.with.needle")
+                .font(.title3)
+                .foregroundColor(UsageColors.textSecondary)
+            Text("No accounts yet")
+                .font(.headline)
+                .foregroundColor(UsageColors.textPrimary)
+            Text("Open UsageLimits to see how much quota is left")
+                .font(.caption)
+                .foregroundColor(UsageColors.textSecondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
 /// One account line on the medium tile: title, one row's percentage, its bar.
 ///
 /// The row is handed in rather than chosen here, so the lead shows the kit's headline and
