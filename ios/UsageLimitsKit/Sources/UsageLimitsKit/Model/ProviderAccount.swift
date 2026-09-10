@@ -186,13 +186,17 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     /// Age has to be part of the verdict. Without it, a snapshot that stopped refreshing keeps
     /// whatever status it had when it last succeeded, so day-old numbers still read healthy —
     /// which is the exact failure this app exists to prevent.
-    public func severity(at now: Date) -> Severity {
+    /// - Parameter staleAfter: how old this snapshot may be before it reads as stale. Passed in
+    ///   rather than assumed, because the threshold follows the user's chosen sync interval: at
+    ///   the three-hour setting the app offers, a fixed hour marks every account stale
+    ///   permanently. The default is only for callers that have no settings to hand.
+    public func severity(at now: Date, staleAfter: TimeInterval = Severity.staleAfter) -> Severity {
         let base = severity
         if base == .error { return base }
-        return now.timeIntervalSince(fetchedAt) >= Severity.staleAfter ? .stale : base
+        return isStale(at: now, staleAfter: staleAfter) ? .stale : base
     }
 
-    public func isStale(at now: Date) -> Bool {
-        now.timeIntervalSince(fetchedAt) >= Severity.staleAfter
+    public func isStale(at now: Date, staleAfter: TimeInterval = Severity.staleAfter) -> Bool {
+        now.timeIntervalSince(fetchedAt) >= staleAfter
     }
 }

@@ -67,8 +67,15 @@ final class UsageStore: ObservableObject {
     deinit { clock?.cancel() }
 
     /// What the Overview screen leads with.
+    ///
+    /// The staleness threshold follows the user's chosen sync interval rather than a constant:
+    /// at the three-hour setting the settings screen offers, a fixed hour marks every account
+    /// stale before the next refresh arrives, and a stale account sorts last — so the headline
+    /// would come from whichever healthy account happened to sort first while a card at 3 % sat
+    /// below it.
     var glance: GlanceSnapshot {
-        GlanceModel.build(accounts, now: now, scope: .mostCritical)
+        GlanceModel.build(
+            accounts, now: now, scope: .mostCritical, staleAfter: settings.staleAfter)
     }
 
     /// One account, reduced for the notification evaluator.

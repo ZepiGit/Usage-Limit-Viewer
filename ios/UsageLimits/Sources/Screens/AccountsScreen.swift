@@ -56,7 +56,7 @@ private struct AccountSummaryCard: View {
                     }
                 }
                 Spacer()
-                StatusPill(severity: snapshot?.severity(at: now) ?? .stale)
+                StatusPill(severity: snapshot?.severity(at: now, staleAfter: store.settings.staleAfter) ?? .stale)
             }
 
             if let message = snapshot?.errorMessage {

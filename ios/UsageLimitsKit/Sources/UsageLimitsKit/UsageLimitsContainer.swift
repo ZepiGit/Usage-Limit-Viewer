@@ -81,7 +81,7 @@ public actor UsageLimitsContainer {
         }
 
         let usage = await repository.usage()
-        publish(usage)
+        await publishCurrent(usage)
         return usage
     }
 
@@ -252,7 +252,7 @@ public actor UsageLimitsContainer {
 
     public func add(_ account: ProviderAccount) async throws {
         try await repository.upsert(account)
-        publish(await repository.usage())
+        await publishCurrent(await repository.usage())
     }
 
     /// Forgets an account and the credentials behind it.
@@ -273,7 +273,7 @@ public actor UsageLimitsContainer {
         // will not write must not leave the account half-removed.
         try? await ledger.forget(accountID: id)
 
-        publish(await repository.usage())
+        await publishCurrent(await repository.usage())
     }
 
     /// Called once per install, when the app finds no marker of its own in its container.
@@ -285,14 +285,25 @@ public actor UsageLimitsContainer {
         try await credentials.removeAll()
     }
 
+    /// Publishes with the threshold the user's own sync interval implies.
+    ///
+    /// Read here rather than defaulted, because a fixed hour is wrong at the three-hour interval
+    /// the settings screen offers: every snapshot would be older than the threshold before the
+    /// next arrived, so every account would read stale permanently and the tile would lead with
+    /// whichever healthy account happened to sort first.
+    private func publishCurrent(_ usage: [AccountUsage]) async {
+        publish(usage, staleAfter: await settingsStore.settings().staleAfter)
+    }
+
     /// Hands the widget what the app would render.
     ///
     /// Built from the same `GlanceModel` call the app's own screen uses, so the two surfaces
     /// cannot disagree — one derivation, one answer. Best-effort: failing to update a tile must
     /// never fail the refresh the user is watching.
-    private func publish(_ usage: [AccountUsage]) {
+    private func publish(_ usage: [AccountUsage], staleAfter: TimeInterval) {
         try? GlanceSnapshotCodec.write(
-            GlanceModel.build(usage, now: now(), scope: .mostCritical),
+            GlanceModel.build(
+                usage, now: now(), scope: .mostCritical, staleAfter: staleAfter),
             toDirectory: containerDirectory)
 
         // Writing the file is only half of it. A widget extension does not watch the container,
