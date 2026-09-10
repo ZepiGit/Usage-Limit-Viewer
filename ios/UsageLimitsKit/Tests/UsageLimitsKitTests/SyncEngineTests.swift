@@ -572,4 +572,34 @@ extension SyncEngineTests {
             return UsageResult()
         }
     }
+
+    func testAnUnwritablePairSurvivesIntoTheNextSyncOfTheSameProcess() async throws {
+        // `persist` gives up quietly on the grounds that the rotation has already happened and
+        // this session should keep working. It kept working for exactly one sync: the refresh
+        // task's entry is dropped when it ends, so the NEXT sync read the store again, got the
+        // superseded pair back, and presented a refresh grant the provider had already spent.
+        // On a provider that treats reuse as theft, that kills the whole grant — the opposite
+        // of what returning quietly was for.
+        //
+        // The provider here is strict about it: presenting a spent refresh token throws.
+        let store = UnwritableCredentialStore(["ref-a": expired("access-1")])
+        let provider = RotatingProvider()
+        let sink = RecordingSink()
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+
+        _ = try await engine.sync(accounts: [account("a")])
+        _ = try await engine.sync(accounts: [account("a")])
+
+        let exchanges = await provider.exchanges
+        XCTAssertEqual(exchanges, 1, "the second sync must not spend the grant again")
+        let outcomes = await sink.outcomes
+        XCTAssertEqual(outcomes.count, 2)
+        for outcome in outcomes {
+            guard case .success = outcome else {
+                return XCTFail("both syncs should succeed on the rotated pair, got \(outcome)")
+            }
+        }
+    }
 }
