@@ -455,13 +455,32 @@ public actor SyncEngine {
                 // a login completing in that exact interval. Strictly better than the presence
                 // check, and honest about what it does not cover. Android compares the same way.
                 guard let stored = try await self.credentials.load(reference: reference) else {
+                    // Removed while this was in flight. The override goes too; nothing may
+                    // bring the credential back.
+                    self.unsaved[reference] = nil
                     return
                 }
-                guard stored == expected else { return }
+                // Compared against what this process BELIEVES is current, which is not always
+                // what the store holds. After a failed write the store is behind by one
+                // rotation on purpose, and comparing against it directly meant a second
+                // consecutive failure bailed out here and left the override pointing at the
+                // FIRST rotated pair — whose refresh token the second exchange had already
+                // spent. The next sync then presented a dead grant, which is the very failure
+                // the override exists to prevent, arriving two rotations in.
+                let effective: OAuthCredentials
+                if let pending = self.unsaved[reference], pending.superseded == stored {
+                    effective = pending.renewed
+                } else {
+                    effective = stored
+                }
+                guard effective == expected else { return }
                 if try await self.credentials.updateIfPresent(credentials, reference: reference) {
                     // Written. Any earlier override for this reference is now obsolete.
                     self.unsaved[reference] = nil
+                    return
                 }
+                // The store refused without throwing: the item is gone. Removal wins.
+                self.unsaved[reference] = nil
                 return
             } catch {
                 guard attempt < Self.saveAttempts else {
@@ -469,7 +488,14 @@ public actor SyncEngine {
                     // store does, so the pair is remembered as authoritative for this process
                     // rather than dropped — otherwise the next sync reloads the superseded one
                     // and presents a refresh grant that has already been spent.
-                    self.unsaved[reference] = (superseded: expected, renewed: credentials)
+                    //
+                    // `superseded` tracks what the STORE actually holds, not what this call
+                    // started from. Across two failed writes those differ, and recording the
+                    // wrong one is what made the override go stale.
+                    let stored = try? await self.credentials.load(reference: reference)
+                    self.unsaved[reference] = stored.map {
+                        (superseded: $0, renewed: credentials)
+                    } ?? nil
                     return
                 }
                 // A short, fixed pause. The plausible causes are momentary; a long backoff would
