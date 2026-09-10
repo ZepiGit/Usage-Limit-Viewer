@@ -150,11 +150,26 @@ class UsageRepository(
                 StoredAttributes.serializer(),
                 StoredAttributes(attributes),
             ),
-            sortOrder = existing?.sortOrder ?: 0,
+            // A new account joins the end of the list, not the front of it.
+            sortOrder = existing?.sortOrder ?: accountDao.nextSortOrder(),
         )
         accountDao.upsert(entity)
         // Built from a known ProviderId a moment ago, so this cannot be null.
         checkNotNull(entity.toDomain())
+    }
+
+    /**
+     * Writes the order the user dragged the accounts into.
+     *
+     * The whole list is renumbered in one transaction rather than swapping two rows, because a
+     * partial write leaves an order that is neither the old one nor the new one — and the list
+     * is short enough that renumbering it costs nothing.
+     *
+     * Ids the caller does not know about are left alone: an account added on another screen
+     * while this one was open keeps whatever place it had rather than being renumbered to 0.
+     */
+    suspend fun reorderAccounts(idsInOrder: List<String>) = transactions.inTransaction {
+        idsInOrder.forEachIndexed { index, id -> accountDao.setSortOrder(id, index) }
     }
 
     /**

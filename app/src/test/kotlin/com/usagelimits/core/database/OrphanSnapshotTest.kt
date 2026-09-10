@@ -35,6 +35,10 @@ class OrphanSnapshotTest {
         override suspend fun upsert(account: AccountEntity) { rows[account.localId] = account }
         override suspend fun deleteById(localId: String) { rows.remove(localId) }
         override suspend fun markSynced(localId: String, timestamp: Long) { markSyncedCalls++ }
+        // Ordering plays no part in what these tests exercise; the reorder path has its own
+        // double that actually records.
+        override suspend fun setSortOrder(localId: String, order: Int) = Unit
+        override suspend fun nextSortOrder(): Int = 0
     }
 
     /** Stands in for SQLite: rejects any insert whose parent account row is gone. */

@@ -37,6 +37,19 @@ interface AccountDao {
 
     @Query("UPDATE accounts SET lastSuccessfulSync = :timestamp WHERE localId = :localId")
     suspend fun markSynced(localId: String, timestamp: Long)
+
+    /** One step of a reorder. Callers write the whole list inside one transaction. */
+    @Query("UPDATE accounts SET sortOrder = :order WHERE localId = :localId")
+    suspend fun setSortOrder(localId: String, order: Int)
+
+    /**
+     * Where a newly connected account belongs: after everything already here.
+     *
+     * `sortOrder` used to be 0 for every row, so a manual order made the next account added
+     * jump to the top of it.
+     */
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM accounts")
+    suspend fun nextSortOrder(): Int
 }
 
 @Dao
