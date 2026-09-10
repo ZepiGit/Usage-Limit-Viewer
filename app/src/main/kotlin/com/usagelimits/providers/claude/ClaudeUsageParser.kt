@@ -55,6 +55,23 @@ object ClaudeUsageParser {
     private const val MAX_LABEL_LENGTH = 48
 
     /**
+     * Truncates without splitting a character in half.
+     *
+     * `take` counts UTF-16 code units, so cutting a label whose 48th and 49th units are the two
+     * halves of one emoji leaves a lone surrogate — a malformed string that renders as a
+     * replacement box and compares unequal to anything sensible. Swift's `prefix` cuts on
+     * grapheme boundaries and never had this; the two must agree, and Swift is right.
+     */
+    private fun String.takeLabel(): String {
+        val cut = take(MAX_LABEL_LENGTH)
+        return if (cut.isNotEmpty() && Character.isHighSurrogate(cut.last())) {
+            cut.dropLast(1)
+        } else {
+            cut
+        }
+    }
+
+    /**
      * A `utilization` of 21.0 means 21 % consumed, not 21 % of one.
      *
      * Worth stating because the field is named `utilization` rather than `percent`, and a
@@ -131,9 +148,13 @@ object ClaudeUsageParser {
         val base = raw.removeSuffix("_${multiplier}x").replace('_', ' ').trim()
         if (base.isEmpty()) return null
 
-        val name = base.split(' ').joinToString(" ") { part ->
-            part.replaceFirstChar { it.uppercase() }
-        }
+        // Blank parts are dropped, so "team__plus" reads "Team Plus" rather than "Team  Plus",
+        // and `Char.uppercase()` is the full Unicode mapping rather than the single-character
+        // one — 'ß' has no single-char uppercase, so `replaceFirstChar` left it alone where the
+        // Swift twin produced "SS". Both are how the Swift side already behaves.
+        val name = base.split(' ')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part -> part.first().uppercase() + part.drop(1) }
         return if (multiplier == null) name else "$name $multiplier×"
     }
 
@@ -193,7 +214,7 @@ object ClaudeUsageParser {
                 "session" -> "5h limit"
                 "weekly_all" -> "Weekly"
                 "weekly_scoped" -> model?.let { "Weekly ($it)" } ?: "Weekly (scoped)"
-                else -> humanize(kind ?: "Limit ${index + 1}").take(MAX_LABEL_LENGTH)
+                else -> humanize(kind ?: "Limit ${index + 1}").takeLabel()
             }
 
             window(
@@ -268,7 +289,7 @@ object ClaudeUsageParser {
 
             window(
                 id = id,
-                label = humanize(key).take(MAX_LABEL_LENGTH),
+                label = humanize(key).takeLabel(),
                 usedPercent = used,
                 // The duration of a window nobody has documented is unknown, and OTHER says so.
                 // It cannot be inferred from the time left before its reset either: a weekly
@@ -311,7 +332,8 @@ object ClaudeUsageParser {
     private fun humanize(key: String): String =
         key.split('_', '-')
             .filter { it.isNotBlank() }
-            .joinToString(" ") { part -> part.replaceFirstChar { it.uppercase() } }
+            // The full Unicode mapping, as above and as Swift does.
+            .joinToString(" ") { part -> part.first().uppercase() + part.drop(1) }
 
     private fun slug(value: String): String =
         value.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
