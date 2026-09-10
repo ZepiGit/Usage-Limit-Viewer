@@ -228,7 +228,11 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 symbol = "◷",
                 tint = UsageColors.Terracotta,
                 container = UsageColors.TerracottaSurface,
-                value = state.nextResetAt(nowMs)?.let { Countdown.format(it - nowMs) } ?: "—",
+                // The reset of the account the card is ABOUT. Falls back to the fleet-wide
+                // soonest only when there is no most-depleted account to scope it to.
+                value = (critical?.first?.account?.localId?.let { state.nextResetAt(nowMs, it) }
+                    ?: critical?.let { null } ?: state.nextResetAt(nowMs))
+                    ?.let { Countdown.format(it - nowMs) } ?: "—",
                 label = "Next reset",
             )
 

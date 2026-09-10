@@ -504,10 +504,17 @@ public struct XaiClient: SyncProvider, Sendable {
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
-        let headers: [String: String] = [
+        // The same identity Android presents. The CLI proxy answers billing JSON for the
+        // first-party CLI, and Android sends its client markers for exactly that reason; iOS
+        // sent a bare bearer token and an `Accept: application/json` the proxy has never seen
+        // from a real client. The endpoints file already carried these constants — they were
+        // simply not used here.
+        var headers: [String: String] = [
             "Authorization": "Bearer \(credentials.accessToken)",
-            "Accept": "application/json",
+            "accept": "*/*",
+            "user-agent": ProviderEndpoints.Xai.userAgent,
         ]
+        headers.merge(ProviderEndpoints.Xai.identityHeaders) { current, _ in current }
 
         var creditsWindows: [UsageWindow]?
         var creditsFailure: Error?

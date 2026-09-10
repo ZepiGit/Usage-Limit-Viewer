@@ -83,6 +83,34 @@ class OverviewOrderingTest {
     }
 
     @Test
+    fun `the summary card's next reset belongs to the account it leads with`() {
+        // A (healthy) resets in 12 minutes; B is exhausted and resets on Tuesday. The card
+        // leads with B's window, so its "Next reset" must be B's — not A's twelve minutes.
+        val state = UsageUiState(
+            accounts = listOf(
+                usage("A", now + 12 * 60_000),
+                AccountUsage(
+                    account("B"),
+                    UsageSnapshot(
+                        accountId = "B", fetchedAt = now, status = SnapshotStatus.OK,
+                        windows = listOf(
+                            UsageWindow(
+                                id = "B-weekly", label = "Weekly", category = WindowCategory.WEEKLY,
+                                usedPercent = 100.0, periodSeconds = 604_800,
+                                resetAt = now + 3 * 86_400_000, exhausted = true,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("B", state.mostCritical?.first?.account?.localId)
+        assertEquals(now + 3 * 86_400_000, state.nextResetAt(now, "B"))
+        assertEquals(now + 12 * 60_000, state.nextResetAt(now))
+    }
+
+    @Test
     fun `with every reset in the past there is no next reset`() {
         val state = UsageUiState(accounts = listOf(usage("A", now - 1), usage("B", null)))
 

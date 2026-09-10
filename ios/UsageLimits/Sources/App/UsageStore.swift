@@ -180,8 +180,12 @@ final class UsageStore: ObservableObject {
     ///
     /// Reported through `lastError` rather than thrown, because the only caller is a button: a
     /// spend the provider refuses has to say so on the screen the user is looking at.
+    @Published private(set) var isRedeeming = false
+
     func redeemResetCredit(accountID: String) async {
-        guard let container else { return }
+        guard let container, !isRedeeming else { return }
+        isRedeeming = true
+        defer { isRedeeming = false }
         do {
             accounts = try await container.redeemResetCredit(accountID: accountID)
             lastError = nil

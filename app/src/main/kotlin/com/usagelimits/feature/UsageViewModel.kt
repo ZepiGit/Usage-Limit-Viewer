@@ -84,6 +84,22 @@ data class UsageUiState(
             ?: Severity.STALE
 
     /** The single most-depleted window anywhere — what the summary card leads with. */
+    /**
+     * The soonest rollover still ahead for ONE account — the one the summary card leads with.
+     *
+     * The card puts "Next reset" beside the most-depleted window, separated by a hairline, and
+     * a fleet-wide minimum there read "Next reset 12m | 0% Weekly left": an invitation to
+     * believe the exhausted weekly limit returns in twelve minutes, when the twelve minutes
+     * belonged to a healthy account's five-hour window. The widget fixed exactly this pairing
+     * by scoping its reset to the leading account; the card now does the same.
+     */
+    fun nextResetAt(nowMs: Long, accountId: String): Long? =
+        accounts.firstOrNull { it.account.localId == accountId }
+            ?.snapshot?.windows.orEmpty()
+            .mapNotNull { it.resetAt }
+            .filter { it > nowMs }
+            .minOrNull()
+
     val mostCritical: Pair<AccountUsage, UsageWindow>?
         get() = accounts.mapNotNull { usage ->
             usage.snapshot?.mostCritical?.let { usage to it }
