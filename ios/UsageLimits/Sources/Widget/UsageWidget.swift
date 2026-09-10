@@ -102,7 +102,11 @@ struct UsageProvider: TimelineProvider {
     private static func entryDates(now: Date, nextResetAt reset: Date?) -> [Date] {
         var dates = [now]
         guard let reset, reset > now else { return dates }
-        for lead in [6.0 * 60 * 60, 60 * 60, 15 * 60, 5 * 60, 60] {
+        // Annotated, because the literal mixes a Double expression with integer ones and Swift
+        // then infers `[Any]` rather than complaining about the mix — which compiles as an array
+        // and fails at the arithmetic.
+        let leadTimes: [TimeInterval] = [6 * 60 * 60, 60 * 60, 15 * 60, 5 * 60, 60]
+        for lead in leadTimes {
             let date = reset.addingTimeInterval(-lead)
             // Skip lead-ins already past, or so close to `now` they would merely duplicate it.
             if date > now.addingTimeInterval(2 * 60) {
