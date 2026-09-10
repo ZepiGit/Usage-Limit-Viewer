@@ -1,6 +1,7 @@
 package com.usagelimits.core.auth
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -18,6 +19,16 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
+ * A credential write that did not reach disk.
+ *
+ * Its own type rather than a generic failure, because the caller's stake is specific: the
+ * refresh token these providers rotate on use is now live only in memory.
+ */
+class CredentialWriteException(reference: String) : IllegalStateException(
+    "credential for $reference could not be written to disk",
+)
+
+/**
  * Credential store backed by an AES-GCM key held in the Android Keystore.
  *
  * The key never leaves the Keystore (it is not exportable, and on devices with a secure
@@ -30,23 +41,42 @@ import javax.crypto.spec.GCMParameterSpec
  * primitives it wraps (Keystore key + AEAD) are used directly instead — and that library is
  * therefore not a dependency of this module at all.
  */
-/**
- * A credential write that did not reach disk.
- *
- * Its own type rather than a generic failure, because the caller's stake is specific: the
- * refresh token these providers rotate on use is now live only in memory.
- */
-class CredentialWriteException(reference: String) : IllegalStateException(
-    "credential for $reference could not be written to disk",
-)
-
 class KeystoreCredentialStore(
-    context: Context,
+    /**
+     * Where the ciphertext lands.
+     *
+     * Taken rather than derived from a `Context`, so a unit test can supply preferences whose
+     * `commit` reports failure. That branch decides whether a rotated refresh token survives a
+     * restart and is not reachable any other way off a device. Production uses the `Context`
+     * constructor below and is unchanged.
+     */
+    private val prefs: SharedPreferences,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    /**
+     * The AEAD pair, defaulting to the Keystore-backed one.
+     *
+     * Injectable for one reason: `AndroidKeyStore` is not a provider a JVM test has, so
+     * without this the surrounding logic — what a failed write does, what an unreadable record
+     * does — could only be argued rather than run. Null means the real one, so a test cannot
+     * accidentally certify a weaker cipher than production uses.
+     */
+    private val crypto: Crypto? = null,
 ) : CredentialStore {
 
-    private val prefs = context.applicationContext
-        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    /** What the app builds: the shared preferences file this store owns. */
+    constructor(
+        context: Context,
+        json: Json = Json { ignoreUnknownKeys = true },
+    ) : this(
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+        json,
+    )
+
+    /** The two operations this store needs from the Keystore, named so a test can stand in. */
+    interface Crypto {
+        suspend fun encrypt(plaintext: String): String
+        suspend fun decrypt(payload: String): String
+    }
 
 
     @Serializable
@@ -61,7 +91,7 @@ class KeystoreCredentialStore(
     override suspend fun load(reference: String): OAuthCredentials? = withContext(Dispatchers.IO) {
         val payload = prefs.getString(entryKey(reference), null) ?: return@withContext null
         runCatching {
-            val decrypted = decrypt(payload)
+            val decrypted = crypto?.decrypt(payload) ?: decrypt(payload)
             val stored = json.decodeFromString(StoredCredentials.serializer(), decrypted)
             OAuthCredentials(
                 accessToken = stored.accessToken,
@@ -101,7 +131,7 @@ class KeystoreCredentialStore(
             // that works, and no record of why. Throwing makes it one account's failed sync,
             // which the card already knows how to show.
             val written = prefs.edit()
-                .putString(entryKey(reference), encrypt(plaintext))
+                .putString(entryKey(reference), crypto?.encrypt(plaintext) ?: encrypt(plaintext))
                 .commit()
             if (!written) throw CredentialWriteException(reference)
         }
