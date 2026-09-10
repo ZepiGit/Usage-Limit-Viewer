@@ -365,6 +365,20 @@ private struct MediumAccountRow: View {
 
     let account: GlanceAccount
     let row: GlanceRow?
+    /// The date of the timeline entry this row is being drawn for, so freshness is judged
+    /// there rather than at the moment the app wrote the snapshot.
+    let now: Date
+    let staleAfter: TimeInterval
+
+    /// The row's own severity while the account is healthy, and the account's otherwise.
+    ///
+    /// A row's severity comes from its percentage and knows nothing about age, so letting it
+    /// speak unconditionally painted a stale or failed account in the colour of its last good
+    /// number — the one reading a quota widget must never give.
+    private var rowSeverity: Severity {
+        let aged = account.severity(at: now, staleAfter: staleAfter)
+        return aged == .healthy ? (row?.severity ?? aged) : aged
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -372,7 +386,7 @@ private struct MediumAccountRow: View {
                 // A severity dot: the colour-blind-readable twin of the bar colour.
                 // Redundant to VoiceOver, which already hears the percentage.
                 Circle()
-                    .fill(SeverityPalette.accent(account.severity))
+                    .fill(SeverityPalette.accent(account.severity(at: now, staleAfter: staleAfter)))
                     .frame(width: 6, height: 6)
                     .accessibilityHidden(true)
                 Text(verbatim: account.title)
@@ -382,12 +396,12 @@ private struct MediumAccountRow: View {
                 Spacer(minLength: 8)
                 Text(verbatim: QuotaFormatting.percentText(row?.remainingPercent))
                     .font(.subheadline.weight(.semibold))
-                    .foregroundColor(SeverityPalette.text(row?.severity ?? account.severity))
+                    .foregroundColor(SeverityPalette.text(rowSeverity))
                     .lineLimit(1)
             }
             QuotaBar(
                 remainingPercent: row?.remainingPercent,
-                severity: row?.severity ?? account.severity,
+                severity: rowSeverity,
                 context: row.map { "\(account.title), \($0.label)" } ?? account.title
             )
         }
@@ -421,7 +435,14 @@ struct UsageWidgetSmallView: View {
         // The snapshot's next reset is the LEAD's soonest reset — the kit scoped it that way
         // — so it is the right clock for this tile, and never a countdown.
         let resetAt = entry.snapshot.nextResetAt
-        let severity = focus.row?.severity ?? focus.account.severity
+        // Aged to THIS entry's date, not to the moment the app wrote the snapshot. A timeline
+        // holds several entries built from one snapshot, so a frozen verdict means a tile that
+        // was healthy at write time still reads healthy hours later with nothing behind it.
+        let aged = focus.account.severity(at: entry.date, staleAfter: entry.snapshot.staleAfter)
+        // The row's severity comes from its percentage alone and knows nothing about age, so
+        // it may only speak while the account itself is healthy. Otherwise a stale or failed
+        // account was painted in the colour of its last good number.
+        let severity = aged == .healthy ? (focus.row?.severity ?? aged) : aged
         return VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: focus.account.title)
                 .font(.headline)
@@ -525,7 +546,11 @@ struct UsageWidgetMediumView: View {
             header
 
             ForEach(visibleAccounts) { account in
-                MediumAccountRow(account: account, row: row(for: account))
+                MediumAccountRow(
+                    account: account,
+                    row: row(for: account),
+                    now: entry.date,
+                    staleAfter: entry.snapshot.staleAfter)
             }
 
             if hiddenCount > 0 {
@@ -598,7 +623,8 @@ struct UsageAccessoryRectangularView: View {
                 // is computed from the percentage alone, so the lock screen wrote "Healthy"
                 // over numbers fetched a day ago. Now it says "Stale", which is one property
                 // access away and the truth.
-                Text(verbatim: SeverityPalette.label(focus.account.severity))
+                Text(verbatim: SeverityPalette.label(
+                    focus.account.severity(at: entry.date, staleAfter: entry.snapshot.staleAfter)))
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)

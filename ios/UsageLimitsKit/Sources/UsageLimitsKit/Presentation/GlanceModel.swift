@@ -42,20 +42,69 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
     public let title: String
     public let subtitle: String?
     public let rows: [GlanceRow]
+
+    /// The severity as it stood when the app wrote this, staleness included.
     public let severity: Severity
+
+    /// The severity WITHOUT the staleness judgement — what the numbers themselves say.
+    public let baseSeverity: Severity
+
+    /// When the provider was last read, so freshness can be judged again later.
+    ///
+    /// The widget renders a timeline of several entries at different dates from one snapshot,
+    /// and every one of them used to carry the severity computed at WRITE time. An account
+    /// that was healthy at T0 therefore still read healthy at T0 plus a day if no background
+    /// refresh had run in between: the tile aged without ever saying so, which is the one
+    /// thing a quota display must never do. Carrying the fetch instant lets each entry decide
+    /// for itself.
+    ///
+    /// Optional because a snapshot written by an earlier build has none, and such an account
+    /// keeps exactly its previous behaviour rather than being declared stale on upgrade.
+    public let fetchedAt: Date?
 
     public init(
         id: String,
         title: String,
         subtitle: String?,
         rows: [GlanceRow],
-        severity: Severity
+        severity: Severity,
+        baseSeverity: Severity? = nil,
+        fetchedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
         self.subtitle = subtitle
         self.rows = rows
         self.severity = severity
+        self.baseSeverity = baseSeverity ?? severity
+        self.fetchedAt = fetchedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt
+    }
+
+    /// Lenient on the two new keys: a snapshot written before them must still decode, or every
+    /// widget goes blank on the upgrade that introduced them.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        subtitle = try c.decodeIfPresent(String.self, forKey: .subtitle)
+        rows = try c.decode([GlanceRow].self, forKey: .rows)
+        severity = try c.decode(Severity.self, forKey: .severity)
+        baseSeverity = try c.decodeIfPresent(Severity.self, forKey: .baseSeverity) ?? severity
+        fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
+    }
+
+    /// The severity to show at `now`, aged from the fetch instant rather than frozen.
+    ///
+    /// An error stays an error: a snapshot that failed to parse does not become merely old.
+    /// Without a fetch instant this is the stored value, unchanged.
+    public func severity(at now: Date, staleAfter: TimeInterval) -> Severity {
+        guard let fetchedAt else { return severity }
+        if baseSeverity == .error { return .error }
+        return now.timeIntervalSince(fetchedAt) >= staleAfter ? .stale : baseSeverity
     }
 
     /// The tightest number this block actually shows. Used only for ordering.
@@ -77,6 +126,13 @@ public struct GlanceSnapshot: Sendable, Equatable, Codable {
     public let headlineShort: GlanceRow?
     public let headlineLong: GlanceRow?
 
+    /// How old a reading may be before it reads as stale.
+    ///
+    /// Travels with the snapshot because the widget is a separate process that cannot see the
+    /// user's sync interval, and a fixed hour is wrong at the three-hour interval the settings
+    /// screen offers — every reading would be stale before the next arrived.
+    public let staleAfter: TimeInterval
+
     public init(
         accounts: [GlanceAccount],
         accountCount: Int,
@@ -84,8 +140,10 @@ public struct GlanceSnapshot: Sendable, Equatable, Codable {
         nextResetAt: Date?,
         overallSeverity: Severity,
         headlineShort: GlanceRow?,
-        headlineLong: GlanceRow?
+        headlineLong: GlanceRow?,
+        staleAfter: TimeInterval = Severity.staleAfter
     ) {
+        self.staleAfter = staleAfter
         self.accounts = accounts
         self.accountCount = accountCount
         self.updatedAt = updatedAt
@@ -93,6 +151,28 @@ public struct GlanceSnapshot: Sendable, Equatable, Codable {
         self.overallSeverity = overallSeverity
         self.headlineShort = headlineShort
         self.headlineLong = headlineLong
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accounts, accountCount, updatedAt, nextResetAt, overallSeverity
+        case headlineShort, headlineLong, staleAfter
+    }
+
+    /// Lenient on `staleAfter`, which older files do not have. The synthesised decoder
+    /// requires every key, and this file is read by the widget process — a decode failure
+    /// there is not an error anyone sees, it is a blank tile on every home screen at the
+    /// moment of upgrade.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accounts = try c.decode([GlanceAccount].self, forKey: .accounts)
+        accountCount = try c.decode(Int.self, forKey: .accountCount)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        nextResetAt = try c.decodeIfPresent(Date.self, forKey: .nextResetAt)
+        overallSeverity = try c.decode(Severity.self, forKey: .overallSeverity)
+        headlineShort = try c.decodeIfPresent(GlanceRow.self, forKey: .headlineShort)
+        headlineLong = try c.decodeIfPresent(GlanceRow.self, forKey: .headlineLong)
+        staleAfter = try c.decodeIfPresent(TimeInterval.self, forKey: .staleAfter)
+            ?? Severity.staleAfter
     }
 
     public static let empty = GlanceSnapshot(
@@ -170,7 +250,8 @@ public enum GlanceModel {
             // below stops letting rowless accounts occupy a two-slot widget.
             overallSeverity: ordered.map(\.severity).max() ?? .stale,
             headlineShort: lead?.rows.first { $0.category == .fiveHour },
-            headlineLong: lead?.rows.first { $0.category != .fiveHour })
+            headlineLong: lead?.rows.first { $0.category != .fiveHour },
+            staleAfter: staleAfter)
     }
 
     /// Worst first, with the tightest number breaking a tie — coarsely.
@@ -310,7 +391,11 @@ public enum GlanceModel {
             // The masked form, never the raw address: a widget renders on a lock screen.
             subtitle: usage.account.maskedEmail,
             rows: rows,
-            severity: usage.snapshot?.severity(at: now, staleAfter: staleAfter) ?? .stale)
+            severity: usage.snapshot?.severity(at: now, staleAfter: staleAfter) ?? .stale,
+            // The unaged judgement and the instant it was made, so a widget rendering this
+            // hours later can age it itself instead of repeating a verdict from write time.
+            baseSeverity: usage.snapshot?.severity ?? .stale,
+            fetchedAt: usage.snapshot?.fetchedAt)
     }
 
     private static func row(_ window: UsageWindow) -> GlanceRow {
