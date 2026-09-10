@@ -69,10 +69,18 @@ final class LoopbackSignIn: NSObject {
                     guard let code = try await group.next() else { break }
                     return code
                 } catch is CancellationError {
-                    // Says only that a path stopped, never why. It fills an empty slot so
-                    // something is thrown at the end, but never displaces a real reason.
-                    if failure == nil { failure = CancellationError() }
+                    // Cancellation is the USER, and it ends everything immediately.
+                    //
+                    // My first version of this loop recorded it and kept waiting, which was a
+                    // regression I introduced while fixing something else: dismissing the
+                    // sheet retired the browser path and then waited on the listener's own
+                    // five-minute deadline. The add-account screen would have sat there for
+                    // five minutes after the user asked it to stop.
+                    throw CancellationError()
                 } catch {
+                    // Anything else retires one path and leaves the other running. This is the
+                    // case that matters: a listener that cannot bind its port must not end a
+                    // sign-in that the interception path needs no port to complete.
                     failure = error
                 }
             }

@@ -118,6 +118,16 @@ public actor LoopbackListener {
                     if finished.claim() {
                         continuation.resume(throwing: ListenError.portUnavailable(self.port))
                     }
+                case .waiting:
+                    // A port already held by another process puts NWListener here, NOT in
+                    // `.failed`: it keeps retrying in the background on the assumption that
+                    // whatever blocks it is temporary. For a fixed loopback port that
+                    // assumption is wrong — nothing about waiting makes the other process let
+                    // go — and the cost of humouring it is the full timeout of a spinner
+                    // before the user is told anything, instead of being told now.
+                    if finished.claim() {
+                        continuation.resume(throwing: ListenError.portUnavailable(self.port))
+                    }
                 case .cancelled:
                     // Cancellation MUST resume the continuation, and this is the only place it
                     // can. Without this arm the sign-in deadlocks rather than ending: the
