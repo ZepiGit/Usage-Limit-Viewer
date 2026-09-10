@@ -44,11 +44,10 @@ final class LoopbackSignIn: NSObject {
                 let callback = try await self.present(challenge.url)
 
                 if let callback {
-                    // The session intercepted the redirect. Same checks as the listener applies,
-                    // through the same function: the state is verified in constant time before
-                    // anything else in the URL is read.
-                    return try OAuthFlows.code(
-                        from: callback, expectedState: challenge.state)
+                    // The session intercepted the redirect. The challenge does the reading, so
+                    // this never handles the state and cannot get the comparison wrong — and it
+                    // is the same check, through the same function, that the listener applies.
+                    return try challenge.code(fromCallback: callback)
                 }
 
                 // The sheet closed without a callback. That is not an answer: the user may have
