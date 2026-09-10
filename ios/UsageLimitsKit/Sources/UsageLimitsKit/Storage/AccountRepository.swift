@@ -63,14 +63,16 @@ public actor AccountRepository {
         // The snapshot is kept across an account being re-saved. Re-authenticating an account
         // updates its tokens, not its quota, and blanking the numbers would make a successful
         // sign-in look like a regression.
-        records[account.id] = Stored(account: account, snapshot: records[account.id]?.snapshot)
-        try persist()
+        var updated = records
+        updated[account.id] = Stored(account: account, snapshot: records[account.id]?.snapshot)
+        try persist(updated)
     }
 
     public func remove(id: String) throws {
         ensureLoaded()
-        records[id] = nil
-        try persist()
+        var updated = records
+        updated[id] = nil
+        try persist(updated)
     }
 
     /// Records the result of one sync.
@@ -81,9 +83,10 @@ public actor AccountRepository {
     /// two apart, which it could not if the windows were simply gone.
     public func record(_ outcome: SyncOutcome, at time: Date) throws {
         ensureLoaded()
+        var updated = records
         switch outcome {
         case .success(let accountID, let result):
-            guard var stored = records[accountID] else { return }
+            guard var stored = updated[accountID] else { return }
             stored.snapshot = UsageSnapshot(
                 accountID: accountID,
                 fetchedAt: time,
@@ -100,10 +103,10 @@ public actor AccountRepository {
             if let plan = result.plan, plan != stored.account.plan {
                 stored.account = stored.account.withPlan(plan)
             }
-            records[accountID] = stored
+            updated[accountID] = stored
 
         case .failure(let accountID, let message):
-            guard var stored = records[accountID] else { return }
+            guard var stored = updated[accountID] else { return }
             let previous = stored.snapshot
             stored.snapshot = UsageSnapshot(
                 accountID: accountID,
@@ -117,25 +120,41 @@ public actor AccountRepository {
                 resetCreditCount: previous?.resetCreditCount,
                 applicableResetCreditCount: previous?.applicableResetCreditCount,
                 errorMessage: message)
-            records[accountID] = stored
+            updated[accountID] = stored
         }
 
-        try persist()
+        try persist(updated)
     }
 
     // MARK: - Persistence
 
-    private func persist() throws {
+    /// Writes a candidate state, and only then makes it the state readers see.
+    ///
+    /// Mutating `records` first and writing afterwards meant a failed write left the change
+    /// live in memory: the UI showed an account as removed, or a snapshot as updated, while
+    /// the file on disk still said otherwise — and the next launch reverted it. Atomic file
+    /// replacement protects the FILE from a half-write; it does nothing for the actor's own
+    /// dictionary. Committing last is what keeps the two agreeing.
+    ///
+    /// There is deliberately no suspension point between the write and the commit, so no other
+    /// call on this actor can observe the interval between them.
+    private func persist(_ updated: [String: Stored]) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+
+        let ordered = updated.values.sorted {
+            ($0.account.createdAt, $0.account.id) < ($1.account.createdAt, $1.account.id)
+        }
 
         // Atomic, because the widget process can be reading the same container while this
         // writes. A half-written file decodes to nothing, and a list that empties itself
         // occasionally is worse than one that lags.
         try encoder
-            .encode(ordered())
+            .encode(ordered)
             .write(to: fileURL, options: ContainerFile.writingOptions)
+
+        records = updated
     }
 
     private static func load(from url: URL) -> [String: Stored] {
