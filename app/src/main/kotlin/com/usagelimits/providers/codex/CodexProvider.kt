@@ -3,6 +3,7 @@ package com.usagelimits.providers.codex
 import com.usagelimits.core.auth.OAuthCredentials
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
+import com.usagelimits.core.model.ResetCredit
 import com.usagelimits.core.network.HttpClient
 import com.usagelimits.core.network.JsonSupport
 import com.usagelimits.core.network.ProviderEndpoints.Codex
@@ -61,7 +62,8 @@ class CodexProvider(
         val deviceAuthId = JsonSupport.string(payload, "device_auth_id", "deviceAuthId")
             ?: throw ProviderException.MalformedPayload("device response had no device_auth_id")
 
-        val intervalSeconds = JsonSupport.long(payload, "interval") ?: DEFAULT_POLL_SECONDS
+        val intervalSeconds = JsonSupport.long(payload, "interval")
+            ?.takeIf { it >= DEFAULT_POLL_SECONDS } ?: DEFAULT_POLL_SECONDS
 
         return LoginChallenge.DeviceCode(
             // The device id is not shown to the user; it is carried through the challenge so
@@ -166,9 +168,13 @@ class CodexProvider(
                     "client_id" to Codex.CLIENT_ID,
                     "grant_type" to "refresh_token",
                     "refresh_token" to refreshToken,
-                    "scope" to Codex.SCOPE,
+                    "scope" to REFRESH_SCOPE,
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         val refreshed = toCredentials(JsonSupport.parseObject(response.body))
@@ -189,7 +195,8 @@ class CodexProvider(
             email = JwtClaims.string(claims, "email"),
             displayName = null,
             plan = JsonSupport.string(auth, "chatgpt_plan_type"),
-            attributes = mapOf(ATTR_ACCOUNT_ID to accountId),
+            attributes = JsonSupport.string(auth, "chatgpt_account_id")
+                ?.let { mapOf(ATTR_ACCOUNT_ID to it) } ?: emptyMap(),
         )
     }
 
@@ -207,20 +214,59 @@ class CodexProvider(
         val windows = CodexUsageParser.parse(payload, now)
 
         // The dedicated endpoint is authoritative but optional: a failure there should cost
-        // the reset-credit row, not the entire usage refresh.
+        // the reset-credit rows, not the entire usage refresh. The usage payload carries a copy.
+        val embedded = JsonSupport.obj(
+            payload,
+            "rate_limit_reset_credits",
+            "rateLimitResetCredits",
+        )
         val credits = runCatching { fetchResetCredits(account, credentials) }
-            .getOrElse { CodexUsageParser.parseEmbeddedResetCredits(payload) }
+            .getOrElse {
+                CreditsResult(
+                    credits = CodexUsageParser.parseResetCredits(embedded),
+                    count = CodexUsageParser.availableCreditCount(embedded),
+                )
+            }
 
-        return UsageResult(windows = windows, resetCredits = credits)
+        // The two sources are not the same payload with the same fields, which is easy to miss
+        // and was wrong here until a live account was checked. The dedicated endpoint returns
+        // `credits`, `available_count`, `total_earned_count` and no applicable count at all;
+        // the embedded copy returns `available_count` and `applicable_available_count` and no
+        // `credits` array. Reading the applicable count off whichever source answered meant it
+        // was only ever available on the FALLBACK path — the button lost its gate precisely
+        // when the authoritative call succeeded.
+        val applicable = CodexUsageParser.applicableCreditCount(embedded)
+
+        // The reported count wins over the row count. The list can be truncated or filtered
+        // while the count stays exact, and gating the redeem button on the rows would hide it
+        // from someone who actually holds credits.
+        return UsageResult(
+            windows = windows,
+            resetCredits = credits.credits,
+            resetCreditCount = credits.count ?: credits.credits.size,
+            applicableResetCreditCount = applicable,
+        )
     }
+
+    private data class CreditsResult(
+        val credits: List<ResetCredit>,
+        val count: Int?,
+    )
 
     private suspend fun fetchResetCredits(
         account: ProviderAccount,
         credentials: OAuthCredentials,
-    ) = http.request(
-        url = Codex.RESET_CREDITS_URL,
-        headers = usageHeaders(account, credentials) + Codex.RESET_CREDIT_HEADERS,
-    ).let { CodexUsageParser.parseResetCredits(JsonSupport.parseObject(it.body)) }
+    ): CreditsResult {
+        val response = http.request(
+            url = Codex.RESET_CREDITS_URL,
+            headers = usageHeaders(account, credentials) + Codex.RESET_CREDIT_HEADERS,
+        )
+        val payload = JsonSupport.parseObject(response.body)
+        return CreditsResult(
+            credits = CodexUsageParser.parseResetCredits(payload),
+            count = CodexUsageParser.availableCreditCount(payload),
+        )
+    }
 
     /**
      * Spends one reset credit.
@@ -257,8 +303,8 @@ class CodexProvider(
         put("Content-Type", "application/json")
         put("Accept", "application/json")
         put("User-Agent", Codex.USER_AGENT)
-        val accountId = account.attributes[ATTR_ACCOUNT_ID] ?: account.externalAccountId
-        if (accountId.isNotBlank()) put(Codex.HEADER_ACCOUNT_ID, accountId)
+        val accountId = account.attributes[ATTR_ACCOUNT_ID]
+        if (!accountId.isNullOrBlank()) put(Codex.HEADER_ACCOUNT_ID, accountId)
     }
 
     private fun toCredentials(payload: JsonObject): OAuthCredentials {
@@ -281,6 +327,9 @@ class CodexProvider(
 
     companion object {
         const val ATTR_ACCOUNT_ID = "chatgpt_account_id"
+
+        // Deliberately differs from the authorize scope to match the refresh grant.
+        private const val REFRESH_SCOPE = "openid profile email"
 
         /** Packs the user code and the device id into one challenge field. */
         private const val CODE_SEPARATOR = "|"

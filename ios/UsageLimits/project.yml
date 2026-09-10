@@ -1,0 +1,140 @@
+# XcodeGen spec for the iOS app.
+#
+# A readable spec rather than a committed .pbxproj, for two reasons. A pbxproj is a generated
+# file with unstable ordering, so it conflicts on every branch and nobody can review a diff of
+# it. And this project cannot be opened in Xcode from the environment it was written in, so a
+# hand-maintained one would be a file nobody could check — whereas CI regenerates from this and
+# either compiles or does not.
+#
+#   brew install xcodegen && xcodegen generate
+name: UsageLimits
+options:
+  bundleIdPrefix: com.usagelimits
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  UsageLimitsKit:
+    path: ../UsageLimitsKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # Strict concurrency across the app too, not only the package. The kit is already clean, and
+    # letting the app lag behind is how a @MainActor violation reaches a user as a crash on a
+    # slow network rather than as a compile error here.
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGNING_ALLOWED: NO
+
+targets:
+  UsageLimits:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+        excludes:
+          - Widget/**
+    dependencies:
+      - package: UsageLimitsKit
+      # The widget must be EMBEDDED, not merely built. Listing both targets in the scheme
+      # compiles the extension and stops there: it produces a .appex next to the app rather
+      # than inside it, so the installed bundle has no widget at all and the tile never
+      # appears in the system picker. Nothing catches that — both targets compile, every test
+      # passes, and the feature is simply absent from the artefact.
+      - target: UsageLimitsWidget
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app
+        TARGETED_DEVICE_FAMILY: "1,2"
+    # A generated Info.plist rather than INFOPLIST_KEY_* build settings, because two of the keys
+    # below are arrays and the build-setting spelling cannot express one. Written by XcodeGen,
+    # so it is still generated rather than hand-maintained.
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Dark-only by design: a half-finished light palette would look worse than a deliberate
+        # dark one, and the reference design is dark.
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Without this the app can never refresh while closed, so the widget shows whatever was
+        # on screen when the user last opened it and a limit can run out unannounced.
+        UIBackgroundModes:
+          - fetch
+        # Must match BackgroundRefresh.taskIdentifier exactly. A mismatch is not reported: the
+        # registration throws at launch and background refresh silently never happens again.
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.usagelimits.app.refresh
+    # The app and the widget are separate processes; the shared container is the only thing
+    # they have in common, and a missing entitlement makes the container URL nil at runtime —
+    # which shows up as a permanently blank tile rather than as any kind of error.
+    entitlements:
+      path: UsageLimits.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.usagelimits.shared
+
+  UsageLimitsWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Widget
+      - path: Sources/Theme
+    dependencies:
+      - package: UsageLimitsKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.widget
+    # Written out rather than left to INFOPLIST_KEY_NSExtensionPointIdentifier. That build
+    # setting only reaches the bundle when Xcode is the one generating the Info.plist, and what
+    # an extension actually needs is a nested NSExtension dictionary — a shape no
+    # INFOPLIST_KEY_* spelling can express. An extension whose plist lacks it is not recognised
+    # as a widget provider, which looks exactly like a widget that was never installed.
+    info:
+      path: UsageLimitsWidget-Info.plist
+      properties:
+        CFBundleDisplayName: Usage Limits
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: UsageLimitsWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.usagelimits.shared
+
+  # The only target that runs the real binary. Everything else in this repository is verified
+  # without ever starting the app — the kit's tests run on Linux, and the build job compiles the
+  # SwiftUI code without executing a line of it. Compiling proves the types line up; it does not
+  # prove the app launches.
+  UsageLimitsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: UsageLimits
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.uitests
+        TEST_TARGET_NAME: UsageLimits
+
+schemes:
+  UsageLimits:
+    build:
+      targets:
+        UsageLimits: all
+        UsageLimitsWidget: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UsageLimitsUITests

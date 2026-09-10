@@ -19,6 +19,19 @@ data class ProviderProfile(
 data class UsageResult(
     val windows: List<UsageWindow>,
     val resetCredits: List<ResetCredit> = emptyList(),
+    /**
+     * Provider-reported credit count, when it gives one.
+     *
+     * Authoritative over [resetCredits].size: the row list can be truncated or filtered while
+     * the count stays exact.
+     */
+    val resetCreditCount: Int? = null,
+    /**
+     * How many of those credits are spendable right now, when the provider distinguishes.
+     *
+     * Null means the provider does not report the distinction, not that none are spendable.
+     */
+    val applicableResetCreditCount: Int? = null,
 )
 
 /**

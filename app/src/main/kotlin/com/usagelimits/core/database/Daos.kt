@@ -27,14 +27,10 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE provider = :provider AND externalAccountId = :externalAccountId")
     suspend fun getByExternalId(provider: String, externalAccountId: String): AccountEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(account: AccountEntity)
 
     @Upsert
     suspend fun upsert(account: AccountEntity)
 
-    @Delete
-    suspend fun delete(account: AccountEntity)
 
     @Query("DELETE FROM accounts WHERE localId = :localId")
     suspend fun deleteById(localId: String)
@@ -55,8 +51,6 @@ interface UsageSnapshotDao {
     @Query("SELECT * FROM usage_snapshots WHERE accountId = :accountId")
     suspend fun getForAccount(accountId: String): UsageSnapshotEntity?
 
-    @Query("SELECT * FROM usage_snapshots WHERE accountId = :accountId")
-    fun observeForAccount(accountId: String): Flow<UsageSnapshotEntity?>
 
     @Upsert
     suspend fun upsert(snapshot: UsageSnapshotEntity)
@@ -79,4 +73,43 @@ interface WidgetConfigDao {
 
     @Query("DELETE FROM widget_configs WHERE appWidgetId = :appWidgetId")
     suspend fun delete(appWidgetId: Int)
+
+    /**
+     * Drops every widget pinned to an account, so the widget falls back to the automatic scope.
+     *
+     * Without this a widget scoped to a deleted account was left rendering the empty snapshot
+     * for ever — blank dashes with no way back short of removing the widget from the home
+     * screen and placing it again.
+     */
+    @Query("DELETE FROM widget_configs WHERE accountId = :accountId")
+    suspend fun deleteForAccount(accountId: String)
+}
+
+/**
+ * Claims notification events and carries per-account state.
+ *
+ * [claim] is the whole point: `OnConflictStrategy.IGNORE` returns -1 for a row that already
+ * existed, which is how "has this alert already been delivered" is answered without a
+ * read-then-write race between two sync workers.
+ */
+@Dao
+interface NotificationDao {
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun claim(event: NotificationEventEntity): Long
+
+    @Query("SELECT * FROM notification_state")
+    suspend fun allStates(): List<NotificationStateEntity>
+
+    @Upsert
+    suspend fun upsertStates(states: List<NotificationStateEntity>)
+
+    /**
+     * Drops consumed records older than [cutoff].
+     *
+     * Without this the table grows for the life of the install. The cutoff has to be long
+     * enough that a monthly window's reset key is still remembered when it comes round again.
+     */
+    @Query("DELETE FROM notification_events WHERE consumedAt < :cutoff")
+    suspend fun pruneEventsBefore(cutoff: Long)
 }

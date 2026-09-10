@@ -18,9 +18,11 @@ import java.util.concurrent.TimeUnit
  * Background usage refresh.
  *
  * Runs the same [SyncEngine] the UI uses, then pushes the refreshed cache into the widgets.
- * A pass that fails for every account still returns success: [SyncEngine] already recorded
- * the per-account error and the next scheduled pass will retry, so asking WorkManager to
- * retry as well would double the request rate against a provider that is already failing.
+ * A pass where *some* accounts succeeded returns success — [SyncEngine] already recorded each
+ * per-account error, and asking WorkManager to retry would double the request rate against a
+ * provider that is already failing. A pass where *every* account failed returns retry, since
+ * that points at a shared cause (offline, or the device asleep) worth backing off and retrying
+ * sooner than the next period.
  */
 class SyncWorker(
     context: Context,
@@ -32,11 +34,7 @@ class SyncWorker(
 
         val outcomes = container.syncEngine.syncAll()
 
-        // Widgets read the cache, so they only need waking once the cache has moved.
-        WidgetUpdater.refreshAll(applicationContext)
-
-        NotificationPublisher(applicationContext, container.settingsStore)
-            .publishFor(container.repository.accountUsageOnce())
+        container.publishAfterSync(applicationContext)
 
         return if (outcomes.isEmpty() || outcomes.any { it.success }) {
             Result.success()

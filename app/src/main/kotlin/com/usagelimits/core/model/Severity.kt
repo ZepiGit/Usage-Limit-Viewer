@@ -14,13 +14,60 @@ enum class Severity {
     STALE,
     ERROR;
 
+    /**
+     * How urgently this deserves the user's attention. Lower is more urgent.
+     *
+     * NOT the declaration order. `ordinal` puts STALE and ERROR after EXHAUSTED because they
+     * are worse *states*, and sorting screens by it put a never-fetched blank card and a
+     * day-old stale card above the account the user had actually run out on. Attention
+     * order is a different question from severity order, and this is the one answer to it
+     * — the overview list and the widget ranking both use it, so they cannot disagree.
+     */
+    val urgency: Int
+        get() = when (this) {
+            EXHAUSTED -> 0
+            LOW -> 1
+            MEDIUM -> 2
+            HEALTHY -> 3
+            ERROR -> 4
+            STALE -> 5
+        }
+
     companion object {
         /** Central thresholds — the one place these numbers are defined. */
         const val HEALTHY_ABOVE = 50.0
         const val MEDIUM_ABOVE = 20.0
 
-        /** Beyond this a snapshot is shown as stale rather than current. */
+        /**
+         * Default age beyond which a snapshot is shown as stale rather than current.
+         *
+         * Only a default. Prefer [staleAfterMs], which derives the threshold from the sync
+         * interval the user actually chose — see below for why a fixed hour is wrong.
+         */
         const val STALE_AFTER_MS = 60L * 60 * 1000
+
+        /**
+         * Never call a snapshot stale before it has had a fair chance to refresh.
+         *
+         * A floor as well as a multiple, because two fifteen-minute periods is half an hour,
+         * and Doze routinely defers background work by more than that on a phone in a pocket.
+         */
+        private const val MIN_STALE_AFTER_MS = 45L * 60 * 1000
+
+        /**
+         * How old a snapshot may be before it stops being trustworthy, given how often the app
+         * was told to refresh.
+         *
+         * A fixed hour was a bug at a setting the app itself offers: the sync interval can be
+         * set to three hours, and every snapshot would then be older than an hour by the time
+         * the next one arrived — so every account read STALE permanently, greyed out and
+         * ranked as "cannot tell you" no matter how healthy it actually was.
+         *
+         * Two missed refreshes is the signal worth acting on, so the threshold follows the
+         * interval rather than the clock.
+         */
+        fun staleAfterMs(syncIntervalMinutes: Int): Long =
+            maxOf(2L * syncIntervalMinutes * 60_000L, MIN_STALE_AFTER_MS)
 
         fun fromRemainingPercent(remaining: Double?, exhausted: Boolean = false): Severity = when {
             exhausted -> EXHAUSTED

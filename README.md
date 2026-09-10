@@ -1,6 +1,6 @@
 # Usage Limits
 
-Usage Limits is an Android app that shows, at a glance, how much of each AI subscription you
+Usage Limits is an Android and iOS app that shows, at a glance, how much of each AI subscription you
 have left and when each limit rolls over — your Codex five-hour window, your Claude weekly
 window, your Antigravity model buckets and your Grok credits, side by side on one screen and
 on the home screen. It talks directly from your phone to each provider's own usage endpoint
@@ -20,7 +20,7 @@ Four screens and two widgets, all reading the same local cache:
 
 A background pass refreshes every account on a schedule (30 minutes by default, 15 minutes
 minimum — WorkManager's floor for periodic work), and also on app start, on resume, and when
-the widget's refresh button is tapped. Pull-to-refresh, finishing a login and spending a reset
+the widget's refresh button is tapped. The refresh button, finishing a login and spending a reset
 credit refresh in the foreground immediately. Accounts refresh independently, so one expired
 token cannot stop the others, and when a refresh fails the previous numbers stay on screen with
 their real age rather than being blanked.
@@ -57,17 +57,49 @@ quota-reading halves of that work.
 | **Antigravity** (Google) | Google installed-app authorization code + PKCE, loopback redirect on port 51121 | The already-grouped quota buckets Google returns per model family, five-hour and weekly |
 | **Grok** (xAI) | RFC 8628 device flow, with the endpoints resolved from xAI's OIDC discovery document and validated to be x.ai hosts | Weekly credit usage and the monthly billing window |
 
-The two device flows are the better fit for a phone — nothing has to survive the app being
-backgrounded, and no local port has to be free. Claude and Antigravity pin loopback redirect
-URIs in their client registrations, so for those two the app has to bind the exact port they
-expect. `docs/security.md` explains what that costs and why it was accepted.
+All four work on both platforms. The two device flows are the easier fit for a phone — nothing
+has to survive the app being backgrounded and no local port has to be free — while Claude and
+Antigravity pin loopback redirect URIs in their client registrations, so for those two the app
+binds the exact port they expect and answers one request on it. That is what RFC 8252 §7.3
+describes for a native app that cannot register a scheme, and it works on iOS because the sign-in
+is presented by `ASWebAuthenticationSession`, which runs in process: the app stays foregrounded
+and the socket stays alive. `docs/security.md` explains what the listener refuses and why.
 
 ## Project status
 
-**None of the four providers has been exercised against a real account from this codebase.**
-Every flow is implemented from reverse-engineered reference clients, and the parsers are
-tested only against synthetic fixtures. The code compiles and the unit tests pass; "it
-successfully reads a real ChatGPT account" is not a claim this repository can make yet. The
+**Every provider's usage endpoint has been called with a real account; no login, token refresh
+or credit redemption has been run end to end from a device.**
+
+Those are different claims and the difference is the whole point. The four usage payloads were
+captured from live accounts and the parsers corrected against them — which found six divergences
+that synthetic fixtures could not have, because a fixture written from the same assumption as the
+parser cannot catch a wrong assumption. Those captures date from when that gateway path worked; a
+later attempt to re-read the same endpoints failed to authenticate and was abandoned rather than
+retried, so the fixtures stand but nothing re-confirms them against today's live accounts.
+`docs/verification.md` step 3 onward is the runbook for the part only a person with a phone can
+do, ordered cheapest-first and saying what a *wrong* result looks like at each step. It sets out
+what each layer of
+testing can and cannot establish.
+
+What runs in CI, on every push:
+
+| | Android | iOS |
+|---|---|---|
+| Unit tests | 295, on the JVM | 352, on Linux and macOS |
+| Screens rendered | every screen, under Robolectric | every screen, on a booted simulator |
+| App launched | the Application, under Robolectric | the real binary, on a booted simulator |
+| Installable artifact | debug APK, and a signed release on a tag | unsigned archive |
+
+Those are the counts as of the last local run. GitHub-hosted runners have been unavailable to
+this repository since the morning of 10 September — every job dies in two seconds with no log,
+on both runner types, which is the signature of an exhausted Actions allowance rather than a
+build failure — so the commits since then are verified locally and say so individually. PR #2
+records the evidence.
+
+What that still does not cover: signing in to a real account, a token actually being refreshed,
+and a reset credit actually being spent. Refresh in particular has deliberately NOT been
+exercised — these providers rotate refresh tokens on use, so testing it against the maintainer's
+gateway would have invalidated working credentials. The
 per-provider documents in `docs/` each carry their own status section saying exactly what is
 and is not verified for that provider — read them before trusting a field name.
 
@@ -113,6 +145,7 @@ addresses. There is no instrumented (`androidTest`) source set.
 | Document | What it covers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layering, the `UsageProvider` abstraction, the normalised model, the sync pipeline, and the two deliberate deviations from convention |
+| [docs/verification.md](docs/verification.md) | How the app checks it is telling the truth: the three layers of verification, what each can and cannot catch, and the defects each one actually found |
 | [docs/security.md](docs/security.md) | Threat model, credential storage, the no-tokens-in list, PKCE and state validation, and a frank accepted-risks section |
 | [docs/widgets.md](docs/widgets.md) | The two widget sizes, the configuration model, the Room-only data path, and the Glance constraints that shaped the layout |
 | [docs/compatibility.md](docs/compatibility.md) | Android version floor, foldables, window size classes, RTL and accessibility |

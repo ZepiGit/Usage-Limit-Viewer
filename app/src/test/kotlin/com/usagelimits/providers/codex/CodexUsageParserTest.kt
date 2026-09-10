@@ -592,4 +592,110 @@ class CodexUsageParserTest {
         )
         assertNull(CodexUsageParser.parsePlan(JsonSupport.parseObject("{}")))
     }
+
+    // region production shapes
+
+    @Test
+    fun `the production usage payload puts a weekly window in the primary slot`() {
+        // Captured from a live plus account. `primary_window` here is a SEVEN-DAY window and
+        // `secondary_window` is null, which is exactly the shape that makes reading windows by
+        // payload position label a week as a five-hour limit. Classification follows the
+        // declared duration, so it reads weekly. `reset_at` arrives as an epoch NUMBER, not
+        // the ISO-8601 string every hand-written fixture used.
+        val payload = JsonSupport.parseObject(
+            """
+            {
+              "plan_type": "plus",
+              "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {
+                  "used_percent": 100,
+                  "limit_window_seconds": 604800,
+                  "reset_after_seconds": 469200,
+                  "reset_at": 1789457449
+                },
+                "secondary_window": null
+              },
+              "code_review_rate_limit": null,
+              "additional_rate_limits": null,
+              "rate_limit_reset_credits": {
+                "available_count": 0,
+                "applicable_available_count": 0
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val windows = CodexUsageParser.parse(payload, now)
+
+        assertEquals(1, windows.size)
+        assertEquals(WindowCategory.WEEKLY, windows[0].category)
+        assertEquals(100.0, windows[0].usedPercent!!, 0.001)
+        assertTrue(windows[0].exhausted)
+        // The absolute epoch-seconds stamp wins over the 469200s relative offset.
+        assertEquals(1_789_457_449_000L, windows[0].resetAt)
+        assertEquals("plus", CodexUsageParser.parsePlan(payload))
+    }
+
+    @Test
+    fun `production reset credits report an applicable count and no credit rows`() {
+        // The live payload carries only the two counts — there is no `credits` array to read,
+        // so a UI gated on the row list would report "none available" to a user who holds some.
+        val credits = JsonSupport.obj(
+            JsonSupport.parseObject(
+                """{ "rate_limit_reset_credits":
+                     { "available_count": 2, "applicable_available_count": 0 } }""",
+            ),
+            "rate_limit_reset_credits",
+        )
+
+        assertTrue(CodexUsageParser.parseResetCredits(credits).isEmpty())
+        assertEquals(2, CodexUsageParser.availableCreditCount(credits))
+        assertEquals(0, CodexUsageParser.applicableCreditCount(credits))
+    }
+
+    @Test
+    fun `the dedicated credits endpoint and the embedded copy carry different fields`() {
+        // Both captured live. The asymmetry is the point: reading the applicable count off
+        // whichever source answered left the redeem button ungated exactly when the
+        // authoritative call succeeded, because that endpoint does not report it at all.
+        val dedicated = JsonSupport.parseObject(
+            """
+            {
+              "credits": [],
+              "available_count": 0,
+              "total_earned_count": 0,
+              "immediate_reset_purchase_eligible": false,
+              "history_enabled": true
+            }
+            """.trimIndent(),
+        )
+        val embedded = JsonSupport.parseObject(
+            """{ "available_count": 2, "applicable_available_count": 0 }""",
+        )
+
+        assertEquals(0, CodexUsageParser.availableCreditCount(dedicated))
+        assertNull(CodexUsageParser.applicableCreditCount(dedicated))
+
+        assertEquals(2, CodexUsageParser.availableCreditCount(embedded))
+        assertEquals(0, CodexUsageParser.applicableCreditCount(embedded))
+        // No `credits` array in the embedded copy, so the rows must come from the endpoint.
+        assertTrue(CodexUsageParser.parseResetCredits(embedded).isEmpty())
+    }
+
+    @Test
+    fun `an absent applicable count stays null rather than collapsing to zero`() {
+        // Null means "the provider drew no distinction", which the model resolves to the held
+        // count. Reading it as zero would silently disable the redeem button for every
+        // provider that reports one number.
+        assertNull(
+            CodexUsageParser.applicableCreditCount(
+                JsonSupport.parseObject("""{ "available_count": 3 }"""),
+            ),
+        )
+        assertNull(CodexUsageParser.applicableCreditCount(null))
+    }
+
+    // endregion
 }

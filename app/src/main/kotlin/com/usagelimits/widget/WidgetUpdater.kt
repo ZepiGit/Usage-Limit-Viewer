@@ -3,10 +3,12 @@ package com.usagelimits.widget
 import android.content.Context
 import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import kotlinx.coroutines.flow.first
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.updateAll
 import androidx.glance.action.ActionParameters
 import com.usagelimits.UsageLimitsApp
+import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.WidgetScope
 import com.usagelimits.core.sync.SyncWorker
 
@@ -21,10 +23,11 @@ object WidgetUpdater {
 
     /** Rebuilds every placed widget. Called after a sync pass moves the cache. */
     suspend fun refreshAll(context: Context) {
-        runCatching {
-            CompactUsageWidget().updateAll(context)
-            DetailedUsageWidget().updateAll(context)
-        }
+        // Each widget on its own: one `runCatching` around both meant a failure in the compact
+        // widget skipped the detailed one, which then kept showing whatever it had — an
+        // account the user had just deleted, say — with nothing to say it was old.
+        runCatching { CompactUsageWidget().updateAll(context) }
+        runCatching { DetailedUsageWidget().updateAll(context) }
     }
 
     /**
@@ -44,11 +47,15 @@ object WidgetUpdater {
 
         val config = appWidgetId?.let { container.widgetConfigDao.get(it) }
 
+        val interval = container.settingsStore.settings.first().syncIntervalMinutes
+
         return WidgetDataBuilder.build(
             all = container.repository.accountUsageOnce(),
+            nowMs = System.currentTimeMillis(),
             scope = WidgetScope.fromName(config?.scope),
             accountId = config?.accountId,
             providerId = config?.provider,
+            staleAfterMs = Severity.staleAfterMs(interval),
         )
     }
 }

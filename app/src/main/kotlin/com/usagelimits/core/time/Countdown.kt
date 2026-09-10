@@ -1,10 +1,18 @@
 package com.usagelimits.core.time
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.time.temporal.ChronoUnit
+import java.util.Locale
+
 /**
  * Countdown and staleness formatting.
  *
- * Kept free of Android and locale APIs so it is unit-testable and behaves identically on the
- * main screen and inside a widget, where a Composable context may not be available.
+ * Kept free of Android APIs so it is unit-testable and behaves identically on the main screen
+ * and inside a widget, where a Composable context may not be available. `java.time` is fine
+ * here: `minSdk` is 26, which is where it landed natively.
  */
 object Countdown {
 
@@ -31,18 +39,94 @@ object Countdown {
         }
     }
 
-    /** "Reset in 1h 16m", or "Reset due" once the instant has passed. */
+    /**
+     * "Reset in 1h 16m", or "Reset due" once the instant has passed.
+     *
+     * For a surface that re-renders on a clock. A widget does not — see [absoluteResetLabel].
+     */
     fun resetLabel(resetAt: Long?, nowMs: Long): String? {
         if (resetAt == null) return null
         val remaining = resetAt - nowMs
         return if (remaining <= 0) "Reset due" else "Reset in ${format(remaining)}"
     }
 
-    /** "Updated just now" / "Updated 37m ago" — the freshness line above the account list. */
+    /**
+     * "Resets 14:05", "Resets Tue 09:00", "Resets 16 Sep".
+     *
+     * The form a surface that cannot tick must use. A Glance widget recomposes only when its
+     * worker updates it, so a relative countdown is frozen at composition: rendered as
+     * "Reset in 20m" and read twenty-five minutes later, it is not merely stale but wrong in
+     * the one direction that matters, because the limit has already reset and the user is
+     * still being told to wait. An absolute instant stays true however old the render is.
+     *
+     * The day is included beyond today because a bare clock time cannot say whether a weekly
+     * limit returns this evening or next Tuesday, and dropped within today because that is the
+     * common case and the date would only be noise.
+     */
+    fun absoluteResetLabel(
+        resetAt: Long?,
+        nowMs: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+        locale: Locale = Locale.getDefault(),
+    ): String? {
+        if (resetAt == null) return null
+        if (resetAt <= nowMs) return "Reset due"
+
+        val reset = Instant.ofEpochMilli(resetAt).atZone(zone)
+        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val days = ChronoUnit.DAYS.between(today, reset.toLocalDate())
+
+        val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+            .withLocale(locale)
+            .format(reset)
+
+        return when {
+            days == 0L -> "Resets $time"
+            // Inside a week the weekday is the most readable anchor; beyond it the day of the
+            // month is, because "Tue" stops being unambiguous once more than one has passed.
+            days in 1..6 -> "Resets ${
+                DateTimeFormatter.ofPattern("EEE", locale).format(reset)
+            } $time"
+            else -> "Resets ${DateTimeFormatter.ofPattern("d MMM", locale).format(reset)}"
+        }
+    }
+
+    /** "Updated just now" / "Updated 37m ago" — for a surface that re-renders on a clock. */
     fun freshnessLabel(fetchedAt: Long?, nowMs: Long): String {
         if (fetchedAt == null) return "Never updated"
         val age = nowMs - fetchedAt
         if (age < 60_000) return "Updated just now"
         return "Updated ${format(age)} ago"
+    }
+
+    /**
+     * "As of 12:40" — the widget's freshness line.
+     *
+     * Same reasoning as [absoluteResetLabel] and the same defect avoided: "Updated 2m ago"
+     * composed once and left on the home screen for three hours claims the numbers are two
+     * minutes old for as long as the widget is not refreshed. A wall-clock stamp cannot age
+     * into a lie, and it is what lets a reader judge the numbers for themselves.
+     */
+    fun asOfLabel(
+        fetchedAt: Long?,
+        zone: ZoneId = ZoneId.systemDefault(),
+        locale: Locale = Locale.getDefault(),
+        /**
+         * When supplied, a stamp that is not from today carries its date. A time alone is read
+         * as today's — "09:15" on a Wednesday afternoon means this morning to anyone looking —
+         * and a widget left on the home screen shows exactly such a stamp for days.
+         */
+        nowMs: Long? = null,
+    ): String {
+        if (fetchedAt == null) return "Never updated"
+        val at = Instant.ofEpochMilli(fetchedAt).atZone(zone)
+        val sameDay = nowMs == null ||
+            Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate() == at.toLocalDate()
+        val style = if (sameDay) {
+            DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+        } else {
+            DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT, FormatStyle.SHORT)
+        }
+        return "As of ${style.withLocale(locale).format(at)}"
     }
 }

@@ -48,6 +48,7 @@ import com.usagelimits.ui.theme.UsageColors
 fun AccountDetailScreen(
     usage: AccountUsage?,
     nowMs: Long,
+    staleAfterMs: Long,
     resetInFlight: Boolean,
     supportsResetCredits: Boolean,
     onRefresh: () -> Unit,
@@ -106,7 +107,7 @@ fun AccountDetailScreen(
                         color = UsageColors.TextSecondary,
                     )
                 }
-                snapshot?.severity?.let { StatusPill(it) }
+                snapshot?.severityAt(nowMs, staleAfterMs)?.let { StatusPill(it) }
             }
         }
 
@@ -172,7 +173,8 @@ fun AccountDetailScreen(
             item { SectionHeader("Reset credits") }
             item {
                 ResetCreditCard(
-                    creditCount = snapshot?.resetCredits?.size ?: 0,
+                    heldCount = snapshot?.heldResetCredits ?: 0,
+                    spendableCount = snapshot?.spendableResetCredits ?: 0,
                     expiresAt = snapshot?.resetCredits?.mapNotNull { it.expiresAt }?.minOrNull(),
                     nowMs = nowMs,
                     inFlight = resetInFlight,
@@ -237,7 +239,8 @@ fun AccountDetailScreen(
  */
 @Composable
 private fun ResetCreditCard(
-    creditCount: Int,
+    heldCount: Int,
+    spendableCount: Int,
     expiresAt: Long?,
     nowMs: Long,
     inFlight: Boolean,
@@ -245,17 +248,26 @@ private fun ResetCreditCard(
 ) {
     var showConfirm by remember { mutableStateOf(false) }
 
+    // The provider reports credits held and credits that apply to the limit currently reached
+    // as separate numbers. Showing the held count keeps a user who owns credits from being
+    // told they have none, while gating the button on the spendable count keeps the app from
+    // offering a tap the provider will refuse.
+    val heldButUnspendable = heldCount > 0 && spendableCount == 0
+
     UsageCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (creditCount > 0) "$creditCount available" else "None available",
+                    text = if (heldCount > 0) "$heldCount available" else "None available",
                     style = MaterialTheme.typography.titleMedium,
-                    color = if (creditCount > 0) UsageColors.Terracotta else UsageColors.TextSecondary,
+                    color = if (heldCount > 0) UsageColors.Terracotta else UsageColors.TextSecondary,
                 )
                 Text(
-                    text = expiresAt?.let { "Expires in ${Countdown.format(it - nowMs)}" }
-                        ?: "Credits appear here when your plan grants one",
+                    text = when {
+                        heldButUnspendable -> "None apply to your current limit yet"
+                        expiresAt != null -> "Expires in ${Countdown.format(expiresAt - nowMs)}"
+                        else -> "Credits appear here when your plan grants one"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = UsageColors.TextSecondary,
                 )
@@ -268,7 +280,7 @@ private fun ResetCreditCard(
                 )
             }
         }
-        if (creditCount > 0) {
+        if (spendableCount > 0) {
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = { showConfirm = true },

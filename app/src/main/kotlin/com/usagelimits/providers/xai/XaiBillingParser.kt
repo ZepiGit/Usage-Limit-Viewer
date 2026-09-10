@@ -37,6 +37,30 @@ object XaiBillingParser {
     private const val BILLING_PERIOD_SECONDS = 2_592_000L
 
     /**
+     * Unwraps the `config` envelope both billing endpoints wrap their payload in.
+     *
+     * Upstream reads `payload.config` (Management Center
+     * src/features/quota/providers/xai/data.ts:97). Older or partial responses have been seen
+     * flat, so the root is accepted as a fallback rather than requiring the envelope.
+     */
+    private fun config(payload: JsonObject): JsonObject =
+        JsonSupport.obj(payload, "config") ?: payload
+
+    /**
+     * Reads a money field, which xAI reports either as a bare number or wrapped as
+     * `{"val": 10000}`.
+     *
+     * Management Center normalises the same two shapes in normalizeXaiCentValue
+     * (src/utils/quota/builders.ts:374). Reading only the bare form yields null for a wrapped
+     * value, which would silently drop the whole billing view.
+     */
+    private fun cents(source: JsonObject?, vararg names: String): Double? {
+        JsonSupport.double(source, *names)?.let { return it }
+        val wrapped = JsonSupport.obj(source, *names) ?: return null
+        return JsonSupport.double(wrapped, "val")
+    }
+
+    /**
      * Parses the weekly credit view.
      *
      * [nowMs] is part of the parser contract the four providers share; xAI states the period
@@ -46,28 +70,39 @@ object XaiBillingParser {
     fun parseCredits(payload: JsonObject, nowMs: Long): List<UsageWindow> {
         // No percentage means no credit window at all — better one missing row than a bar
         // drawn from an assumed zero.
-        val usedPercent = JsonSupport.double(payload, "creditUsagePercent", "credit_usage_percent")
+        val config = config(payload)
+        val usedPercent = JsonSupport.double(config, "creditUsagePercent", "credit_usage_percent")
+            ?.takeIf { it.isFinite() }
             ?: return emptyList()
 
-        val period = JsonSupport.obj(payload, "currentPeriod", "current_period")
+        val period = JsonSupport.obj(config, "currentPeriod", "current_period")
         val startMs = Instants.parse(JsonSupport.string(period, "start"))
         val endMs = Instants.parse(JsonSupport.string(period, "end"))
+        val periodType = JsonSupport.string(period, "type")
 
-        // The span is measured rather than assumed. xAI calls this window "weekly" today, but
-        // deriving the length means a change upstream reclassifies itself instead of
-        // mislabelling a fortnight as a week. An unusable or inverted pair leaves the length
-        // unknown, which classifies as OTHER — still rendered, just not claimed to be weekly.
+        // The measured span takes precedence so a change upstream reclassifies itself instead
+        // of mislabelling a fortnight as a week. Without a usable span, the reported type can
+        // still identify the period; without either, OTHER avoids claiming a known length.
         val periodSeconds = if (startMs != null && endMs != null && endMs > startMs) {
             (endMs - startMs) / 1000
         } else {
-            null
+            when {
+                periodType?.contains("week", ignoreCase = true) == true -> 604_800L
+                periodType?.contains("month", ignoreCase = true) == true -> BILLING_PERIOD_SECONDS
+                else -> null
+            }
         }
+        val category = WindowCategory.fromPeriodSeconds(periodSeconds)
 
         return listOf(
             UsageWindow(
                 id = CREDITS_WINDOW_ID,
-                label = "Weekly credits",
-                category = WindowCategory.fromPeriodSeconds(periodSeconds),
+                label = when (category) {
+                    WindowCategory.WEEKLY -> "Weekly credits"
+                    WindowCategory.MONTHLY -> "Monthly credits"
+                    else -> "Credits"
+                },
+                category = category,
                 usedPercent = usedPercent,
                 periodSeconds = periodSeconds,
                 resetAt = endMs,
@@ -87,24 +122,30 @@ object XaiBillingParser {
      */
     @Suppress("UNUSED_PARAMETER")
     fun parseBilling(payload: JsonObject, nowMs: Long): List<UsageWindow> {
-        val monthlyLimit = JsonSupport.double(payload, "monthlyLimit", "monthly_limit")
-        val used = JsonSupport.double(payload, "used")
+        val config = config(payload)
+        val monthlyLimit = cents(config, "monthlyLimit", "monthly_limit")
+        // Every name the production shape carries for spend. Reading `used` alone meant a
+        // payload whose spend arrived as `includedUsed` — the pinned production shape — read
+        // as ZERO spend: "0 % used / 100 % remaining", healthy green, for an account 90 %
+        // through its allowance.
+        val used = cents(config, "used")
+            ?: cents(config, "includedUsed", "included_used")
+            ?: cents(config, "totalUsed", "total_used")
         // Neither figure present means this is not a billing payload we understand.
         if (monthlyLimit == null && used == null) return emptyList()
 
-        val limitCents = monthlyLimit ?: 0.0
-        val usedCents = used ?: 0.0
         val resetAt = Instants.parse(
-            JsonSupport.string(payload, "billingPeriodEnd", "billing_period_end"),
+            JsonSupport.string(config, "billingPeriodEnd", "billing_period_end"),
         )
 
         val windows = mutableListOf<UsageWindow>()
 
         // Spend past the allowance is on-demand spend, so the included bar stops at 100 %.
-        // Without the clamp an overspending account reads "140 % used", which is both wrong
-        // for this window and hides the overage from the row that actually meters it.
-        val includedUsed = minOf(usedCents, limitCents)
-        val includedPercent = percentOf(includedUsed, limitCents)
+        // And spend that is ABSENT stays unknown: a limit with no spend figure is a window
+        // whose percentage the app does not know, never one it has decided is untouched.
+        val includedPercent = monthlyLimit?.let { limit ->
+            used?.let { percentOf(minOf(it, limit), limit) }
+        }
         windows += UsageWindow(
             id = MONTHLY_WINDOW_ID,
             label = "Monthly included",
@@ -117,13 +158,14 @@ object XaiBillingParser {
 
         // A zero or absent cap means the account cannot spend on demand at all; showing an
         // empty bar for a facility that does not exist would just be noise.
-        val onDemandCap = JsonSupport.double(payload, "onDemandCap", "on_demand_cap") ?: 0.0
+        val onDemandCap = cents(config, "onDemandCap", "on_demand_cap") ?: 0.0
         if (onDemandCap > 0.0) {
-            // Older payloads omit the on-demand figure and only report total spend, in which
-            // case everything above the allowance is by definition on demand.
-            val onDemandUsed = JsonSupport.double(payload, "onDemandUsed", "on_demand_used")
-                ?: maxOf(0.0, usedCents - limitCents)
-            val onDemandPercent = percentOf(onDemandUsed, onDemandCap)
+            // Deriving overage needs BOTH a known allowance and known spend; with either
+            // missing the row is shown with an unknown percentage rather than omitted or
+            // invented as zero.
+            val onDemandUsed = cents(config, "onDemandUsed", "on_demand_used")
+                ?: monthlyLimit?.let { limit -> used?.let { maxOf(0.0, it - limit) } }
+            val onDemandPercent = onDemandUsed?.let { percentOf(it, onDemandCap) }
             windows += UsageWindow(
                 id = ON_DEMAND_WINDOW_ID,
                 label = "On-demand",
@@ -141,10 +183,10 @@ object XaiBillingParser {
     /**
      * Joins the two views, credits first.
      *
-     * Ids are de-duplicated because the two views are projections of one resource: if the
-     * credit view ever starts reporting a monthly figure as well, the account gets one bar
-     * rather than two contradictory ones. First occurrence wins, so the credit view — the
-     * only one that reports a percentage directly — stays authoritative.
+     * The parsers' ids are currently disjoint by construction, so de-duplication guards
+     * against a future id collision rather than removing any rows today. First occurrence
+     * wins, so the credit view — the only one that reports a percentage directly — takes
+     * precedence if a collision is introduced.
      */
     fun merge(credits: List<UsageWindow>, billing: List<UsageWindow>): List<UsageWindow> {
         val seen = mutableSetOf<String>()
@@ -159,7 +201,7 @@ object XaiBillingParser {
      * compare as "healthy" against the severity thresholds.
      */
     private fun percentOf(amount: Double, total: Double): Double? =
-        if (total > 0.0) amount / total * 100.0 else null
+        if (total > 0.0) (amount / total * 100.0).takeIf { it.isFinite() } else null
 
     private fun isExhausted(usedPercent: Double?): Boolean =
         usedPercent != null && usedPercent >= 100.0

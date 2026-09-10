@@ -255,9 +255,16 @@ Behaviour derived from, and re-read at, these commits:
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`
   for the profile and usage URLs, the `anthropic-beta` value, the flat window key list, and
   the `iguana_necktie` key that corrects the brief's `seven_day_fable`.
-- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — cross-check on the `/api/oauth/usage` field
-  names, the `utilization` direction, and the shape of `limits[]` including `kind`,
-  `is_active` and `scope.model.display_name`.
+- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — *not a source for this provider.* That
+  repository covers `codex`, `gemini-cli` and `antigravity` only; it makes no Anthropic call
+  and declares no Claude type. An earlier draft of this document cited it as a cross-check on
+  the usage field names and the `utilization` direction, which was wrong.
+
+**Single-sourced, and worth knowing.** Every Claude usage detail above — the flat window keys,
+the `utilization` direction, `iguana_necktie`, and the `limits[]` shape — rests on the
+Management Center alone. There is no second implementation to check it against, so a
+misreading there would propagate here undetected. That is the strongest argument for the
+fixture-based parser tests: they at least pin the app's behaviour to a stated shape.
 
 No credential material, captured payload or account identifier from any real account appears
 in this repository, in its tests, or in this document.

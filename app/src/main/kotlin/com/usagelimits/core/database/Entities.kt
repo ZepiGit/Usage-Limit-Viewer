@@ -58,6 +58,20 @@ data class UsageSnapshotEntity(
     val windowsJson: String,
     /** Normalised [com.usagelimits.core.model.ResetCredit] list as JSON. */
     val resetCreditsJson: String,
+    /**
+     * The count the provider reports, which is authoritative over the row count.
+     *
+     * The credit list can be truncated or filtered while the count stays exact, so gating the
+     * redeem button on the list size would hide it from a user who actually holds credits.
+     */
+    val resetCreditCount: Int? = null,
+    /**
+     * How many of those credits apply to the limit currently reached.
+     *
+     * Separate from [resetCreditCount] because the provider reports both and a zero here does
+     * not mean the user holds nothing — see CodexUsageParser.applicableCreditCount.
+     */
+    val applicableResetCreditCount: Int? = null,
 )
 
 /**
@@ -74,4 +88,66 @@ data class WidgetConfigEntity(
     val accountId: String?,
     val provider: String?,
     val updatedAt: Long,
+)
+
+/**
+ * One alert this app has already delivered.
+ *
+ * The row is the record that a given edge has been consumed, so it exists solely to stop the
+ * same alert firing on the next sync. Insert-or-ignore against the primary key is what makes
+ * claiming atomic: the insert either wins, and the caller may post, or loses, and it must not.
+ *
+ * Keys are opaque and internal — they may name an account row or a credit id, and never appear
+ * in notification text.
+ */
+@Entity(
+    tableName = "notification_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["accountId"])],
+)
+data class NotificationEventEntity(
+    @PrimaryKey val eventKey: String,
+    val accountId: String,
+    val consumedAt: Long,
+)
+
+/**
+ * Per-account carried-over notification state.
+ *
+ * Separate from the snapshot because it must outlive any single fetch: whether the account is
+ * mid-episode, and which snapshot has already been processed, are the two facts that turn a
+ * series of point-in-time readings into edges.
+ */
+@Entity(
+    tableName = "notification_state",
+    foreignKeys = [
+        ForeignKey(
+            entity = AccountEntity::class,
+            parentColumns = ["localId"],
+            childColumns = ["accountId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class NotificationStateEntity(
+    @PrimaryKey val accountId: String,
+    val lowQuotaEpisode: Int,
+    val lowQuotaActive: Boolean,
+    val lastProcessedFetchedAt: Long?,
+    /**
+     * Per-window episodes as a JSON object keyed by window identity, added in version 5.
+     *
+     * A column rather than a table, matching how `usage_snapshots` stores its windows: the
+     * map is read and written whole, nothing queries inside it, and a window that a provider
+     * stops reporting simply ages out of the map rather than leaving an orphaned row.
+     */
+    @androidx.room.ColumnInfo(defaultValue = "{}")
+    val windowsJson: String = "{}",
 )

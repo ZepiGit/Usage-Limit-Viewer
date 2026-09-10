@@ -77,16 +77,22 @@ carries a "do not rename casually" note; `WidgetScope.fromName` maps anything un
 including `null` — to `MOST_CRITICAL` so a bad or missing row degrades to a useful widget
 rather than an empty one.
 
-**Honest status: there is no configuration UI yet.** No activity is declared with
-`android:configure` in either `widget_compact_info.xml` or `widget_detailed_info.xml`, and
-nothing in the app writes a `WidgetConfigEntity` — the table is only ever read. Every placed
-widget therefore takes the `null` path and renders `MOST_CRITICAL`. The storage, the reducer
-and the fallback are all finished and exercised by the read path; what is missing is the
-screen. Adding it means a small configuration activity that receives
-`EXTRA_APPWIDGET_ID`, offers the four scopes plus an account or provider picker, upserts one
-row through `WidgetConfigDao`, calls `updateAll` for that widget class, and returns
-`RESULT_OK` with the id — plus `android:configure` in the provider XML. The reducer needs no
-change at all.
+**The configuration screen.** `WidgetConfigActivity` is declared as `android:configure` on
+both providers, so the launcher opens it when a widget is dropped and again on reconfigure
+(`android:widgetFeatures="reconfigurable"`). It receives `EXTRA_APPWIDGET_ID`, offers the four
+scopes — "most important limits", "all accounts", one provider, one account — upserts a single
+`WidgetConfigEntity` through `WidgetConfigDao`, repaints so the widget lands showing the chosen
+scope, and returns `RESULT_OK` with the id.
+
+The result is set to `RESULT_CANCELED` first and only flipped on an explicit choice. That is
+the framework contract: backing out removes the widget rather than leaving an unconfigured one
+on the home screen. The activity is not exported — only the system starts it, through the
+`APPWIDGET_CONFIGURE` action.
+
+This screen was missing for a while, and the cost was larger than "a setting you cannot
+change": with no row ever written, `WidgetScope.fromName(null)` sent every widget down the
+`MOST_CRITICAL` path, so `ACCOUNT` and `PROVIDER` were unreachable code and two widgets placed
+to watch two different Codex accounts rendered identically.
 
 ## The data path, and why a token cannot reach the home screen
 
@@ -146,12 +152,15 @@ the worker calls `WidgetUpdater.refreshAll` after the cache moves, every placed 
 from one pass rather than each fetching for itself.
 
 The visible cost is that the refresh is not instant and the button has no spinner: the widget
-keeps showing the old numbers until the pass lands, then repaints. There is a related gap in
-the other direction — `WidgetUpdater.refreshAll` is called only from `SyncWorker.doWork`, so a
-*foreground* refresh inside the app (pull-to-refresh, or the sync that follows a login) updates
-the screens but leaves the widgets on their previous numbers until the next worker pass. A progress state in the
+keeps showing the old numbers until the pass lands, then repaints. A progress state in the
 header would be an improvement, and would need a small piece of transient state the widget can
 read — which today would mean another Room write.
+
+The reverse direction used to be broken and is worth recording: `WidgetUpdater.refreshAll` was
+reachable only from `SyncWorker.doWork`, so refreshing inside the app updated the screens while
+the home screen kept the previous numbers until the next background pass. Every foreground
+path now calls it — the refresh button, a per-account refresh, a completed login, a spent reset
+credit, and a removed account.
 
 ## Glance constraints that shaped the layout
 
@@ -159,18 +168,24 @@ Glance is not Compose. It emits `RemoteViews`, so there is no measurement, no cu
 no arbitrary layout, and no access to the app's process at draw time. Four consequences are
 visible in the code:
 
-**No tintable progress primitive.** Glance's progress indicator cannot be tinted per instance
-in a way that works across launchers and API levels, and the whole point of these bars is that
-their colour carries the severity. So `UsageBar` is two nested `Box`es: a track with a
-`cornerRadius`, and inside it a filled box with the severity colour.
+**The bars use Glance's own progress indicator.** `androidx.glance.appwidget.LinearProgressIndicator`
+accepts a per-instance `color` and `backgroundColor` and fills whatever width its modifier
+gives it, which is exactly what these bars need — the colour carries the severity and the
+width has to follow the tile.
 
-**No fractional width measurement.** There is no `fillMaxWidth(fraction)` a child can resolve
-against a parent whose width Glance does not know at composition time. `UsageBar` therefore
-takes an explicit `maxWidth: Int` in dp — 62 inside a compact tile, 88 inside a detailed row —
-and computes `filled = maxWidth * fraction`, with a 4dp floor so a small non-zero value still
-shows a sliver instead of vanishing. Those two constants are the reason the row widths
-(52dp label, 42dp percent) are fixed too: everything in the row has to add up to something that
-fits without measurement.
+This was originally hand-rolled as two nested `Box`es with an explicit `maxWidth: Int` in dp,
+on the mistaken belief that Glance had no tintable primitive. That was a real defect, not just
+extra code: a compact tile is about 31dp wide at the 250dp size bucket, but the bar was told it
+had 62dp. The fill was clipped at the tile edge, so **every window above roughly half remaining
+painted as a completely full bar** — a 55 % quota looked identical to an untouched one. The
+lesson is worth keeping: in a layout system that does not measure, a hardcoded width is a
+silent wrong answer rather than a visible overflow.
+
+**No fractional width measurement.** There is still no `fillMaxWidth(fraction)` a child can
+resolve against a parent whose width Glance does not know at composition time — which is why
+the fraction has to be handed to a primitive that resolves it at inflation, rather than
+computed in the composable. Inside the detailed row the bar takes `defaultWeight()` so it
+absorbs whatever the fixed-width label and percent columns leave.
 
 **Glance cannot read the app's theme.** Composition happens for the launcher's process, so
 `MaterialTheme` and the app's `UsageColors` are not reachable. The handful of colours the

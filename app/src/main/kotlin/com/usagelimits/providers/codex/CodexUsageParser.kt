@@ -43,9 +43,25 @@ object CodexUsageParser {
 
         JsonSupport.array(payload, "additional_rate_limits", "additionalRateLimits")
             .forEachIndexed { index, element ->
-                val info = runCatching { element as JsonObject }.getOrNull() ?: return@forEachIndexed
-                val name = JsonSupport.string(info, "name", "limit_name", "limitName")
-                    ?: "Additional ${index + 1}"
+                val entry = runCatching { element as JsonObject }.getOrNull() ?: return@forEachIndexed
+
+                // Each entry NESTS its windows under `rate_limit`; the primary/secondary pair
+                // is one level deeper than on the top-level limits. Reading them off the entry
+                // itself finds nothing, which would drop every extra metered feature silently
+                // — and worse, leave the account's severity computed only from the windows
+                // that did parse, so a spent extra limit could still read as healthy.
+                // A flat entry is accepted as a fallback for older payloads.
+                val info = JsonSupport.obj(entry, "rate_limit", "rateLimit") ?: entry
+
+                val name = JsonSupport.string(
+                    entry,
+                    "name",
+                    "limit_name",
+                    "limitName",
+                    "metered_feature",
+                    "meteredFeature",
+                ) ?: "Additional ${index + 1}"
+
                 windows += windowsFor(
                     info,
                     idPrefix = "additional-${slug(name)}-$index",
@@ -103,6 +119,24 @@ object CodexUsageParser {
     fun availableCreditCount(payload: JsonObject?): Int? =
         JsonSupport.double(payload, "available_count", "availableCount")?.toInt()
 
+    /**
+     * How many of those credits can be spent against the limit that is currently reached.
+     *
+     * Production payloads carry `available_count` and `applicable_available_count` side by
+     * side and no `credits` array at all, so these are the only two numbers there are. They
+     * are kept apart rather than collapsed because one sample cannot settle what a zero here
+     * means: it may be "you hold credits but none apply to this limit", or simply "no limit is
+     * currently reached". Under the first reading, spending the held count offers a button the
+     * server will refuse; under the second, showing only the applicable count hides credits the
+     * user really holds. Carrying both is correct under either.
+     */
+    fun applicableCreditCount(payload: JsonObject?): Int? =
+        JsonSupport.double(
+            payload,
+            "applicable_available_count",
+            "applicableAvailableCount",
+        )?.toInt()
+
     /** Reads the subscription plan, which the usage endpoint reports alongside the windows. */
     fun parsePlan(payload: JsonObject): String? =
         JsonSupport.string(payload, "plan_type", "planType")
@@ -155,9 +189,23 @@ object CodexUsageParser {
             }
         }
 
-        // Legacy payloads omit limit_window_seconds; fall back to declared order.
-        if (shortWindow == null && primary != null && primary !== longWindow) shortWindow = primary
-        if (longWindow == null && secondary != null && secondary !== shortWindow) longWindow = secondary
+        // Position is meaningful ONLY for legacy payloads that omit the duration entirely.
+        //
+        // Without the absence check this fired for a window whose duration was stated and simply
+        // unfamiliar — a daily limit, say — and forced it into the five-hour slot, where it is
+        // labelled and read as the session limit. That is the same class of error as reading a
+        // week as five hours, which a live payload caught once already; a present but unfamiliar
+        // duration is not an omitted field, and the comment here has always said so.
+        if (shortWindow == null && primary != null && primary !== longWindow &&
+            periodSeconds(primary) == null
+        ) {
+            shortWindow = primary
+        }
+        if (longWindow == null && secondary != null && secondary !== shortWindow &&
+            periodSeconds(secondary) == null
+        ) {
+            longWindow = secondary
+        }
 
         return Classified(shortWindow, longWindow)
     }

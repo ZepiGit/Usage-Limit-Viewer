@@ -18,7 +18,12 @@ What is implemented:
 - Token exchange and refresh, including the Google-specific behaviour that a refresh response
   never carries a new refresh token.
 - Two-step quota reading: GCP project resolution at login, then the quota summary addressed by
-  that project, tried across three hosts.
+  that project, tried across three hosts. On iOS the login did NOT resolve the project until
+  10 September — every account added there authenticated and then failed each refresh with
+  "project_id attribute is required" — and the resolution is now a port of the Android one,
+  reading the id from either shape `loadCodeAssist` emits (a bare string or an object with
+  `id`) and the paid tier beside it. Both platforms also share one quota-host list; the iOS
+  client had carried a private two-host copy that dropped the sandbox shard.
 - A parser with tests covering grouping, the remaining→consumed conversion, both key
   spellings, bucket ordering, and the drop-one-bucket and drop-a-whole-group cases.
 
@@ -258,10 +263,17 @@ Behaviour derived from, and re-read at, these commits:
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`
   for the `loadCodeAssist` and `retrieveUserQuotaSummary` paths, the three-host fallback
   order, and the `antigravity/cli` user-agent shape.
-- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — the finding that `retrieveUserQuotaSummary`
-  returns pre-grouped `groups[]`/`buckets[]` with a `remainingFraction`, which is what makes
-  the "never enumerate models" rule in §5 possible, and the cross-check on `bucketId`,
-  `window` and `resetTime`.
+- **CLIProxyAPI-Quota-Inspector @ `1895bc54`** — the source for the `loadCodeAssist`
+  metadata block, and the decisive one: it keeps `geminiLoadMetadata` and
+  `antigravityLoadMetadata` side by side (`providers.go:43-52`), which is how the app's
+  original use of the *Gemini* triple was identified as a copied constant rather than a
+  deliberate simplification. It does **not** cover `retrieveUserQuotaSummary` — that string
+  does not appear in the repository, and its Antigravity path uses `fetchAvailableModels` with
+  per-model `quotaInfo`. An earlier draft credited it with the `groups[]`/`buckets[]` finding,
+  which was wrong.
+
+**Single-sourced.** The `groups[]`/`buckets[]` shape the whole parser is built on rests on the
+Management Center alone.
 
 The client id and the installed-app client secret are the public values the first-party client
 ships; the secret's value is not repeated in this document, only in

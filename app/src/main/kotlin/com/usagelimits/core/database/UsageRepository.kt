@@ -21,6 +21,32 @@ data class AccountUsage(
 )
 
 /**
+ * Runs a block with the database's write serialisation held for its whole duration.
+ *
+ * Exists because several writes here are read-then-write: they check a row, then act on what
+ * they read. Between those two statements the row can change, and every such pair in this file
+ * had a way to go wrong — a snapshot written for an account deleted a moment earlier, a failure
+ * blanking a success that landed in between, two logins minting two ids for one account.
+ * Wrapping the pair makes the decision and the write one step.
+ *
+ * An interface rather than the database itself, so the unit tests can keep handing the
+ * repository fake DAOs with no Room behind them.
+ */
+interface TransactionRunner {
+    suspend fun <T> inTransaction(block: suspend () -> T): T
+}
+
+/**
+ * Runs the block as-is.
+ *
+ * The default, and correct for the tests: a fake DAO pair has no shared connection to serialise
+ * against, and no concurrency for a transaction to protect them from.
+ */
+object DirectTransactionRunner : TransactionRunner {
+    override suspend fun <T> inTransaction(block: suspend () -> T): T = block()
+}
+
+/**
  * The app's single read/write surface over the local cache.
  *
  * Converts between Room entities and domain models, keeping JSON serialisation of the
@@ -30,6 +56,7 @@ class UsageRepository(
     private val accountDao: AccountDao,
     private val snapshotDao: UsageSnapshotDao,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val transactions: TransactionRunner = DirectTransactionRunner,
 ) {
 
     // Persisted shapes. Kept separate from the domain models so a UI-facing change (adding a
@@ -61,18 +88,18 @@ class UsageRepository(
     fun observeAccountUsage(): Flow<List<AccountUsage>> =
         combine(accountDao.observeAll(), snapshotDao.observeAll()) { accounts, snapshots ->
             val byAccount = snapshots.associateBy { it.accountId }
-            accounts.map { entity ->
+            accounts.mapNotNull { entity ->
                 AccountUsage(
-                    account = entity.toDomain(),
+                    account = entity.toDomain() ?: return@mapNotNull null,
                     snapshot = byAccount[entity.localId]?.toDomain(),
                 )
             }
         }
 
     fun observeAccounts(): Flow<List<ProviderAccount>> =
-        accountDao.observeAll().map { list -> list.map { it.toDomain() } }
+        accountDao.observeAll().map { list -> list.mapNotNull { it.toDomain() } }
 
-    suspend fun accounts(): List<ProviderAccount> = accountDao.getAll().map { it.toDomain() }
+    suspend fun accounts(): List<ProviderAccount> = accountDao.getAll().mapNotNull { it.toDomain() }
 
     suspend fun account(localId: String): ProviderAccount? = accountDao.getById(localId)?.toDomain()
 
@@ -82,8 +109,8 @@ class UsageRepository(
     /** Snapshot of the whole cache, for widget rendering off the main thread. */
     suspend fun accountUsageOnce(): List<AccountUsage> {
         val snapshots = snapshotDao.getAll().associateBy { it.accountId }
-        return accountDao.getAll().map { entity ->
-            AccountUsage(entity.toDomain(), snapshots[entity.localId]?.toDomain())
+        return accountDao.getAll().mapNotNull { entity ->
+            AccountUsage(entity.toDomain() ?: return@mapNotNull null, snapshots[entity.localId]?.toDomain())
         }
     }
 
@@ -101,7 +128,10 @@ class UsageRepository(
         displayName: String?,
         plan: String?,
         attributes: Map<String, String>,
-    ): ProviderAccount {
+    ): ProviderAccount = transactions.inTransaction {
+        // Read and write together. Two concurrent logins for the same external account could
+        // otherwise both miss this lookup, both mint a local id, and the second insert would
+        // meet the unique index on (provider, externalAccountId).
         val existing = accountDao.getByExternalId(provider.id, externalAccountId)
         val localId = existing?.localId ?: UUID.randomUUID().toString()
         val entity = AccountEntity(
@@ -123,33 +153,57 @@ class UsageRepository(
             sortOrder = existing?.sortOrder ?: 0,
         )
         accountDao.upsert(entity)
-        return entity.toDomain()
+        // Built from a known ProviderId a moment ago, so this cannot be null.
+        checkNotNull(entity.toDomain())
     }
 
-    suspend fun deleteAccount(localId: String) {
+    /**
+     * Removes an account and everything hanging off it.
+     *
+     * The snapshot delete is redundant — the foreign key cascades — but it is explicit and
+     * costs nothing, and both statements are in one transaction so a failure between them
+     * cannot leave the account gone and its snapshot behind.
+     */
+    suspend fun deleteAccount(localId: String) = transactions.inTransaction {
         snapshotDao.deleteForAccount(localId)
         accountDao.deleteById(localId)
     }
 
-    suspend fun saveSnapshot(snapshot: UsageSnapshot) {
-        snapshotDao.upsert(
-            UsageSnapshotEntity(
-                accountId = snapshot.accountId,
-                fetchedAt = snapshot.fetchedAt,
-                status = snapshot.status.name,
-                errorMessage = snapshot.errorMessage,
-                windowsJson = json.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(StoredWindow.serializer()),
-                    snapshot.windows.map { it.toStored() },
+    /**
+     * Records a successful fetch.
+     *
+     * No-ops when the account is gone. `usage_snapshots.accountId` is a foreign key onto
+     * `accounts`, so writing a snapshot for a row the user removed while the fetch was in
+     * flight raises SQLITE_CONSTRAINT_FOREIGNKEY — which Room rethrows, which escapes the
+     * sync pass, cancels the sibling accounts' writes and reaches the uncaught handler.
+     * An account that no longer exists has no usage worth recording.
+     */
+    suspend fun saveSnapshot(snapshot: UsageSnapshot) = transactions.inTransaction {
+        // The guard and the write are one step. Apart, the account could be deleted in the gap
+        // between them and the insert would raise the very constraint violation the guard
+        // exists to prevent — the failure the paragraph above describes, still reachable.
+        if (accountDao.getById(snapshot.accountId) != null) {
+            snapshotDao.upsert(
+                UsageSnapshotEntity(
+                    accountId = snapshot.accountId,
+                    fetchedAt = snapshot.fetchedAt,
+                    status = snapshot.status.name,
+                    errorMessage = snapshot.errorMessage,
+                    windowsJson = json.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(StoredWindow.serializer()),
+                        snapshot.windows.map { it.toStored() },
+                    ),
+                    resetCreditsJson = json.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(StoredCredit.serializer()),
+                        snapshot.resetCredits.map { it.toStored() },
+                    ),
+                    resetCreditCount = snapshot.resetCreditCount,
+                    applicableResetCreditCount = snapshot.applicableResetCreditCount,
                 ),
-                resetCreditsJson = json.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(StoredCredit.serializer()),
-                    snapshot.resetCredits.map { it.toStored() },
-                ),
-            ),
-        )
-        if (snapshot.status != SnapshotStatus.FAILED) {
-            accountDao.markSynced(snapshot.accountId, snapshot.fetchedAt)
+            )
+            if (snapshot.status != SnapshotStatus.FAILED) {
+                accountDao.markSynced(snapshot.accountId, snapshot.fetchedAt)
+            }
         }
     }
 
@@ -158,26 +212,47 @@ class UsageRepository(
      *
      * The UI keeps showing the last known usage with a staleness note, which is far more
      * useful than blanking a card because one refresh failed.
+     *
+     * No-ops for a removed account, for the same foreign-key reason as [saveSnapshot].
      */
-    suspend fun saveFailure(accountId: String, message: String, nowMs: Long) {
-        val previous = snapshotDao.getForAccount(accountId)
-        snapshotDao.upsert(
-            UsageSnapshotEntity(
-                accountId = accountId,
-                // Keep the original fetch time: the data is as old as it was, and the
-                // failure is carried separately.
-                fetchedAt = previous?.fetchedAt ?: nowMs,
-                status = SnapshotStatus.FAILED.name,
-                errorMessage = message,
-                windowsJson = previous?.windowsJson ?: "[]",
-                resetCreditsJson = previous?.resetCreditsJson ?: "[]",
-            ),
-        )
-    }
+    suspend fun saveFailure(accountId: String, message: String, nowMs: Long) =
+        transactions.inTransaction {
+            // Reading the previous row and replacing it must be one step. Between them a
+            // concurrent successful sync can land, and this would then overwrite fresh
+            // numbers with a FAILED row carrying the values it read before they arrived —
+            // the card flipping from just-refreshed back to blank.
+            if (accountDao.getById(accountId) != null) {
+                val previous = snapshotDao.getForAccount(accountId)
+                snapshotDao.upsert(
+                    UsageSnapshotEntity(
+                        accountId = accountId,
+                        // Keep the original fetch time: the data is as old as it was, and
+                        // the failure is carried separately.
+                        fetchedAt = previous?.fetchedAt ?: nowMs,
+                        status = SnapshotStatus.FAILED.name,
+                        errorMessage = message,
+                        windowsJson = previous?.windowsJson ?: "[]",
+                        resetCreditsJson = previous?.resetCreditsJson ?: "[]",
+                        resetCreditCount = previous?.resetCreditCount,
+                        applicableResetCreditCount = previous?.applicableResetCreditCount,
+                    ),
+                )
+            }
+        }
 
-    private fun AccountEntity.toDomain(): ProviderAccount = ProviderAccount(
+    /**
+     * Null for a provider this build does not know.
+     *
+     * It used to substitute Codex, which handed the account Codex's label, Codex's reset-credit
+     * button, and — worse — routed its credentials to the Codex implementation on the next
+     * sync. A row this build cannot interpret is left out of every list until a build that
+     * can read it comes along; it is never relabelled as something it is not.
+     */
+    private fun AccountEntity.toDomain(): ProviderAccount? {
+        val providerId = ProviderId.fromId(provider) ?: return null
+        return ProviderAccount(
         localId = localId,
-        provider = ProviderId.fromId(provider) ?: ProviderId.CODEX,
+        provider = providerId,
         externalAccountId = externalAccountId,
         email = email,
         displayName = displayName,
@@ -188,7 +263,8 @@ class UsageRepository(
         attributes = runCatching {
             json.decodeFromString(StoredAttributes.serializer(), attributesJson).values
         }.getOrDefault(emptyMap()),
-    )
+        )
+    }
 
     private fun UsageSnapshotEntity.toDomain(): UsageSnapshot = UsageSnapshot(
         accountId = accountId,
@@ -206,6 +282,8 @@ class UsageRepository(
                 resetCreditsJson,
             ).map { it.toDomain() }
         }.getOrDefault(emptyList()),
+        resetCreditCount = resetCreditCount,
+        applicableResetCreditCount = applicableResetCreditCount,
         errorMessage = errorMessage,
     )
 
