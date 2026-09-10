@@ -94,6 +94,22 @@ targets:
         com.apple.security.application-groups:
           - group.com.usagelimits.shared
 
+  # The only target that runs the real binary. Everything else in this repository is verified
+  # without ever starting the app — the kit's tests run on Linux, and the build job compiles the
+  # SwiftUI code without executing a line of it. Compiling proves the types line up; it does not
+  # prove the app launches.
+  UsageLimitsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: UsageLimits
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.uitests
+        TEST_TARGET_NAME: UsageLimits
+
 schemes:
   UsageLimits:
     build:
@@ -104,3 +120,5 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - UsageLimitsUITests
