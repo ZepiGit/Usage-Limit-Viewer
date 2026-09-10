@@ -105,6 +105,30 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
 
+      # Compiling the widget proves nothing about shipping it. The extension is a separate
+      # target, and building both in the scheme leaves the .appex NEXT TO the app rather than
+      # inside it — the installed bundle then has no widget at all, the tile never appears in
+      # the system picker, and every other check in this workflow still passes. That is the
+      # whole feature missing from the artefact with nothing to show for it, so the artefact
+      # is what gets inspected here.
+      - name: The widget is embedded in the app bundle
+        working-directory: ios/UsageLimits
+        run: |
+          set -euo pipefail
+          app=$(xcodebuild -scheme UsageLimits -showBuildSettings                   -destination 'generic/platform=iOS Simulator' 2>/dev/null                 | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{d=$2} / FULL_PRODUCT_NAME /{n=$2} END{print d"/"n}')
+          appex="$app/PlugIns/UsageLimitsWidget.appex"
+          echo "app bundle: $app"
+          if [ ! -d "$appex" ]; then
+            echo "::error::UsageLimitsWidget.appex is not embedded in the app bundle" >&2
+            ls -R "$app/PlugIns" 2>/dev/null || echo "(no PlugIns directory at all)" >&2
+            exit 1
+          fi
+          plist="$appex/Info.plist"
+          point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$plist")
+          echo "extension point: $point"
+          [ "$point" = "com.apple.widgetkit-extension" ] || {
+            echo "::error::wrong NSExtensionPointIdentifier: $point" >&2; exit 1; }
+
       # The device is DISCOVERED, for the same reason the build destination is generic: any
       # hardcoded model is a future failure that has nothing to do with the code. This picks
       # whatever iPhone the installed Xcode actually has, and fails loudly if there is none
