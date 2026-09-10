@@ -88,18 +88,18 @@ class UsageRepository(
     fun observeAccountUsage(): Flow<List<AccountUsage>> =
         combine(accountDao.observeAll(), snapshotDao.observeAll()) { accounts, snapshots ->
             val byAccount = snapshots.associateBy { it.accountId }
-            accounts.map { entity ->
+            accounts.mapNotNull { entity ->
                 AccountUsage(
-                    account = entity.toDomain(),
+                    account = entity.toDomain() ?: return@mapNotNull null,
                     snapshot = byAccount[entity.localId]?.toDomain(),
                 )
             }
         }
 
     fun observeAccounts(): Flow<List<ProviderAccount>> =
-        accountDao.observeAll().map { list -> list.map { it.toDomain() } }
+        accountDao.observeAll().map { list -> list.mapNotNull { it.toDomain() } }
 
-    suspend fun accounts(): List<ProviderAccount> = accountDao.getAll().map { it.toDomain() }
+    suspend fun accounts(): List<ProviderAccount> = accountDao.getAll().mapNotNull { it.toDomain() }
 
     suspend fun account(localId: String): ProviderAccount? = accountDao.getById(localId)?.toDomain()
 
@@ -109,8 +109,8 @@ class UsageRepository(
     /** Snapshot of the whole cache, for widget rendering off the main thread. */
     suspend fun accountUsageOnce(): List<AccountUsage> {
         val snapshots = snapshotDao.getAll().associateBy { it.accountId }
-        return accountDao.getAll().map { entity ->
-            AccountUsage(entity.toDomain(), snapshots[entity.localId]?.toDomain())
+        return accountDao.getAll().mapNotNull { entity ->
+            AccountUsage(entity.toDomain() ?: return@mapNotNull null, snapshots[entity.localId]?.toDomain())
         }
     }
 
@@ -153,7 +153,8 @@ class UsageRepository(
             sortOrder = existing?.sortOrder ?: 0,
         )
         accountDao.upsert(entity)
-        entity.toDomain()
+        // Built from a known ProviderId a moment ago, so this cannot be null.
+        checkNotNull(entity.toDomain())
     }
 
     /**
@@ -239,9 +240,19 @@ class UsageRepository(
             }
         }
 
-    private fun AccountEntity.toDomain(): ProviderAccount = ProviderAccount(
+    /**
+     * Null for a provider this build does not know.
+     *
+     * It used to substitute Codex, which handed the account Codex's label, Codex's reset-credit
+     * button, and — worse — routed its credentials to the Codex implementation on the next
+     * sync. A row this build cannot interpret is left out of every list until a build that
+     * can read it comes along; it is never relabelled as something it is not.
+     */
+    private fun AccountEntity.toDomain(): ProviderAccount? {
+        val providerId = ProviderId.fromId(provider) ?: return null
+        return ProviderAccount(
         localId = localId,
-        provider = ProviderId.fromId(provider) ?: ProviderId.CODEX,
+        provider = providerId,
         externalAccountId = externalAccountId,
         email = email,
         displayName = displayName,
@@ -252,7 +263,8 @@ class UsageRepository(
         attributes = runCatching {
             json.decodeFromString(StoredAttributes.serializer(), attributesJson).values
         }.getOrDefault(emptyMap()),
-    )
+        )
+    }
 
     private fun UsageSnapshotEntity.toDomain(): UsageSnapshot = UsageSnapshot(
         accountId = accountId,

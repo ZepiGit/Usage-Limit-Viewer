@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -205,9 +206,21 @@ class UsageViewModel(
                 val credentials = container.syncEngine.validCredentials(account)
                 provider.consumeResetCredit(account, credentials)
 
-                container.syncEngine.syncAccount(account)
+                // The spend has HAPPENED at the provider from here on. The follow-up sync is
+                // what makes it visible, and it can fail on its own — and when it does, the
+                // message must not say "applied" over a card still showing the pre-spend quota
+                // and an unspent-looking credit, or the user will try again.
+                val outcome = container.syncEngine.syncAccount(account)
                 WidgetUpdater.refreshAll(appContext)
-                transientMessage.value = "Limit reset applied"
+                transientMessage.value = if (outcome.success) {
+                    "Limit reset applied"
+                } else {
+                    "Reset requested — the new limit will show on the next refresh"
+                }
+            } catch (e: CancellationException) {
+                // Not a failure, and not ours to swallow: the credit may already be spent, and
+                // the next sync will show whatever the provider did.
+                throw e
             } catch (e: ProviderException) {
                 transientMessage.value = e.userMessage()
             } catch (e: Exception) {
