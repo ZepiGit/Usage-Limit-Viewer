@@ -83,7 +83,18 @@ class SyncEngine(
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
 
             val credentials = validCredentials(account)
-            val result = provider.fetchUsage(account, credentials)
+            val result = try {
+                provider.fetchUsage(account, credentials)
+            } catch (e: ProviderException.Unauthorized) {
+                // The reactive half of the refresh policy, and what makes the proactive half
+                // safe to keep conservative. The provider has said this token is dead, which
+                // beats any expiry the account did or did not carry.
+                //
+                // Once only: if the renewed pair is refused too, the credential is genuinely
+                // revoked and a second attempt is just another way to fail.
+                val renewed = validCredentials(account, rejectedAccessToken = credentials.accessToken)
+                provider.fetchUsage(account, renewed)
+            }
 
             repository.saveSnapshot(
                 UsageSnapshot(
@@ -150,18 +161,41 @@ class SyncEngine(
      * The refresh is guarded by a per-account mutex and the expiry is re-checked inside the
      * lock, so a caller that queued behind another refresh uses that result instead of
      * spending the (now-rotated) refresh token a second time.
+     *
+     * [rejectedAccessToken] is the access token a request actually presented and the provider
+     * actually refused. It is stronger evidence than any clock, and it is the only thing that
+     * rescues an account whose provider never states an expiry: `needsRefresh` is false when
+     * `expiresAt` is null, so for such an account the proactive branch can never fire, and
+     * before this every usage call 401'd for ever with no attempt to renew. A stored expiry
+     * set too far in the future produced the same silence until that date.
+     *
+     * It is passed as the token itself rather than as a `force` flag on purpose. A concurrent
+     * pass may already have saved a DIFFERENT token, which this request never presented and
+     * nothing has refused — so it is offered first, and only the refused token costs a
+     * rotation. Presenting an already-spent refresh token is how a provider revokes the whole
+     * grant, so the difference is not academic. iOS decides it the same way.
      */
-    suspend fun validCredentials(account: ProviderAccount): OAuthCredentials {
+    suspend fun validCredentials(
+        account: ProviderAccount,
+        rejectedAccessToken: String? = null,
+    ): OAuthCredentials {
         val reference = account.credentialReference
         val current = credentialStore.load(reference)
             ?: throw ProviderException.Unauthorized("No stored credentials for this account")
 
-        if (!current.needsRefresh(nowMs())) return current
+        // A rejection overrides the clock, but only for the token that was rejected.
+        val currentWasRejected = rejectedAccessToken != null &&
+            current.accessToken == rejectedAccessToken
+        if (!currentWasRejected && !current.needsRefresh(nowMs())) return current
 
         val mutex = mutexGuard.withLock { refreshMutexes.getOrPut(reference) { Mutex() } }
         return mutex.withLock {
             val latest = credentialStore.load(reference) ?: current
-            if (!latest.needsRefresh(nowMs())) return@withLock latest
+            val latestWasRejected = rejectedAccessToken != null &&
+                latest.accessToken == rejectedAccessToken
+            // Whoever held the lock may have rotated already. If what they saved is not the
+            // token this caller was refused, it is worth trying before spending another.
+            if (!latestWasRejected && !latest.needsRefresh(nowMs())) return@withLock latest
 
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
