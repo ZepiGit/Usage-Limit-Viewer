@@ -37,9 +37,30 @@ public enum JSONSupport {
         return nil
     }
 
+    /// Whether a decoded JSON value was a boolean literal, as opposed to a number.
+    ///
+    /// On Darwin `JSONSerialization` hands `true` back as an `NSNumber` (`__NSCFBoolean`), so
+    /// `as? NSNumber` and even `as? Bool` on a `1` both succeed and the two types are
+    /// indistinguishable by casting. The Kotlin twin reads a boolean as no number at all, and
+    /// an `NSNumber` of 1 as no boolean; without this check Swift read `"percent": true` as
+    /// 1 % used and `"has_claude_max": 1` as Max — same payload, different answer.
+    private static func isBooleanLiteral(_ value: Any) -> Bool {
+        #if canImport(Darwin)
+        return CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
+        #else
+        // swift-corelibs-foundation: `value is Bool` is TRUE for every NSNumber — a probe
+        // showed `1` and `0` bridging to Bool exactly as `true` and `false` do — so a cast
+        // cannot tell them apart and would turn every number into "a boolean". What does
+        // differ is the dynamic class: a JSON literal decodes to `__NSCFBoolean`, a number
+        // to `NSNumber`.
+        return value is NSNumber && String(describing: type(of: value)) == "__NSCFBoolean"
+        #endif
+    }
+
     /// Accepts a JSON number or a numeric string — providers mix the two for the same field.
     public static func double(_ source: [String: Any]?, _ names: String...) -> Double? {
         guard let value = first(source, names) else { return nil }
+        if isBooleanLiteral(value) { return nil }
         if let number = value as? NSNumber {
             let result = number.doubleValue
             return result.isFinite ? result : nil
@@ -65,8 +86,8 @@ public enum JSONSupport {
 
     public static func bool(_ source: [String: Any]?, _ names: String...) -> Bool? {
         guard let value = first(source, names) else { return nil }
-        if let flag = value as? Bool { return flag }
-        if let number = value as? NSNumber { return number.boolValue }
+        // A boolean literal, or the words "true"/"false" — never a number. See `isBooleanLiteral`.
+        if isBooleanLiteral(value), let flag = value as? Bool { return flag }
         if let text = value as? String {
             switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
             case "true": return true
@@ -106,10 +127,18 @@ public enum JSONSupport {
         }
         if let epoch = Int64(raw) { return date(epoch: epoch) }
         if let epoch = Double(raw), epoch.isFinite { return date(epoch: Int64(epoch)) }
-        if let parsed = iso8601Fractional.date(from: raw) { return parsed }
-        if let parsed = iso8601Plain.date(from: raw) { return parsed }
-        // A bare local date-time with no offset: assume UTC, matching the Android parser.
-        return iso8601Plain.date(from: raw + "Z")
+        // Sub-millisecond precision is trimmed to three digits before parsing, as the Kotlin
+        // twin does: providers overrun it (xAI sends six), and the formatter is stricter than
+        // java.time about what it will take.
+        let normalised = raw.replacingOccurrences(
+            of: #"(\.\d{3})\d+"#, with: "$1", options: .regularExpression)
+        if let parsed = iso8601Fractional.date(from: normalised) { return parsed }
+        if let parsed = iso8601Plain.date(from: normalised) { return parsed }
+        // A bare local date-time with no offset: assume UTC, matching the Android parser —
+        // through BOTH formatters, because a bare "…T00:00:00.5" carries a fraction the plain
+        // one rejects, and Android parsed it.
+        return iso8601Fractional.date(from: normalised + "Z")
+            ?? iso8601Plain.date(from: normalised + "Z")
     }
 
     /// Disambiguates epoch seconds from epoch millis by magnitude.

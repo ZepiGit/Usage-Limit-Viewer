@@ -63,12 +63,20 @@ object ClaudeUsageParser {
      * grapheme boundaries and never had this; the two must agree, and Swift is right.
      */
     private fun String.takeLabel(): String {
-        val cut = take(MAX_LABEL_LENGTH)
-        return if (cut.isNotEmpty() && Character.isHighSurrogate(cut.last())) {
-            cut.dropLast(1)
-        } else {
-            cut
+        // Counted in grapheme clusters, which is what Swift's `prefix` counts. The previous
+        // version counted UTF-16 units and then dropped a trailing lone surrogate, which kept
+        // the string well-formed but cut it one character short of the Swift twin whenever an
+        // emoji sat at the boundary — its own comment said Swift was right and still disagreed.
+        val boundaries = java.text.BreakIterator.getCharacterInstance().also { it.setText(this) }
+        var end = 0
+        var count = 0
+        var next = boundaries.next()
+        while (next != java.text.BreakIterator.DONE && count < MAX_LABEL_LENGTH) {
+            end = next
+            count++
+            next = boundaries.next()
         }
+        return substring(0, end)
     }
 
     /**
