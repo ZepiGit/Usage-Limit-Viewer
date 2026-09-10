@@ -171,6 +171,8 @@ class CodexProvider(
                     "scope" to REFRESH_SCOPE,
                 ),
             ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
         )
 
         val refreshed = toCredentials(JsonSupport.parseObject(response.body))

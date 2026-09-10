@@ -38,13 +38,26 @@ class HttpClient(
         headers: Map<String, String> = emptyMap(),
         body: RequestBody? = null,
         retries: Int = DEFAULT_RETRIES,
+        /**
+         * Whether a 400 means "this credential is dead" rather than "this request was wrong".
+         *
+         * True only for token endpoints. RFC 6749 §5.2 gives `invalid_grant` — a spent, revoked
+         * or malformed refresh token — the status 400, and providers differ in practice: probed
+         * with a deliberately invalid refresh token, OpenAI answers 401 while Google's token
+         * endpoint answers 400. Both codes occur, so the refresh path has to accept both.
+         *
+         * It stays false everywhere else, because on a quota endpoint a 400 really is a bad
+         * request and reading it as an expired sign-in would tell the user to reconnect a
+         * perfectly good account.
+         */
+        badRequestMeansExpired: Boolean = false,
     ): HttpResponse {
         requireSecure(url)
         var attempt = 0
         var lastError: ProviderException? = null
         while (attempt <= retries) {
             try {
-                return executeOnce(url, method, headers, body)
+                return executeOnce(url, method, headers, body, badRequestMeansExpired)
             } catch (e: ProviderException.RateLimited) {
                 lastError = e
                 // Honour Retry-After when the provider sent one, otherwise back off — but
@@ -75,6 +88,7 @@ class HttpClient(
         method: String,
         headers: Map<String, String>,
         body: RequestBody?,
+        badRequestMeansExpired: Boolean = false,
     ): HttpResponse = withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url)
         headers.forEach { (k, v) -> builder.header(k, v) }
@@ -86,6 +100,8 @@ class HttpClient(
                 val headerMap = response.headers.names().associateWith { response.headers[it].orEmpty() }
                 when {
                     response.isSuccessful -> HttpResponse(response.code, text, headerMap)
+                    response.code == 400 && badRequestMeansExpired ->
+                        throw ProviderException.Unauthorized()
                     response.code == 401 -> throw ProviderException.Unauthorized()
                     response.code == 403 -> throw ProviderException.Forbidden()
                     response.code == 429 -> throw ProviderException.RateLimited(
