@@ -325,4 +325,97 @@ class WidgetDataBuilderTest {
         val snapshot = WidgetDataBuilder.build(old, now, WidgetScope.ALL_ACCOUNTS, null, null)
         assertEquals(Severity.STALE, snapshot.overallSeverity)
     }
+
+    // region the long-horizon row
+
+    private fun longWindow(
+        id: String,
+        label: String,
+        category: WindowCategory,
+        usedPercent: Double?,
+    ) = UsageWindow(
+        id = id,
+        label = label,
+        category = category,
+        usedPercent = usedPercent,
+        periodSeconds = if (category == WindowCategory.WEEKLY) 604_800 else 2_592_000,
+        resetAt = now + 86_400_000,
+        exhausted = usedPercent == 100.0,
+    )
+
+    private fun withWindows(vararg windows: UsageWindow) = AccountUsage(
+        account = account("a", ProviderId.CODEX),
+        snapshot = UsageSnapshot(
+            accountId = "a",
+            fetchedAt = now,
+            status = SnapshotStatus.OK,
+            windows = windows.toList(),
+        ),
+    )
+
+    @Test
+    fun `an exhausted monthly window is shown even when a healthy weekly one exists`() {
+        // The defect: the long slot was `WEEKLY ?: MONTHLY ?: OTHER`, and the elvis
+        // short-circuits on the mere existence of a weekly window. An account whose monthly
+        // quota had run out showed its healthy weekly bar instead, and the exhausted limit
+        // appeared nowhere on the home screen.
+        val data = WidgetDataBuilder.build(
+            listOf(
+                withWindows(
+                    longWindow("wk", "Weekly", WindowCategory.WEEKLY, usedPercent = 5.0),
+                    longWindow("mo", "Monthly", WindowCategory.MONTHLY, usedPercent = 100.0),
+                ),
+            ),
+            now,
+            WidgetScope.ALL_ACCOUNTS,
+            null,
+            null,
+        )
+
+        val labels = data.accounts.single().rows.map { it.label }
+        assertTrue("expected the exhausted monthly row, got $labels", labels.contains("Monthly"))
+    }
+
+    @Test
+    fun `the weekly window still wins when nothing is more urgent`() {
+        // The other direction, so the fix is a change of ranking and not of preference: with
+        // both windows equally healthy, the better-understood category keeps the slot.
+        val data = WidgetDataBuilder.build(
+            listOf(
+                withWindows(
+                    longWindow("wk", "Weekly", WindowCategory.WEEKLY, usedPercent = 5.0),
+                    longWindow("mo", "Monthly", WindowCategory.MONTHLY, usedPercent = 5.0),
+                ),
+            ),
+            now,
+            WidgetScope.ALL_ACCOUNTS,
+            null,
+            null,
+        )
+
+        assertEquals(listOf("Weekly"), data.accounts.single().rows.map { it.label })
+    }
+
+    @Test
+    fun `an unreadable window does not displace one known to be empty`() {
+        // `Severity.urgency` puts ERROR below EXHAUSTED deliberately. A monthly window whose
+        // percentage could not be read says nothing actionable; a weekly one at zero says the
+        // user has run out. The second is the row worth the slot.
+        val data = WidgetDataBuilder.build(
+            listOf(
+                withWindows(
+                    longWindow("wk", "Weekly", WindowCategory.WEEKLY, usedPercent = 100.0),
+                    longWindow("mo", "Monthly", WindowCategory.MONTHLY, usedPercent = null),
+                ),
+            ),
+            now,
+            WidgetScope.ALL_ACCOUNTS,
+            null,
+            null,
+        )
+
+        assertEquals(listOf("Weekly"), data.accounts.single().rows.map { it.label })
+    }
+
+    // endregion
 }
