@@ -37,11 +37,23 @@ public actor NotificationLedger {
     }
 
     private let fileURL: URL
-    private var stored: Stored
+    private var loaded: Stored?
+    private var stored: Stored {
+        get {
+            if let loaded { return loaded }
+            let value = Self.load(from: fileURL)
+            // A read that populates the cache: `stored` is only reached from this actor, so the
+            // mutation cannot race.
+            loaded = value
+            return value
+        }
+        set { loaded = newValue }
+    }
 
+    /// No I/O here, for the reason given on `AccountRepository.init`: this is constructed on the
+    /// launch path, and an actor initialiser runs inline on the thread that built it.
     public init(directory: URL, fileName: String = "notifications.json") {
         self.fileURL = directory.appendingPathComponent(fileName)
-        self.stored = Self.load(from: fileURL)
     }
 
     // MARK: - Evaluator state
@@ -110,7 +122,7 @@ public actor NotificationLedger {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        try encoder.encode(stored).write(to: fileURL, options: .atomic)
+        try encoder.encode(stored).write(to: fileURL, options: ContainerFile.writingOptions)
     }
 
     private static func load(from url: URL) -> Stored {

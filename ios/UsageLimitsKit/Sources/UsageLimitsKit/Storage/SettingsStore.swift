@@ -13,14 +13,20 @@ import Foundation
 public actor SettingsStore {
 
     private let fileURL: URL
-    private var current: AppSettings
+    private var current: AppSettings?
 
+    /// No I/O here, for the reason given on `AccountRepository.init`: this is constructed on the
+    /// launch path, and an actor initialiser runs inline on the thread that built it.
     public init(directory: URL, fileName: String = "settings.json") {
         self.fileURL = directory.appendingPathComponent(fileName)
-        self.current = Self.load(from: fileURL)
     }
 
-    public func settings() -> AppSettings { current }
+    public func settings() -> AppSettings {
+        if let current { return current }
+        let loaded = Self.load(from: fileURL)
+        current = loaded
+        return loaded
+    }
 
     /// Saves, and reports what was actually stored.
     ///
@@ -38,7 +44,7 @@ public actor SettingsStore {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        try encoder.encode(normalised).write(to: fileURL, options: .atomic)
+        try encoder.encode(normalised).write(to: fileURL, options: ContainerFile.writingOptions)
 
         current = normalised
         return normalised

@@ -52,7 +52,9 @@ public enum GlanceSnapshotCodec {
     /// Atomic because the widget can be reading while the app writes: a partial file decodes to
     /// nothing, and a tile that blanks every half hour is worse than one that lags.
     public static func write(_ snapshot: GlanceSnapshot, toDirectory directory: URL) throws {
-        try encode(snapshot).write(to: directory.appendingPathComponent(fileName), options: .atomic)
+        try encode(snapshot).write(
+            to: directory.appendingPathComponent(fileName),
+            options: ContainerFile.writingOptions)
     }
 
     public static func read(fromDirectory directory: URL) -> GlanceSnapshot {
