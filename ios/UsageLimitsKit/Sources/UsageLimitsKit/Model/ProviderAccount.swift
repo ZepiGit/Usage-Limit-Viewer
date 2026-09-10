@@ -154,7 +154,15 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     public var failed: Bool { status == .failed }
 
     /// How many credits the account HOLDS — what a balance line shows.
-    public var heldResetCredits: Int { resetCreditCount ?? resetCredits.count }
+    ///
+    /// The provider's count is authoritative when it states one, because the row list can be
+    /// truncated or filtered while the count stays exact. Falling back to the rows counts only
+    /// the AVAILABLE ones: a spent credit is still listed, and counting it told a user with one
+    /// consumed credit and nothing else that they held one to spend.
+    public var heldResetCredits: Int {
+        resetCreditCount
+            ?? resetCredits.filter { $0.status.lowercased() == "available" }.count
+    }
 
     /// How many can be spent right now — what a redeem control is gated on.
     ///

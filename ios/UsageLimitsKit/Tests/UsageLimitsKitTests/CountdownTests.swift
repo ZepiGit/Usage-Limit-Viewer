@@ -15,11 +15,17 @@ final class CountdownTests: XCTestCase {
         XCTAssertEqual(Countdown.format(seconds: 3 * 3_600), "3h")
     }
 
-    func testASubMinuteRemainderRoundsUp() {
-        // Rounding down gives "0m", which reads as "it has reset" — the one thing that is not
-        // yet true, and the reading that would send someone to a limit they still cannot use.
-        XCTAssertEqual(Countdown.format(seconds: 1), "1m")
-        XCTAssertEqual(Countdown.format(seconds: 59), "1m")
+    func testASubMinuteRemainderIsLessThanAMinuteNotAWholeOne() {
+        // Two readings to avoid, and "<1m" is the only string that avoids both. "0m" reads as
+        // "it has reset", which is the one thing not yet true and would send someone to a limit
+        // they still cannot use. "1m" invents up to fifty-nine seconds the user does not have,
+        // on a countdown whose whole job is to say when something comes back.
+        //
+        // It is also what the Kotlin twin has always said, and these two must agree: the same
+        // account on a phone and a tablet cannot report different times.
+        XCTAssertEqual(Countdown.format(seconds: 1), "<1m")
+        XCTAssertEqual(Countdown.format(seconds: 59), "<1m")
+        XCTAssertEqual(Countdown.format(seconds: 60), "1m")
     }
 
     func testAPassedResetReadsAsNow() {
