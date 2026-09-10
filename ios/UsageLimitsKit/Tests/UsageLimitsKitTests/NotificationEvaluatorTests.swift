@@ -437,7 +437,11 @@ final class NotificationEvaluatorTests: XCTestCase {
 
     // MARK: - Windows that share a category and a label
 
-    private func twoAliasingWindows(first: Double, second: Double) -> AccountSummary {
+    private func twoAliasingWindows(
+        first: Double,
+        second: Double,
+        fetchedAt: Date? = nil
+    ) -> AccountSummary {
         func window(_ id: String, _ remaining: Double) -> UsageWindow {
             UsageWindow(
                 id: id, label: "Usage", category: .other,
@@ -448,7 +452,7 @@ final class NotificationEvaluatorTests: XCTestCase {
             accountId: "acct",
             label: "Account acct",
             snapshot: UsageSnapshot(
-                accountID: "acct", fetchedAt: now, status: .ok,
+                accountID: "acct", fetchedAt: fetchedAt ?? now, status: .ok,
                 windows: [window("w1", first), window("w2", second)]))
     }
 
@@ -480,5 +484,24 @@ final class NotificationEvaluatorTests: XCTestCase {
         XCTAssertEqual(
             identities.count, 2,
             "each physical window needs its own identity, got \(identities.sorted())")
+    }
+
+    func testAliasingWindowsDoNotManufactureAFreshEpisodeEverySync() {
+        // The sharper consequence of a shared identity. The loop mutates the window state per
+        // window and reads it back for the next, so a healthy window DEACTIVATES the episode
+        // its low neighbour just opened — and the neighbour opens a brand-new one next sync.
+        // Every key is then unclaimed, the ledger has never seen it, and an account that has
+        // not changed at all warns the user again on every single refresh.
+        let publisher = Publisher()
+        var spoken = 0
+        for step in 0..<4 {
+            let at = now.addingTimeInterval(TimeInterval(step))
+            // A new fetch each time, which is what reaches the quota path at all.
+            let lines = publisher.sync(
+                [twoAliasingWindows(first: 50, second: 15, fetchedAt: at)], settings, at)
+            if !lines.isEmpty { spoken += 1 }
+        }
+
+        XCTAssertEqual(spoken, 1, "an unchanged account must be warned once, not once per sync")
     }
 }
