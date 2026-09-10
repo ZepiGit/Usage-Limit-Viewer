@@ -199,4 +199,174 @@ final class ProductionShapeTests: XCTestCase {
         XCTAssertEqual(try percent(windows, "xai-monthly"), 34.1, accuracy: 0.001)
         XCTAssertFalse(windows.contains { $0.id == "xai-on-demand" })
     }
+
+    // MARK: - xAI: absent spend must stay unknown, never read as zero (Astra, verified)
+
+    func testXaiBillingSpendNamesWithBareAndWrappedCentsAndBothEnvelopes() throws {
+        let names = ["used", "includedUsed", "included_used", "totalUsed", "total_used"]
+
+        for name in names {
+            for amount in [0, 900, 1400] {
+                for value in ["\(amount)", "{\"val\":\(amount)}"] {
+                    let body = """
+                    {
+                      "monthlyLimit":{"val":1000},
+                      "\(name)":\(value),
+                      "billingPeriodEnd":"2026-10-01T00:00:00+00:00"
+                    }
+                    """
+                    for raw in [body, "{\"config\":\(body)}"] {
+                        let windows = XaiBillingParser.parseBilling(payload(raw), now: now)
+                        let expected = min(Double(amount) / 10, 100)
+
+                        XCTAssertEqual(windows.count, 1)
+                        let included = try XCTUnwrap(windows.first)
+                        XCTAssertEqual(included.id, "xai-monthly")
+                        XCTAssertEqual(
+                            try percent(windows, included.id), expected, accuracy: 0.001
+                        )
+                        XCTAssertEqual(included.exhausted, expected >= 100)
+                        XCTAssertEqual(included.category, .monthly)
+                        XCTAssertEqual(included.periodSeconds, 2_592_000)
+                        XCTAssertEqual(
+                            included.resetAt,
+                            ISO8601DateFormatter().date(from: "2026-10-01T00:00:00Z")
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    func testXaiBillingMissingOrNullCurrentSpendStaysUnknownDespiteHistory() throws {
+        let spendFields = [
+            "",
+            """
+            "used":null,
+            "includedUsed":null,
+            "included_used":null,
+            "totalUsed":null,
+            "total_used":null,
+            """
+        ]
+
+        for fields in spendFields {
+            for cap in [0, 500] {
+                let input = payload("""
+                {"config":{
+                  "monthlyLimit":{"val":1000},
+                  \(fields)
+                  "onDemandCap":{"val":\(cap)},
+                  "billingPeriodEnd":"2026-10-01T00:00:00+00:00",
+                  "history":[{
+                    "includedUsed":{"val":900},
+                    "totalUsed":{"val":1400}
+                  }]
+                }}
+                """)
+
+                let windows = XaiBillingParser.parseBilling(input, now: now)
+                let expectedIDs = cap > 0
+                    ? ["xai-monthly", "xai-on-demand"]
+                    : ["xai-monthly"]
+
+                XCTAssertEqual(windows.map(\.id), expectedIDs)
+                for window in windows {
+                    XCTAssertNil(window.usedPercent)
+                    XCTAssertFalse(window.exhausted)
+                    XCTAssertEqual(
+                        window.resetAt,
+                        ISO8601DateFormatter().date(from: "2026-10-01T00:00:00Z")
+                    )
+                }
+            }
+        }
+    }
+
+    func testXaiBillingExplicitOnDemandSpendWithoutIncludedSpend() throws {
+        let input = payload("""
+        {"config":{
+          "monthlyLimit":{"val":1000},
+          "onDemandCap":{"val":500},
+          "onDemandUsed":{"val":250}
+        }}
+        """)
+
+        let windows = XaiBillingParser.parseBilling(input, now: now)
+
+        XCTAssertEqual(windows.map(\.id), ["xai-monthly", "xai-on-demand"])
+        let included = try XCTUnwrap(windows.first)
+        XCTAssertNil(included.usedPercent)
+        XCTAssertEqual(try percent(windows, "xai-on-demand"), 50, accuracy: 0.001)
+    }
+
+    func testXaiBillingSpendAliasesPreserveOverageAndExplicitOnDemandPrecedence() throws {
+        let names = ["used", "includedUsed", "included_used", "totalUsed", "total_used"]
+        let explicitSpends: [(String, Double)] = [
+            ("", 80),
+            (",\"onDemandUsed\":{\"val\":125}", 25),
+            (",\"on_demand_used\":0", 0)
+        ]
+
+        for name in names {
+            for (explicitSpend, expected) in explicitSpends {
+                let input = payload("""
+                {"config":{
+                  "monthlyLimit":{"val":1000},
+                  "\(name)":{"val":1400},
+                  "onDemandCap":{"val":500}
+                  \(explicitSpend)
+                }}
+                """)
+
+                let windows = XaiBillingParser.parseBilling(input, now: now)
+
+                XCTAssertEqual(windows.map(\.id), ["xai-monthly", "xai-on-demand"])
+                XCTAssertEqual(try percent(windows, "xai-monthly"), 100, accuracy: 0.001)
+                let included = try XCTUnwrap(windows.first)
+                XCTAssertTrue(included.exhausted)
+                XCTAssertEqual(
+                    try percent(windows, "xai-on-demand"), expected, accuracy: 0.001
+                )
+            }
+        }
+    }
+
+    func testXaiBillingLegacyUsedPrecedesIncludedAndIncludedPrecedesTotal() throws {
+        let legacy = XaiBillingParser.parseBilling(payload("""
+        {"config":{
+          "monthlyLimit":1000,
+          "used":{"val":900},
+          "includedUsed":100,
+          "totalUsed":200
+        }}
+        """), now: now)
+        XCTAssertEqual(try percent(legacy, "xai-monthly"), 90, accuracy: 0.001)
+
+        let included = XaiBillingParser.parseBilling(payload("""
+        {"config":{
+          "monthlyLimit":1000,
+          "used":null,
+          "includedUsed":{"val":900},
+          "totalUsed":100
+        }}
+        """), now: now)
+        XCTAssertEqual(try percent(included, "xai-monthly"), 90, accuracy: 0.001)
+    }
+
+    func testXaiBillingEmptyPayloadAndUnknownAllowance() throws {
+        XCTAssertTrue(XaiBillingParser.parseBilling(payload("{}"), now: now).isEmpty)
+
+        for raw in [
+            "{\"monthlyLimit\":0,\"used\":900}",
+            "{\"used\":900}"
+        ] {
+            let windows = XaiBillingParser.parseBilling(payload(raw), now: now)
+
+            XCTAssertEqual(windows.map(\.id), ["xai-monthly"])
+            let included = try XCTUnwrap(windows.first)
+            XCTAssertNil(included.usedPercent)
+            XCTAssertFalse(included.exhausted)
+        }
+    }
 }

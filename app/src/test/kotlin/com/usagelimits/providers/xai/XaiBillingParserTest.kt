@@ -305,4 +305,163 @@ class XaiBillingParserTest {
         assertEquals(34.1, monthly.usedPercent!!, 0.001)
         assertFalse(billingWindows.any { it.id == "xai-on-demand" })
     }
+
+    // ---- absent spend must stay unknown, never read as zero (Astra, verified) ----
+    @Test
+    fun `all billing spend names support bare and wrapped cents in flat and enveloped payloads`() {
+        val names = listOf("used", "includedUsed", "included_used", "totalUsed", "total_used")
+
+        for (name in names) {
+            for (amount in listOf(0, 900, 1400)) {
+                for (value in listOf("$amount", """{"val":$amount}""")) {
+                    val body = """
+                        {
+                          "monthlyLimit": {"val":1000},
+                          "$name": $value,
+                          "billingPeriodEnd": "2026-10-01T00:00:00+00:00"
+                        }
+                    """.trimIndent()
+                    for (raw in listOf(body, """{"config":$body}""")) {
+                        val included = billing(raw).single()
+                        val expected = minOf(amount / 10.0, 100.0)
+
+                        assertEquals("xai-monthly", included.id)
+                        assertEquals(expected, included.usedPercent!!, 1e-9)
+                        assertEquals(100.0 - expected, included.remainingPercent!!, 1e-9)
+                        assertEquals(expected >= 100.0, included.exhausted)
+                        assertEquals(WindowCategory.MONTHLY, included.category)
+                        assertEquals(2_592_000L, included.periodSeconds)
+                        assertEquals(
+                            Instant.parse("2026-10-01T00:00:00Z").toEpochMilli(),
+                            included.resetAt,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `missing or null current spend stays unknown even when history contains spend`() {
+        val spendFields = listOf(
+            "",
+            """
+                "used": null,
+                "includedUsed": null,
+                "included_used": null,
+                "totalUsed": null,
+                "total_used": null,
+            """.trimIndent(),
+        )
+
+        for (fields in spendFields) {
+            for (cap in listOf(0, 500)) {
+                val windows = billing(
+                    """
+                    {"config":{
+                      "monthlyLimit":{"val":1000},
+                      $fields
+                      "onDemandCap":{"val":$cap},
+                      "billingPeriodEnd":"2026-10-01T00:00:00+00:00",
+                      "history":[{
+                        "includedUsed":{"val":900},
+                        "totalUsed":{"val":1400}
+                      }]
+                    }}
+                    """.trimIndent(),
+                )
+
+                val expectedIds = if (cap > 0) {
+                    listOf("xai-monthly", "xai-on-demand")
+                } else {
+                    listOf("xai-monthly")
+                }
+                assertEquals(expectedIds, windows.map { it.id })
+                for (window in windows) {
+                    assertNull(window.usedPercent)
+                    assertNull(window.remainingPercent)
+                    assertFalse(window.exhausted)
+                    assertEquals(
+                        Instant.parse("2026-10-01T00:00:00Z").toEpochMilli(),
+                        window.resetAt,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `explicit on-demand spend is usable without included spend`() {
+        val windows = billing(
+            """
+            {"config":{
+              "monthlyLimit":{"val":1000},
+              "onDemandCap":{"val":500},
+              "onDemandUsed":{"val":250}
+            }}
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("xai-monthly", "xai-on-demand"), windows.map { it.id })
+        assertNull(windows.first().usedPercent)
+        assertNull(windows.first().remainingPercent)
+        assertEquals(50.0, windows[1].usedPercent!!, 1e-9)
+    }
+
+    @Test
+    fun `spend aliases preserve overage derivation and explicit on-demand precedence`() {
+        val names = listOf("used", "includedUsed", "included_used", "totalUsed", "total_used")
+        val explicitSpends = listOf(
+            "" to 80.0,
+            ""","onDemandUsed":{"val":125}""" to 25.0,
+            ""","on_demand_used":0""" to 0.0,
+        )
+
+        for (name in names) {
+            for ((explicitSpend, expected) in explicitSpends) {
+                val windows = billing(
+                    """
+                    {"config":{
+                      "monthlyLimit":{"val":1000},
+                      "$name":{"val":1400},
+                      "onDemandCap":{"val":500}
+                      $explicitSpend
+                    }}
+                    """.trimIndent(),
+                )
+
+                assertEquals(listOf("xai-monthly", "xai-on-demand"), windows.map { it.id })
+                assertEquals(100.0, windows.first().usedPercent!!, 1e-9)
+                assertTrue(windows.first().exhausted)
+                assertEquals(expected, windows[1].usedPercent!!, 1e-9)
+            }
+        }
+    }
+
+    @Test
+    fun `legacy used takes precedence and included spend precedes total spend`() {
+        val legacy = billing(
+            """
+            {"config":{
+              "monthlyLimit":1000,
+              "used":{"val":900},
+              "includedUsed":100,
+              "totalUsed":200
+            }}
+            """.trimIndent(),
+        ).single()
+        assertEquals(90.0, legacy.usedPercent!!, 1e-9)
+
+        val included = billing(
+            """
+            {"config":{
+              "monthlyLimit":1000,
+              "used":null,
+              "includedUsed":{"val":900},
+              "totalUsed":100
+            }}
+            """.trimIndent(),
+        ).single()
+        assertEquals(90.0, included.usedPercent!!, 1e-9)
+    }
 }

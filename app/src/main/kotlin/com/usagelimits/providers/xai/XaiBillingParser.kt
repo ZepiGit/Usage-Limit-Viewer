@@ -124,12 +124,16 @@ object XaiBillingParser {
     fun parseBilling(payload: JsonObject, nowMs: Long): List<UsageWindow> {
         val config = config(payload)
         val monthlyLimit = cents(config, "monthlyLimit", "monthly_limit")
+        // Every name the production shape carries for spend. Reading `used` alone meant a
+        // payload whose spend arrived as `includedUsed` — the pinned production shape — read
+        // as ZERO spend: "0 % used / 100 % remaining", healthy green, for an account 90 %
+        // through its allowance.
         val used = cents(config, "used")
+            ?: cents(config, "includedUsed", "included_used")
+            ?: cents(config, "totalUsed", "total_used")
         // Neither figure present means this is not a billing payload we understand.
         if (monthlyLimit == null && used == null) return emptyList()
 
-        val limitCents = monthlyLimit
-        val usedCents = used ?: 0.0
         val resetAt = Instants.parse(
             JsonSupport.string(config, "billingPeriodEnd", "billing_period_end"),
         )
@@ -137,9 +141,11 @@ object XaiBillingParser {
         val windows = mutableListOf<UsageWindow>()
 
         // Spend past the allowance is on-demand spend, so the included bar stops at 100 %.
-        // Without the clamp an overspending account reads "140 % used", which is both wrong
-        // for this window and hides the overage from the row that actually meters it.
-        val includedPercent = limitCents?.let { percentOf(minOf(usedCents, it), it) }
+        // And spend that is ABSENT stays unknown: a limit with no spend figure is a window
+        // whose percentage the app does not know, never one it has decided is untouched.
+        val includedPercent = monthlyLimit?.let { limit ->
+            used?.let { percentOf(minOf(it, limit), limit) }
+        }
         windows += UsageWindow(
             id = MONTHLY_WINDOW_ID,
             label = "Monthly included",
@@ -154,22 +160,21 @@ object XaiBillingParser {
         // empty bar for a facility that does not exist would just be noise.
         val onDemandCap = cents(config, "onDemandCap", "on_demand_cap") ?: 0.0
         if (onDemandCap > 0.0) {
-            // Older payloads omit the on-demand figure and only report total spend. Only a
-            // known allowance makes it possible to identify the excess as on-demand spend.
+            // Deriving overage needs BOTH a known allowance and known spend; with either
+            // missing the row is shown with an unknown percentage rather than omitted or
+            // invented as zero.
             val onDemandUsed = cents(config, "onDemandUsed", "on_demand_used")
-                ?: limitCents?.let { maxOf(0.0, usedCents - it) }
-            if (onDemandUsed != null) {
-                val onDemandPercent = percentOf(onDemandUsed, onDemandCap)
-                windows += UsageWindow(
-                    id = ON_DEMAND_WINDOW_ID,
-                    label = "On-demand",
-                    category = WindowCategory.MONTHLY,
-                    usedPercent = onDemandPercent,
-                    periodSeconds = BILLING_PERIOD_SECONDS,
-                    resetAt = resetAt,
-                    exhausted = isExhausted(onDemandPercent),
-                )
-            }
+                ?: monthlyLimit?.let { limit -> used?.let { maxOf(0.0, it - limit) } }
+            val onDemandPercent = onDemandUsed?.let { percentOf(it, onDemandCap) }
+            windows += UsageWindow(
+                id = ON_DEMAND_WINDOW_ID,
+                label = "On-demand",
+                category = WindowCategory.MONTHLY,
+                usedPercent = onDemandPercent,
+                periodSeconds = BILLING_PERIOD_SECONDS,
+                resetAt = resetAt,
+                exhausted = isExhausted(onDemandPercent),
+            )
         }
 
         return windows

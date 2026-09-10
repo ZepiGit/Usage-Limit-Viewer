@@ -88,8 +88,12 @@ final class XaiBillingParserTests: XCTestCase {
 
         // The included window may appear, but with an UNKNOWN percentage, never a computed one.
         XCTAssertNil(windows.first { $0.id == "xai-monthly" }?.usedPercent ?? nil)
-        // And no on-demand figure can be derived without a limit to subtract.
-        XCTAssertNil(windows.first { $0.id == "xai-on-demand" })
+        // The on-demand row is shown — the facility exists, the cap says so — but its figure
+        // cannot be derived without a limit to subtract, so it is unknown too. Omitting the
+        // row read as "no on-demand spend", which is a claim the provider never made; Android
+        // shows the same unknown row.
+        XCTAssertNil(windows.first { $0.id == "xai-on-demand" }?.usedPercent ?? nil)
+        XCTAssertNotNil(windows.first { $0.id == "xai-on-demand" })
     }
 
     func testExplicitOnDemandUsedIsHonouredWithoutALimit() throws {
