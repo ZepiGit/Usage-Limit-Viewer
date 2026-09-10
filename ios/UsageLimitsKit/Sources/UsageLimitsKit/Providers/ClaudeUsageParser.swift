@@ -121,11 +121,22 @@ public enum ClaudeUsageParser {
         guard !raw.isEmpty else { return nil }
 
         var multiplier: String?
+        // The separator must actually be there. Without the `_` check, a tier of "claude_20x"
+        // strips to "20x", the "last component" is the whole string, and removing its length
+        // PLUS the separator takes four characters from a three-character string — a
+        // precondition failure, which is to say a crash, from a value the provider chose.
+        //
+        // Requiring the separator also matches the Kotlin regex, which demands a `_` before the
+        // digits: a bare "20x" is a tier name, not a multiplier, and reads as one.
         if let last = raw.split(separator: "_").last,
+           raw.hasSuffix("_\(last)"),
            last.hasSuffix("x"),
            case let digits = String(last.dropLast()),
            !digits.isEmpty,
-           digits.allSatisfy(\.isNumber) {
+           // ASCII digits only. `isNumber` accepts every Unicode numeric category, so an
+           // Arabic-Indic or superscript digit became a multiplier on iOS and not on Android —
+           // and "Max ²×" is noise either way. Tier ids are ASCII.
+           digits.allSatisfy({ $0.isASCII && $0.isNumber }) {
             multiplier = digits
             raw.removeLast(last.count + 1)
         }
@@ -265,7 +276,9 @@ public enum ClaudeUsageParser {
             let id = key
                 .replacingOccurrences(of: "_", with: "-")
                 .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-            guard !id.isEmpty else { return nil }
+            // Blank, not merely empty: Kotlin's `isBlank` counts a key of " " or "\t" as no
+            // key at all, and a window labelled with a tab helps nobody.
+            guard !id.isEmpty, !key.allSatisfy(\.isWhitespace) else { return nil }
 
             return window(
                 id: id,
@@ -308,8 +321,11 @@ public enum ClaudeUsageParser {
 
     private static func slug(_ value: String) -> String {
         let lowered = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // ASCII only, matching the Kotlin `[^a-z0-9]+` regex. These slugs are identity keys —
+        // they dedupe windows and they are embedded in notification keys — so the two platforms
+        // keying "claude-é-4" differently would mean the same quota tracked under two names.
         let mapped = lowered.map { character -> Character in
-            character.isLetter || character.isNumber ? character : "-"
+            character.isASCII && (character.isLetter || character.isNumber) ? character : "-"
         }
         let collapsed = String(mapped)
             .split(separator: "-", omittingEmptySubsequences: true)
