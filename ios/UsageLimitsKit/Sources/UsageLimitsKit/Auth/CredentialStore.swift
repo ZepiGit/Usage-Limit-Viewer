@@ -140,6 +140,24 @@ public protocol CredentialStore: Sendable {
     /// call and no separate delete.
     func save(_ credentials: OAuthCredentials, reference: String) async throws
 
+    /// Replaces credentials that already exist, and never inserts.
+    ///
+    /// Returns false when nothing is stored under `reference` — which is the whole point of
+    /// having it. A token refresh that started before the user removed the account finishes
+    /// afterwards and writes its rotated token back; with `save` that write RECREATES the
+    /// credential the removal deleted, and the account is gone from the list while a usable
+    /// token sits in the keychain that nothing will ever clean up. Refresh write-backs go
+    /// through here so a deletion wins the race by construction.
+    ///
+    /// The existence test and the write must be ONE store operation. A default implementation
+    /// built from `load` then `save` would reintroduce the race it exists to close, since the
+    /// account can be removed in the suspension between them — so there deliberately is none,
+    /// and each store implements it with a primitive that is already atomic.
+    func updateIfPresent(
+        _ credentials: OAuthCredentials,
+        reference: String
+    ) async throws -> Bool
+
     /// Removes the credentials under `reference`. Succeeds when nothing is
     /// stored, so a sign-out flow never needs to know whether a refresh ever
     /// completed.
@@ -304,6 +322,35 @@ public final class KeychainCredentialStore: CredentialStore {
         }
     }
 
+    public func updateIfPresent(
+        _ credentials: OAuthCredentials,
+        reference: String
+    ) async throws -> Bool {
+        let data = try encoded(credentials)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            // Re-asserted on write-back so an item first created by an older build is
+            // normalised to the accessibility above, exactly as `save` does.
+            kSecAttrAccessible as String: accessibility
+        ]
+
+        // Deliberately no `SecItemAdd` fallback, which is the one difference from `save`:
+        // errSecItemNotFound here means the account was removed, and the correct response
+        // is to report that, not to put the credential back.
+        let status = SecItemUpdate(
+            baseQuery(reference: reference) as CFDictionary,
+            attributes as CFDictionary
+        )
+        switch status {
+        case errSecSuccess:
+            return true
+        case errSecItemNotFound:
+            return false
+        default:
+            throw CredentialStoreError.keychain(status)
+        }
+    }
+
     public func delete(reference: String) async throws {
         let status = SecItemDelete(baseQuery(reference: reference) as CFDictionary)
         switch status {
@@ -451,6 +498,17 @@ public actor InMemoryCredentialStore: CredentialStore {
 
     public func save(_ credentials: OAuthCredentials, reference: String) async throws {
         self.credentials[reference] = credentials
+    }
+
+    public func updateIfPresent(
+        _ credentials: OAuthCredentials,
+        reference: String
+    ) async throws -> Bool {
+        // Actor-isolated and with no suspension between the test and the write, so this is
+        // atomic in the same sense `SecItemUpdate` is.
+        guard self.credentials[reference] != nil else { return false }
+        self.credentials[reference] = credentials
+        return true
     }
 
     public func removeAll() async throws {
