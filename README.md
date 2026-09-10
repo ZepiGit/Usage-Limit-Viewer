@@ -73,7 +73,12 @@ or credit redemption has been run end to end from a device.**
 Those are different claims and the difference is the whole point. The four usage payloads were
 captured from live accounts and the parsers corrected against them — which found six divergences
 that synthetic fixtures could not have, because a fixture written from the same assumption as the
-parser cannot catch a wrong assumption. `docs/verification.md` sets out what each layer of
+parser cannot catch a wrong assumption. Those captures date from when that gateway path worked; a
+later attempt to re-read the same endpoints failed to authenticate and was abandoned rather than
+retried, so the fixtures stand but nothing re-confirms them against today's live accounts.
+`docs/verification.md` step 3 onward is the runbook for the part only a person with a phone can
+do, ordered cheapest-first and saying what a *wrong* result looks like at each step. It sets out
+what each layer of
 testing can and cannot establish.
 
 What runs in CI, on every push:

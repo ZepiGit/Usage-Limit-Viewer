@@ -33,9 +33,45 @@ No real defect appears in the first layer's column; every defect below passed th
 | Concurrent token refreshes were not serialised, against providers that rotate the refresh token on use | Adversarial audit | Presenting a spent refresh token commonly revokes the whole grant — losing access to a paid account, with nothing locally corrupted to point at |
 | The widget re-derived the snapshot's severity on read, using rules that had drifted from the app's | Adversarial audit | The same data reads one way in the app and another on the home screen |
 
+## Layer 4 — on a device, by a person
+
+The three layers above share a ceiling: not one of them starts the app against a real account. Everything they establish is about *structure* — that the code reads the shapes correctly, composes them honestly, and does not crash. None of it is evidence that a user can sign in and see their own numbers, which is the entire product.
+
+That layer cannot be automated from here, and the reason is not effort. Signing in requires a person to approve a code in their own browser. Refreshing spends a refresh token that all four providers rotate on use, so a test run consumes the maintainer's working credential and, if the app then fails to store the replacement, ends the account's access. Redeeming a reset credit spends a finite, real credit. Two of the three are irreversible actions on someone's paid subscription. They belong to the account holder, not to a build.
+
+So the layer is written as a runbook instead. It is ordered so the cheapest checks fail first, and each step says what a *wrong* result looks like — because the failure mode throughout this project is a plausible number, not an error.
+
+### Before signing in
+
+1. **Install and open.** Both apps should reach the Overview screen with no accounts connected, and no crash. (CI proves this on iOS; on Android it is proven under Robolectric, not on hardware.)
+2. **Every tab opens.** Overview, Accounts, Resets, Settings. An empty account list must render as empty, never as an error.
+
+### Signing in — the first thing never yet exercised
+
+3. **Codex and Grok** use the device authorisation grant: the app shows a code, you approve it in a browser, the app polls. *Wrong result:* the code never appears, or approval succeeds but the app keeps polling.
+4. **Claude and Antigravity** use a loopback redirect the app receives itself on `127.0.0.1`. *Wrong result to watch for specifically:* the sheet closes and nothing happens, or the app hangs. Two defects in exactly this path were fixed by reading rather than by a test, because no test here can open that socket — a cancelled listener that never resumed, and a port conflict that reported nothing for five minutes. Neither has ever run.
+5. **Sign in twice on one provider.** Both accounts must appear separately. If the second replaces the first, identity is collapsing on the wrong key.
+
+### The numbers themselves
+
+6. **Compare each account against the provider's own UI**, not against what looks plausible. This is the only check that can catch a parser that is confidently wrong, and it is worth doing per provider rather than for one.
+7. **Check the reset times against the wall clock**, then again an hour later. A countdown that has not moved is a frozen composition; one that reads "resets in 12m" an hour after it should have reset is the widget staleness bug's shape.
+8. **Add both widgets to the home screen.** The figures must match the app's. If they disagree, the widget is re-deriving something instead of reading the published snapshot.
+
+### The destructive ones, last and deliberately
+
+9. **Token refresh** happens on its own when an access token expires — roughly an hour. The honest way to observe it is to leave the app installed and open it the next day. *Wrong result:* every account reads "Sign-in expired". If that happens, the rotated token was not stored, and step 10 is off the table until it is fixed.
+10. **Reset-credit redemption**, only on a Codex account that genuinely holds one, and knowing the credit is spent either way. The button is gated on `applicable_available_count`, so it should be absent when no credit applies — that absence is itself worth confirming before pressing anything.
+
+### If a step fails
+
+Capture the payload rather than the impression. A wrong number is evidence only when paired with what the endpoint actually returned; without it the next change is another guess, which is the failure this whole document exists to prevent.
+
 ## What is still not verified
 
-Login, token refresh and credit redemption have never been run end to end from a device. That gap is stated plainly rather than papered over. What *has* been verified is narrower and real: the response shapes the parsers consume were fetched from live accounts, and the parsers were checked against them. Because the endpoints promise nothing, those captures are evidence about today's payloads, not a guarantee about tomorrow's; when a provider changes, the remedy is to re-capture and re-check, not to raise confidence.
+Login, token refresh and credit redemption have never been run end to end from a device — steps 3 through 5, 9 and 10 above. That gap is stated plainly rather than papered over. What *has* been verified is narrower and real: the response shapes the parsers consume were fetched from live accounts, and the parsers were checked against them. Because the endpoints promise nothing, those captures are evidence about today's payloads, not a guarantee about tomorrow's; when a provider changes, the remedy is to re-capture and re-check, not to raise confidence.
+
+A re-check against live accounts was attempted after the parser work and did not succeed: Codex answered 401, Claude 429, and xAI 401 with `auth_kind=none … no auth context`, meaning the request left without a credential attached. The attempt was abandoned rather than iterated on, because each retry is an authenticated request against a real paid account and repeated failures carry their own cost. The captured fixtures date from when that path did work, and they stand; what does not stand is any claim that the parsers were re-confirmed against live data afterwards.
 
 ## A deliberate omission
 
