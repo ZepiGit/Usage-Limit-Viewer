@@ -235,12 +235,23 @@ class SyncEngine(
             // rather than at the one place where stopping costs the account.
             withContext(NonCancellable) {
                 val refreshed = provider.refresh(latest)
-                // The account can be removed while the refresh round-trip is in flight. Saving
-                // unconditionally would put a live, freshly rotated refresh token back into
-                // the store under a reference no account row names any more — nothing reads it
-                // and nothing ever deletes it, so it would outlive the account the user
-                // removed.
-                if (credentialStore.load(reference) != null) {
+                // Written back only if the store still holds the very pair this exchange
+                // started from — a compare-and-swap on content, not merely a presence check.
+                //
+                // Presence alone answered the wrong question. It catches the account being
+                // REMOVED mid-flight, which is why it was there, and misses the account being
+                // signed in AGAIN: the user reconnects the same provider while this refresh is
+                // still in the air, the login writes fresh credentials under the same
+                // reference, and this then overwrites them with a pair derived from the
+                // session they just replaced. The symptom is the one users report as "I logged
+                // in and it signed me straight back out", and it is the same failure as losing
+                // a rotated pair, arriving from the other direction.
+                //
+                // `OAuthCredentials` is a data class, so identity here is the whole pair. If
+                // anything at all changed underneath — a newer login, another refresh that
+                // finished first — this result is stale by definition and is dropped rather
+                // than allowed to win on arrival order.
+                if (credentialStore.load(reference) == latest) {
                     credentialStore.save(reference, refreshed)
                 }
                 refreshed

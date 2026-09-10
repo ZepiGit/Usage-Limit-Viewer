@@ -332,7 +332,7 @@ public actor SyncEngine {
             // only working pair that exists and turn a storage fault into a signed-out paid
             // account within the same second. Returning it means this session keeps working,
             // and the sign-out is deferred to the next launch rather than caused now.
-            await self.persist(renewed, reference: reference)
+            await self.persist(renewed, reference: reference, replacing: current)
             return Exchange(credentials: renewed, exchanged: true)
         }
 
@@ -344,14 +344,39 @@ public actor SyncEngine {
 
     /// Writes a rotated pair, retrying, and never throwing. See the call site for why a failure
     /// here must not fail the refresh.
-    private func persist(_ credentials: OAuthCredentials, reference: String) async {
+    private func persist(
+        _ credentials: OAuthCredentials,
+        reference: String,
+        replacing expected: OAuthCredentials
+    ) async {
         for attempt in 1...Self.saveAttempts {
             do {
-                // Update-only, never insert. A rotation that started before the user removed
-                // the account finishes afterwards, and `save` would put the deleted credential
-                // straight back: the account is gone from the list while a usable token stays
-                // in the keychain with nothing left to clean it up. A false return means
-                // removal won, which is a correct outcome and not a failure to retry.
+                // Two conditions, answering two different races.
+                //
+                // The store still has to hold SOMETHING — update-only, never insert — because
+                // a rotation that began before the user removed the account finishes
+                // afterwards, and an insert would put the deleted credential straight back.
+                //
+                // And what it holds has to still be the pair this exchange started from. The
+                // presence test alone misses the account being signed in AGAIN: the user
+                // reconnects the same provider while the refresh is in the air, the login
+                // writes fresh credentials under the same reference, and this overwrites them
+                // with a pair derived from the session they just replaced — reported by users
+                // as "I logged in and it signed me straight back out". Anything else stored
+                // there, a newer login or a refresh that finished first, makes this result
+                // stale by definition, and stale results must not win on arrival order.
+                //
+                // Not atomic against the keychain, and cannot be: there is no compare-and-swap
+                // on an item's value, and inventing one out of a read plus a write would be a
+                // guess this environment has no device to check. The window is between this
+                // load and the update below, in one process, where refreshes for a reference
+                // are already single-flighted — so the only writer that can land inside it is
+                // a login completing in that exact interval. Strictly better than the presence
+                // check, and honest about what it does not cover. Android compares the same way.
+                guard let stored = try await self.credentials.load(reference: reference) else {
+                    return
+                }
+                guard stored == expected else { return }
                 _ = try await self.credentials.updateIfPresent(credentials, reference: reference)
                 return
             } catch {

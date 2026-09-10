@@ -136,4 +136,66 @@ class CancelledRotationTest {
         assertEquals("new-access", store.stored?.accessToken)
         assertEquals("new-refresh", store.stored?.refreshToken)
     }
+
+    @Test
+    fun `a re-login during a refresh is not overwritten by the refresh's write`() {
+        // The other direction of the same failure. The user reconnects the same provider while
+        // a refresh is still in the air; the login writes fresh credentials under the same
+        // reference; the refresh then lands and overwrites them with a pair derived from the
+        // session that was just replaced. Users report this as "I logged in and it signed me
+        // straight back out".
+        //
+        // A presence check cannot see it — the reference very much exists. Only comparing what
+        // is stored against the pair the exchange started from can.
+        runBlocking {
+            val entered = CompletableDeferred<Unit>()
+            val released = CompletableDeferred<Unit>()
+            val store = Store(expiring)
+
+            val client = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    entered.complete(Unit)
+                    runBlocking { released.await() }
+                    Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body(
+                            """{"access_token":"rotated","refresh_token":"rotated-refresh","expires_in":3600}"""
+                                .toResponseBody(HttpClient.JSON_MEDIA_TYPE),
+                        )
+                        .build()
+                }
+                .build()
+
+            val engine = SyncEngine(
+                repository = UsageRepository(EmptyAccountDao(), EmptySnapshotDao()),
+                credentialStore = store,
+                registry = ProviderRegistry(HttpClient(client)),
+                nowMs = { now },
+            )
+
+            val refresh = async(Dispatchers.IO) { engine.validCredentials(account) }
+            entered.await()
+
+            // The user signs in again while the exchange is parked on the network.
+            val freshLogin = OAuthCredentials(
+                accessToken = "login-access",
+                refreshToken = "login-refresh",
+                idToken = null,
+                expiresAt = now + 3_600_000,
+            )
+            store.save(account.credentialReference, freshLogin)
+
+            released.complete(Unit)
+            runCatching { refresh.await() }
+
+            assertEquals(
+                "the sign-in the user just completed must survive",
+                freshLogin,
+                store.stored,
+            )
+        }
+    }
 }
