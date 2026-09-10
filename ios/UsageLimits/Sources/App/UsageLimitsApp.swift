@@ -11,7 +11,13 @@ struct UsageLimitsApp: App {
             RootView()
                 .environmentObject(store)
                 .preferredColorScheme(.dark)
-                .task { await store.refresh() }
+                // Cached first, then the network. A cold launch that waited for the slowest
+                // provider before drawing anything would read as "you have no accounts" for as
+                // long as that took — which on a bad connection is indefinitely.
+                .task {
+                    await store.load()
+                    await store.refresh()
+                }
         }
     }
 }

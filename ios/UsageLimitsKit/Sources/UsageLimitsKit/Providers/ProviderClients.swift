@@ -48,23 +48,26 @@ public struct UsageResult: Sendable {
 
 // MARK: - Provider contract
 
-/// Implemented once per provider: turn credentials and provider-specific attributes into a
-/// usage snapshot.
-public protocol UsageProviderClient: Sendable {
-    /// Identifies the provider in diagnostics and persisted state.
-    var providerID: String { get }
-
-    /// Fetches the provider's current usage.
-    ///
-    /// Implementations must prefer shrinking the result to throwing: only a rejected
-    /// credential or a total absence of answers justifies an error.
-    func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult
-}
+// A provider adapter conforms to `SyncProvider` (see `Sync/SyncEngine.swift`), which is the one
+// contract: read usage, and exchange a refresh token. There is deliberately no second,
+// fetch-only protocol. There was one, and the split cost nothing but bugs — the engine could
+// only be handed something that refreshes, so a "usage client" that did not was a type that
+// compiled and could never be wired in. The exchange half of each adapter lives in
+// `ProviderTokenRefresh.swift`.
+//
+// Implementations prefer shrinking the result to throwing: only a rejected credential or a
+// total absence of answers justifies an error.
 
 // MARK: - Errors
 
 /// Why a refresh could not produce a result at all.
-public enum ProviderError: Error {
+///
+/// `LocalizedError`, because these messages are what an account card shows when a sync fails.
+/// Without it the engine falls back to `String(describing:)` and a user reading their own screen
+/// is told "unauthorised", which names the HTTP status rather than the thing they can do about
+/// it. Every description is built from endpoint names and status codes the app chose; no payload,
+/// header or token is ever interpolated into one.
+public enum ProviderError: Error, LocalizedError {
     /// The endpoint answered, but not with a JSON object any parser can consume.
     case malformedPayload(String)
     /// The credential was rejected (HTTP 401/403); refreshing the token is the only fix the
@@ -73,6 +76,17 @@ public enum ProviderError: Error {
     /// The endpoint was unreachable, answered with an error status, or had nothing for this
     /// account.
     case noData(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .malformedPayload(let detail):
+            return "The provider answered in a shape this app does not understand (\(detail))."
+        case .unauthorised:
+            return "This account needs signing in again."
+        case .noData(let detail):
+            return "No usage could be read (\(detail))."
+        }
+    }
 }
 
 // MARK: - Shared HTTP plumbing
@@ -81,7 +95,7 @@ public enum ProviderError: Error {
 ///
 /// Diagnostics carry only endpoint names and HTTP status codes — never a header, token or
 /// account identifier — because these errors end up in logs and user interfaces.
-private enum ProviderHTTP {
+enum ProviderHTTP {
     /// Enforces the one rule every endpoint shares, that only a 2xx body may be parsed,
     /// while keeping 401/403 distinct because the caller can repair those alone by
     /// refreshing the token.
@@ -153,16 +167,23 @@ private enum ProviderHTTP {
 /// The usage payload is the primary source and also carries a stale copy of the reset-credit
 /// list; the dedicated reset-credit endpoint is newer and authoritative, so it is preferred
 /// whenever it answers and the embedded copy covers the occasions when it does not.
-public struct CodexClient: UsageProviderClient, Sendable {
+public struct CodexClient: SyncProvider, Sendable {
     public let providerID = "codex"
 
     private static let usageURL = "https://chatgpt.com/backend-api/wham/usage"
     private static let resetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 
-    private let httpClient: UsageHTTPClient
+    /// Shared with the token exchange in `ProviderTokenRefresh.swift`, so one adapter makes one
+    /// kind of request through one client.
+    let httpClient: UsageHTTPClient
 
-    public init(httpClient: UsageHTTPClient) {
+    /// Injected rather than read from the clock, so a test can pin the instant an access token
+    /// is stamped as expiring at.
+    let now: @Sendable () -> Date
+
+    public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
+        self.now = now
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
@@ -189,7 +210,7 @@ public struct CodexClient: UsageProviderClient, Sendable {
             endpoint: "codex usage"
         )
         let usagePayload = try ProviderHTTP.decodeObject(usageResponse.body, endpoint: "codex usage")
-        let windows = CodexUsageParser.parse(usagePayload, now: Date())
+        let windows = CodexUsageParser.parse(usagePayload, now: now())
         let plan = CodexUsageParser.parsePlan(usagePayload)
 
         let credits = try await fetchResetCredits(headers: headers, usagePayload: usagePayload)
@@ -254,13 +275,20 @@ public struct CodexClient: UsageProviderClient, Sendable {
 // MARK: - Claude (Anthropic)
 
 /// Reads the Claude subscription usage console over its OAuth-only routes.
-public struct ClaudeClient: UsageProviderClient, Sendable {
+public struct ClaudeClient: SyncProvider, Sendable {
     public let providerID = "claude"
 
-    private let httpClient: UsageHTTPClient
+    /// Shared with the token exchange in `ProviderTokenRefresh.swift`, so one adapter makes one
+    /// kind of request through one client.
+    let httpClient: UsageHTTPClient
 
-    public init(httpClient: UsageHTTPClient) {
+    /// Injected rather than read from the clock, so a test can pin the instant an access token
+    /// is stamped as expiring at.
+    let now: @Sendable () -> Date
+
+    public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
+        self.now = now
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
@@ -278,7 +306,7 @@ public struct ClaudeClient: UsageProviderClient, Sendable {
         )
         try ProviderHTTP.ensureSuccess(response, endpoint: "claude usage")
         let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "claude usage")
-        return UsageResult(windows: ClaudeUsageParser.parse(payload, now: Date()))
+        return UsageResult(windows: ClaudeUsageParser.parse(payload, now: now()))
     }
 }
 
@@ -289,7 +317,7 @@ public struct ClaudeClient: UsageProviderClient, Sendable {
 /// Google routes each account to exactly one shard but publishes no way of asking which, so
 /// the known hosts are polled in order and an empty acknowledgement from one simply passes
 /// the baton to the next.
-public struct AntigravityClient: UsageProviderClient, Sendable {
+public struct AntigravityClient: SyncProvider, Sendable {
     public let providerID = "antigravity"
 
     /// Tried in the order the service hands them out: the daily-prefixed shard hosts most
@@ -300,10 +328,17 @@ public struct AntigravityClient: UsageProviderClient, Sendable {
         "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
     ]
 
-    private let httpClient: UsageHTTPClient
+    /// Shared with the token exchange in `ProviderTokenRefresh.swift`, so one adapter makes one
+    /// kind of request through one client.
+    let httpClient: UsageHTTPClient
 
-    public init(httpClient: UsageHTTPClient) {
+    /// Injected rather than read from the clock, so a test can pin the instant an access token
+    /// is stamped as expiring at.
+    let now: @Sendable () -> Date
+
+    public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
+        self.now = now
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
@@ -371,7 +406,7 @@ public struct AntigravityClient: UsageProviderClient, Sendable {
 
             do {
                 let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "quota summary")
-                let windows = AntigravityQuotaParser.parse(payload, now: Date())
+                let windows = AntigravityQuotaParser.parse(payload, now: now())
                 if windows.isEmpty {
                     // A well-formed summary carrying no windows is the same "not routed
                     // here" signal as an empty body, so it counts as empty too.
@@ -409,16 +444,23 @@ public struct AntigravityClient: UsageProviderClient, Sendable {
 /// the plain route carries, and the parser's merge reconciles the overlap. Because the two
 /// routes age independently, one failing must not discard the other's answer: only a double
 /// failure leaves nothing to show.
-public struct XaiClient: UsageProviderClient, Sendable {
+public struct XaiClient: SyncProvider, Sendable {
     public let providerID = "xai"
 
     private static let creditsURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
     private static let billingURL = "https://cli-chat-proxy.grok.com/v1/billing"
 
-    private let httpClient: UsageHTTPClient
+    /// Shared with the token exchange in `ProviderTokenRefresh.swift`, so one adapter makes one
+    /// kind of request through one client.
+    let httpClient: UsageHTTPClient
 
-    public init(httpClient: UsageHTTPClient) {
+    /// Injected rather than read from the clock, so a test can pin the instant an access token
+    /// is stamped as expiring at.
+    let now: @Sendable () -> Date
+
+    public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
+        self.now = now
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
@@ -480,7 +522,7 @@ public struct XaiClient: UsageProviderClient, Sendable {
             httpClient, url: url, headers: headers,
             endpoint: endpoint)
         let payload = try ProviderHTTP.decodeObject(response.body, endpoint: endpoint)
-        return parse(payload, Date())
+        return parse(payload, now())
     }
 
     /// Picks which failure to surface when both routes were tried and both failed.

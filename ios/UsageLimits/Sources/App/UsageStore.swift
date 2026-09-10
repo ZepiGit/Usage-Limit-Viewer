@@ -23,7 +23,14 @@ final class UsageStore: ObservableObject {
 
     private var clock: Task<Void, Never>?
 
-    init() {
+    /// Built lazily and kept, because it owns the credential store and the account cache: a
+    /// second one would be a second set of in-flight refresh locks, and the whole point of that
+    /// lock is that there is exactly one per credential reference.
+    private let container: UsageLimitsContainer?
+
+    init(container: UsageLimitsContainer? = UsageStore.makeContainer()) {
+        self.container = container
+
         // A countdown that only moves when the data refreshes is worse than no countdown: it
         // reads as a live number while being up to half an hour stale.
         clock = Task { [weak self] in
@@ -55,36 +62,63 @@ final class UsageStore: ObservableObject {
             .sorted { ($0.1.resetAt ?? .distantFuture) < ($1.1.resetAt ?? .distantFuture) }
     }
 
-    /// Hands the widget what the app is showing.
-    ///
-    /// A widget extension is a separate process with no access to the app's data, so this file
-    /// is the entirety of what the home screen knows. It is written from the same
-    /// `GlanceModel` output the app renders, rather than from anything the widget recomputes —
-    /// one derivation, one answer, on both surfaces.
-    private func publishToWidget() {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupID) else { return }
-
-        // Best-effort. Failing to update the widget must never fail the refresh the user is
-        // watching; the tile keeps its previous contents, which is what it would show anyway.
-        try? GlanceSnapshotCodec.write(
-            GlanceModel.build(accounts, now: now, scope: .mostCritical),
-            toDirectory: container)
-    }
-
     /// Shared with the widget extension, which names the same group.
+    ///
+    /// The widget is a separate process with no access to the app's memory, so a file in this
+    /// container is the entirety of what the home screen knows. `UsageLimitsContainer` writes it
+    /// from the same `GlanceModel` call this screen renders — one derivation, one answer, rather
+    /// than the app and the widget each deciding what "most critical" means.
     static let appGroupID = "group.com.usagelimits.shared"
+
+    /// Loads whatever the last run left behind, before any network is touched.
+    ///
+    /// A cold launch that showed an empty screen until a refresh came back would look like "you
+    /// have no accounts" for as long as the slowest provider took — on a bad connection, for
+    /// ever. The cache is what the app knew when it was last open, which is the right thing to
+    /// render while the real answer is on its way.
+    func load() async {
+        guard let container else { return }
+        accounts = await container.usage()
+    }
 
     func refresh() async {
         guard !isRefreshing else { return }
+        guard let container else {
+            // No shared container means the app group is missing from the entitlements, which is
+            // a build fault rather than anything the user did — but it must still say so, since
+            // the alternative is a screen that stays empty and explains nothing.
+            lastError = "This build cannot reach its shared storage."
+            return
+        }
+
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // Deliberately left unimplemented until the provider clients land: showing invented
-        // numbers would be worse than showing none, and this screen's whole job is to be
-        // trusted about how much quota is left.
-        lastError = nil
         now = Date()
-        publishToWidget()
+        do {
+            // The container returns the usage as it stands after the sync, rather than leaving
+            // this to re-read it: re-reading races the write that just happened.
+            accounts = try await container.refresh()
+            lastError = nil
+        } catch is CancellationError {
+            // The screen was closed. Not a failure, and not something to paint red.
+        } catch {
+            // Per-account failures never reach here — the engine records those on the accounts
+            // themselves, which is where a user can act on them. This is the whole run failing.
+            accounts = await container.usage()
+            lastError = error.localizedDescription
+        }
+
+        // The container publishes the widget snapshot itself as part of a refresh, so the app
+        // does not write the same file a second time from a second process-shared path.
+    }
+
+    /// The shared container both this app and its widget name, or nil when the entitlement is
+    /// missing and there is nowhere shared to write.
+    private static func makeContainer() -> UsageLimitsContainer? {
+        guard let directory = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupID) else { return nil }
+        return UsageLimitsContainer(
+            directory: directory, credentials: KeychainCredentialStore())
     }
 }
