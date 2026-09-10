@@ -168,6 +168,23 @@ final class UsageStore: ObservableObject {
         BackgroundRefresh.schedule(after: settings.syncIntervalMinutes)
     }
 
+    /// Spends one Codex reset credit and republishes what the spend bought.
+    ///
+    /// Reported through `lastError` rather than thrown, because the only caller is a button: a
+    /// spend the provider refuses has to say so on the screen the user is looking at.
+    func redeemResetCredit(accountID: String) async {
+        guard let container else { return }
+        do {
+            accounts = try await container.redeemResetCredit(accountID: accountID)
+            lastError = nil
+        } catch is CancellationError {
+            // The screen was closed mid-spend. Whatever the provider answered will be reflected
+            // by the next refresh.
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
 
     /// The one container this process uses, or nil when the App Group entitlement is missing
     /// and there is nowhere shared to write.

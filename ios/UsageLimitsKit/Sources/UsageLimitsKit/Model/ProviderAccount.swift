@@ -97,6 +97,14 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     /// Provider-reported count, authoritative over `resetCredits.count` when present: the list
     /// can be truncated or filtered while the count stays exact.
     public let resetCreditCount: Int?
+
+    /// How many of those credits the provider says can be applied RIGHT NOW.
+    ///
+    /// A different question from how many are held, and the one a redeem control has to ask.
+    /// Codex reports both: an account can hold three credits and be able to spend none of them,
+    /// because none applies to the limit currently in force. Nil means the provider did not say.
+    public let applicableResetCreditCount: Int?
+
     public let errorMessage: String?
 
     public init(
@@ -106,6 +114,7 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         windows: [UsageWindow],
         resetCredits: [ResetCredit] = [],
         resetCreditCount: Int? = nil,
+        applicableResetCreditCount: Int? = nil,
         errorMessage: String? = nil
     ) {
         self.accountID = accountID
@@ -114,7 +123,27 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         self.windows = windows
         self.resetCredits = resetCredits
         self.resetCreditCount = resetCreditCount
+        self.applicableResetCreditCount = applicableResetCreditCount
         self.errorMessage = errorMessage
+    }
+
+    /// Decoded field by field so a cache written before `applicableResetCreditCount` existed
+    /// still reads. The synthesised decoder demands every key, and an undecodable cache is
+    /// treated as empty — which would silently drop every account the user had connected.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            accountID: try container.decode(String.self, forKey: .accountID),
+            fetchedAt: try container.decode(Date.self, forKey: .fetchedAt),
+            status: try container.decode(SnapshotStatus.self, forKey: .status),
+            windows: try container.decodeIfPresent([UsageWindow].self, forKey: .windows) ?? [],
+            resetCredits: try container.decodeIfPresent(
+                [ResetCredit].self, forKey: .resetCredits) ?? [],
+            resetCreditCount: try container.decodeIfPresent(
+                Int.self, forKey: .resetCreditCount),
+            applicableResetCreditCount: try container.decodeIfPresent(
+                Int.self, forKey: .applicableResetCreditCount),
+            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage))
     }
 
     /// Whether the last fetch failed.
@@ -124,8 +153,19 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     /// them to spell it differently.
     public var failed: Bool { status == .failed }
 
-    /// How many credits the user can actually spend right now.
-    public var spendableResetCredits: Int { resetCreditCount ?? resetCredits.count }
+    /// How many credits the account HOLDS — what a balance line shows.
+    public var heldResetCredits: Int { resetCreditCount ?? resetCredits.count }
+
+    /// How many can be spent right now — what a redeem control is gated on.
+    ///
+    /// Deliberately separate from `heldResetCredits`, and this distinction is the whole reason
+    /// the applicable count is fetched at all. An account can hold three credits and be able to
+    /// apply none of them; gating the button on the held count offers a spend that the provider
+    /// will refuse, against a balance the user watches go down.
+    ///
+    /// It falls back to the held count only when the provider stated no applicable figure, which
+    /// is the older shape of the payload — there, held is the best evidence available.
+    public var spendableResetCredits: Int { applicableResetCreditCount ?? heldResetCredits }
 
     /// The window closest to running out — what a summary leads with.
     public var mostCritical: UsageWindow? {

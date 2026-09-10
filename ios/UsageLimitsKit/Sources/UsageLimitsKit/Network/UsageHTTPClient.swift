@@ -177,11 +177,16 @@ public actor UsageHTTPClient {
     /// so a caller that gives up is never dragged through another attempt.
     /// Total added latency is bounded — each wait at `maximumWait`, each
     /// attempt at `perAttemptTimeout`.
+    /// - Parameter retries: overrides this client's budget for one request. Zero means send it
+    ///   once and report whatever comes back — for a call that CHANGES something at the
+    ///   provider, where a transport error after the server committed is indistinguishable from
+    ///   one before it, and a retry would risk doing the thing twice.
     public func request(
         url: String,
         method: String = "GET",
         headers: [String: String] = [:],
-        body: Data? = nil
+        body: Data? = nil,
+        retries: Int? = nil
     ) async throws -> HTTPResponse {
         // Validated before anything is built or sent, so a plaintext URL
         // never even reaches the transport.
@@ -203,7 +208,11 @@ public actor UsageHTTPClient {
             // wait still stops the next send.
             try Task.checkCancellation()
 
-            switch try await verdict(for: request, attemptIndex: attemptIndex) {
+            switch try await verdict(
+                for: request,
+                attemptIndex: attemptIndex,
+                budget: retries.map { max(0, $0) } ?? maxRetries
+            ) {
             case .delivered(let response):
                 return response
             case .failed(let failure):
@@ -230,8 +239,10 @@ public actor UsageHTTPClient {
     /// `CancellationError` — by construction, so the catch-alls below can
     /// never mistake a caller's exit for a flaky socket — and folds every
     /// other failure into the verdict.
-    private func verdict(for request: URLRequest, attemptIndex: Int) async throws -> Verdict {
-        let budgetSpent = attemptIndex >= maxRetries
+    private func verdict(
+        for request: URLRequest, attemptIndex: Int, budget: Int
+    ) async throws -> Verdict {
+        let budgetSpent = attemptIndex >= budget
 
         do {
             let (data, response) = try await transport.send(request)
