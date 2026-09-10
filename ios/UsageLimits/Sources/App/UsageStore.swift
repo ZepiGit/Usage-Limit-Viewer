@@ -100,9 +100,21 @@ final class UsageStore: ObservableObject {
     /// ever. The cache is what the app knew when it was last open, which is the right thing to
     /// render while the real answer is on its way.
     func load() async {
-        guard let container else { return }
+        guard let container else {
+            // Said here as well as in `refresh`, because a cold launch renders this screen before
+            // anything is refreshed: without it the user sees an empty account list and the
+            // explanation exists only behind a pull they have no reason to perform.
+            lastError = "This build cannot reach its shared storage."
+            return
+        }
         applyLoaded(await container.settings())
-        accounts = await container.usage()
+
+        let cached = await container.usage()
+        // A refresh that started while this was reading has newer accounts than the cache does,
+        // and its result must not be overwritten by one that merely finished later.
+        if !isRefreshing {
+            accounts = cached
+        }
     }
 
     /// Installs settings that came from storage, without treating the assignment as a change the

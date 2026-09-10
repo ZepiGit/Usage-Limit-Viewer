@@ -18,21 +18,35 @@ public actor AccountRepository {
     }
 
     private let fileURL: URL
-    private var records: [String: Stored]
+    private var records: [String: Stored] = [:]
+    private var isLoaded = false
 
+    /// Deliberately does no I/O.
+    ///
+    /// This actor is built during app launch, and an actor's initialiser is nonisolated: it runs
+    /// inline on whichever thread constructed it, which here is the main thread before the first
+    /// frame. Reading and decoding a file there is a stall the user watches. The read happens on
+    /// this actor's own executor instead, at the first call that needs it.
     public init(directory: URL, fileName: String = "accounts.json") {
         self.fileURL = directory.appendingPathComponent(fileName)
-        self.records = Self.load(from: fileURL)
+    }
+
+    private func ensureLoaded() {
+        guard !isLoaded else { return }
+        isLoaded = true
+        records = Self.load(from: fileURL)
     }
 
     // MARK: - Reading
 
     public func accounts() -> [ProviderAccount] {
-        ordered().map(\.account)
+        ensureLoaded()
+        return ordered().map(\.account)
     }
 
     public func usage() -> [AccountUsage] {
-        ordered().map { AccountUsage(account: $0.account, snapshot: $0.snapshot) }
+        ensureLoaded()
+        return ordered().map { AccountUsage(account: $0.account, snapshot: $0.snapshot) }
     }
 
     /// Oldest first, so the list a user sees does not reshuffle because a dictionary rehashed.
@@ -45,6 +59,7 @@ public actor AccountRepository {
     // MARK: - Writing
 
     public func upsert(_ account: ProviderAccount) throws {
+        ensureLoaded()
         // The snapshot is kept across an account being re-saved. Re-authenticating an account
         // updates its tokens, not its quota, and blanking the numbers would make a successful
         // sign-in look like a regression.
@@ -53,6 +68,7 @@ public actor AccountRepository {
     }
 
     public func remove(id: String) throws {
+        ensureLoaded()
         records[id] = nil
         try persist()
     }
@@ -64,6 +80,7 @@ public actor AccountRepository {
     /// than blanking a card because one refresh did not come back — and the caller can tell the
     /// two apart, which it could not if the windows were simply gone.
     public func record(_ outcome: SyncOutcome, at time: Date) throws {
+        ensureLoaded()
         switch outcome {
         case .success(let accountID, let result):
             guard var stored = records[accountID] else { return }
@@ -112,7 +129,7 @@ public actor AccountRepository {
         // occasionally is worse than one that lags.
         try encoder
             .encode(ordered())
-            .write(to: fileURL, options: .atomic)
+            .write(to: fileURL, options: ContainerFile.writingOptions)
     }
 
     private static func load(from url: URL) -> [String: Stored] {
