@@ -602,4 +602,68 @@ extension SyncEngineTests {
             }
         }
     }
+
+    /// Rotates strictly — a spent refresh token is fatal — and always hands back a pair that
+    /// is ALREADY expired, so each sync must exchange again rather than coast on the last one.
+    private actor AlwaysExpiredRotatingProvider: SyncProvider {
+        nonisolated let providerID = "codex"
+        private var live = "refresh-1"
+        private var generation = 1
+        private(set) var exchanges = 0
+
+        struct GrantRevoked: Error {}
+
+        func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
+            exchanges += 1
+            guard credentials.refreshToken == live else { throw GrantRevoked() }
+            generation += 1
+            live = "refresh-\(generation)"
+            return OAuthCredentials(
+                accessToken: "access-\(generation)",
+                refreshToken: live,
+                expiresAt: Date(timeIntervalSince1970: 0))
+        }
+
+        func fetchUsage(
+            credentials: OAuthCredentials, attributes: [String: String]
+        ) async throws -> UsageResult {
+            UsageResult()
+        }
+    }
+
+    func testTwoConsecutiveUnwritableRotationsStillLeaveTheNewestPairInUse() async throws {
+        // The hole in the override, found by re-reading it rather than by a failing test.
+        //
+        // After one failed write the store is deliberately a rotation behind. `persist` then
+        // compared the next exchange against the STORE rather than against what this process
+        // believes is current, so the second failure bailed out early and left the override
+        // pointing at the FIRST rotated pair — whose refresh token the second exchange had
+        // already spent. The next sync presented a dead grant: exactly the failure the
+        // override exists to prevent, arriving two rotations in.
+        //
+        // Three syncs, every write refused, and a provider that throws on a spent token. All
+        // three must succeed on three exchanges — never a fourth, and never a reuse.
+        // The rotated pair is itself already expired, so EVERY sync has to exchange again.
+        // With a fresh one the second exchange never happens and this reaches nothing — which
+        // is what the first version of this test did, passing against the defect it was
+        // written for.
+        let store = UnwritableCredentialStore(["ref-a": expired("access-1")])
+        let provider = AlwaysExpiredRotatingProvider()
+        let sink = RecordingSink()
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+
+        for _ in 0..<3 {
+            _ = try await engine.sync(accounts: [account("a")])
+        }
+
+        let outcomes = await sink.outcomes
+        XCTAssertEqual(outcomes.count, 3)
+        for outcome in outcomes {
+            guard case .success = outcome else {
+                return XCTFail("a spent grant was presented again: \(outcome)")
+            }
+        }
+    }
 }
