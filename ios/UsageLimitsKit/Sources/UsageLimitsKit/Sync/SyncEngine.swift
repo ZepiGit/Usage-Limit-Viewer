@@ -106,6 +106,10 @@ public actor SyncEngine {
     /// account still syncs and is recorded — one bad account never aborts the batch. The one error
     /// that escapes is `CancellationError`: a cancelled run is not a broken account, so it
     /// propagates to the caller instead of being recorded as a failure.
+    /// Accounts with a fetch-and-record in flight, and who is queued behind each.
+    private var busyAccounts: Set<String> = []
+    private var accountWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
     public func sync(accounts: [ProviderAccount]) async throws -> [SyncOutcome] {
         try Task.checkCancellation()
 
@@ -134,9 +138,50 @@ public actor SyncEngine {
     /// the batch, so an outcome reaches the sink the moment it settles, whatever its neighbours
     /// are doing.
     private func run(_ account: ProviderAccount) async throws -> SyncOutcome {
+        // Fetch and record are one step per account, not two.
+        //
+        // An actor is reentrant at every `await`, and only the token exchange was coordinated
+        // — the path from usage request to stored snapshot was not. Foreground and background
+        // refreshes overlap freely, so a request started EARLIER could finish LATER and be
+        // written last: an account read at 80% an age ago overwrote the 10% a newer request
+        // had just recorded, and took the newer timestamp with it. A late failure could do the
+        // same to a successful snapshot, marking a healthy account failed. Comparing
+        // completion times does not fix it, because the stale result genuinely completed last.
+        //
+        // Keyed by account, so unrelated accounts still run in parallel — the batch stays as
+        // wide as it was. Android serialises the same span for the same reason.
+        await acquireAccountLock(account.id)
+        defer { releaseAccountLock(account.id) }
+
         let outcome = try await isolatedOutcome(for: account)
         try await record(outcome)
         return outcome
+    }
+
+    /// A mutex per account, held across a whole fetch-and-record.
+    ///
+    /// Hand-rolled because an actor gives mutual exclusion only between `await`s, and this
+    /// span is nothing but awaits. Ownership passes directly to the next waiter rather than
+    /// clearing the flag, so a third caller cannot slip in between.
+    private func acquireAccountLock(_ id: String) async {
+        guard busyAccounts.contains(id) else {
+            busyAccounts.insert(id)
+            return
+        }
+        await withCheckedContinuation { continuation in
+            accountWaiters[id, default: []].append(continuation)
+        }
+    }
+
+    private func releaseAccountLock(_ id: String) {
+        if var queue = accountWaiters[id], !queue.isEmpty {
+            let next = queue.removeFirst()
+            accountWaiters[id] = queue.isEmpty ? nil : queue
+            next.resume()
+        } else {
+            accountWaiters[id] = nil
+            busyAccounts.remove(id)
+        }
     }
 
     /// The failure boundary for a single account.
