@@ -122,6 +122,9 @@ private struct AccountSummaryCard: View {
                 Button("Use credit", role: .destructive) {
                     Task { await store.redeemResetCredit(accountID: usage.account.id) }
                 }
+                // The store already ignores a second tap while one spend is in flight; the
+                // button says so too, rather than looking willing and doing nothing.
+                .disabled(store.isRedeeming)
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This spends 1 reset credit and cannot be undone. The rate limit resets immediately.")
