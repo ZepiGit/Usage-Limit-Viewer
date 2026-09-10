@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 
 /** A reset event on the Resets timeline. */
 data class UpcomingReset(
@@ -218,12 +220,21 @@ class UsageViewModel(
 
     fun removeAccount(accountId: String) {
         viewModelScope.launch {
-            val account = container.repository.account(accountId) ?: return@launch
-            // Credentials go first: if this crashed between the two, an orphaned account row
-            // is recoverable, an orphaned credential is not visible to the user at all.
-            container.credentialStore.delete(account.credentialReference)
-            container.repository.deleteAccount(accountId)
-            WidgetUpdater.refreshAll(appContext)
+            // Not cancellable once begun. The screen that owns this scope is the one the user
+            // leaves right after tapping "remove", and a cancellation between the row's
+            // deletion and the widget refresh left the home screen showing the account that
+            // was just removed — widgets do not observe the database, they are told.
+            withContext(NonCancellable) {
+                val account = container.repository.account(accountId) ?: return@withContext
+                // Credentials go first: if this crashed between the two, an orphaned account
+                // row is recoverable, an orphaned credential is not visible to the user at all.
+                container.credentialStore.delete(account.credentialReference)
+                container.repository.deleteAccount(accountId)
+                // A widget pinned to this account would otherwise render the empty snapshot
+                // for ever; dropping its config returns it to the automatic scope.
+                container.widgetConfigDao.deleteForAccount(accountId)
+                WidgetUpdater.refreshAll(appContext)
+            }
         }
     }
 
@@ -234,6 +245,10 @@ class UsageViewModel(
             // called once at process start, so a new interval only took effect after the app
             // was killed. UPDATE keeps the existing schedule rather than firing immediately.
             SyncWorker.schedulePeriodic(appContext, minutes)
+            // Staleness is derived from this interval at render time, so a widget composed
+            // under the old interval kept calling a 45-minute-old snapshot stale for hours
+            // after the app's own screen had turned it green.
+            WidgetUpdater.refreshAll(appContext)
         }
     }
 
