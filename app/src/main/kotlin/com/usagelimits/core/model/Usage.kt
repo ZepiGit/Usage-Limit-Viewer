@@ -1,5 +1,7 @@
 package com.usagelimits.core.model
 
+import kotlin.math.roundToInt
+
 /**
  * How long a quota window spans. Derived from the window duration reported by the provider
  * rather than from its position in the payload, because providers reorder and rename windows.
@@ -159,3 +161,15 @@ data class ResetCredit(
     val expiresAt: Long?,
     val status: String,
 )
+
+/**
+ * "87%" — the one way a remaining percentage is printed anywhere on Android.
+ *
+ * Rounded, as iOS rounds, so the two phones print the same number for one snapshot: with
+ * `toInt()` Android said "87%" where iOS said "88%" for 87.6, and — the half that matters —
+ * printed "0%" beside an amber LOW bar for a window with 0.9 % left, which reads as
+ * exhausted when it is not. Rounding up to 100 is only possible from 99.5, which is exactly
+ * the threshold both platforms already use to paint the bar as full.
+ */
+fun percentLabel(remaining: Double?): String =
+    remaining?.let { "${it.coerceIn(0.0, 100.0).roundToInt()}%" } ?: "—"

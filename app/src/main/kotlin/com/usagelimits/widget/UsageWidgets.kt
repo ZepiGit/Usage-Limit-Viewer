@@ -1,6 +1,7 @@
 package com.usagelimits.widget
 
 import android.content.Context
+import com.usagelimits.core.model.percentLabel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,8 +110,7 @@ private fun UsageBar(row: WidgetRow, modifier: GlanceModifier = GlanceModifier) 
     )
 }
 
-private fun percentText(row: WidgetRow): String =
-    row.remainingPercent?.let { "${it.toInt()}%" } ?: "—"
+private fun percentText(row: WidgetRow): String = percentLabel(row.remainingPercent)
 
 /**
  * The compact 1×4 widget: four tiles reading 5h, weekly, next reset and overall status.

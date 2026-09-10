@@ -1,6 +1,7 @@
 package com.usagelimits.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import com.usagelimits.core.model.percentLabel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -110,7 +111,7 @@ fun UsageWindowRow(
     modifier: Modifier = Modifier,
 ) {
     val remaining = window.remainingPercent
-    val percentText = remaining?.let { "${it.toInt()}%" } ?: "—"
+    val percentText = percentLabel(remaining)
     val qualifier = if (remaining != null && remaining >= 99.5) "available" else "remaining"
     val resetText = Countdown.resetLabel(window.resetAt, nowMs)
 
