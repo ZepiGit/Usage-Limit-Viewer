@@ -10,12 +10,18 @@ import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.model.WindowCategory
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.usagelimits.feature.accounts.AccountDetailScreen
+import com.usagelimits.feature.accounts.AddAccountScreen
+import com.usagelimits.feature.accounts.AddAccountState
 import com.usagelimits.feature.accounts.AccountsScreen
 import com.usagelimits.feature.overview.OverviewScreen
 import com.usagelimits.feature.resets.ResetsScreen
 import com.usagelimits.feature.settings.SettingsScreen
 import com.usagelimits.ui.theme.UsageLimitsTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -276,5 +282,49 @@ class ScreenRenderTest {
         }
 
         compose.waitForIdle()
+    }
+
+    /**
+     * Signing in with a device code means carrying the code from this screen to a browser on the
+     * same phone. Reading eight characters off the screen and typing them into another app is
+     * where that flow was breaking down, so the code goes to the clipboard on its own, and the
+     * card offers to do it again by hand.
+     *
+     * Both halves are asserted because both can fail on their own: the automatic copy is a
+     * `LaunchedEffect` that a refactor can drop without breaking the layout, and the buttons are
+     * the fallback for a browser that never opened.
+     */
+    @Test
+    fun `the device code is copied for you and can be copied again`() {
+        render {
+            AddAccountScreen(
+                state = AddAccountState.AwaitingDeviceCode(
+                    provider = ProviderId.CODEX,
+                    userCode = "WDJB-MJHT",
+                    verificationUri = "https://auth.openai.com/device",
+                ),
+                providers = listOf(ProviderId.CODEX),
+                onStart = {},
+                onCancel = {},
+                onDone = {},
+            )
+        }
+
+        val clipboard = ApplicationProvider.getApplicationContext<Context>()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals(
+            "the code should be on the clipboard without anyone pressing anything",
+            "WDJB-MJHT",
+            clipboard.primaryClip?.getItemAt(0)?.text?.toString(),
+        )
+
+        assertTrue(
+            "the code should still be copyable by hand",
+            compose.onAllNodesWithText("Copy code").fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertTrue(
+            "and the sign-in page reopenable, for when the browser never came up",
+            compose.onAllNodesWithText("Open page").fetchSemanticsNodes().isNotEmpty(),
+        )
     }
 }
