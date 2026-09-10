@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -79,5 +80,21 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_detailed_info" />
         </receiver>
+
+        <!--
+          WorkManager initialises on demand, not from a content provider.
+
+          The default `InitializationProvider` runs before `Application.onCreate` and is invisible
+          from anywhere: if it does not run, `WorkManager.getInstance` throws, the app's start-up
+          scheduling fails, and nothing on screen says the background refresh will never happen.
+          Removing it and declaring the Application as `Configuration.Provider` makes
+          initialisation deterministic, ordered after `onCreate`, and reachable from a test — which
+          is how the failure above was found in the first place.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="remove" />
     </application>
 </manifest>
