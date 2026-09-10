@@ -20,6 +20,8 @@ public actor AccountRepository {
     private let fileURL: URL
     private var records: [String: Stored] = [:]
     private var isLoaded = false
+    /// Set while the file exists and could not be read or decoded. Cleared by a successful load.
+    private var lastLoadFailure: AccountStoreError?
 
     /// Deliberately does no I/O.
     ///
@@ -35,10 +37,44 @@ public actor AccountRepository {
         self.fileURL = directory.appendingPathComponent(fileName)
     }
 
+    /// Loads once, and treats "could not read" as unfinished rather than as done.
+    ///
+    /// This used to set `isLoaded = true` before knowing the outcome, while `load` turned every
+    /// failure into an empty dictionary. One transient read error therefore emptied the list for
+    /// the lifetime of the process and never tried again — and the file is not merely a usage
+    /// cache that a sync could rebuild. It is the ACCOUNT REGISTER: it names the credential
+    /// reference for each account, so losing it strands keychain entries no row points at any
+    /// more. Worse, the next `upsert` would then persist a candidate built on an empty base and
+    /// overwrite the real register with one account.
+    ///
+    /// A missing file is a genuine empty state and completes the load. A file that exists and
+    /// will not read, or will not decode, leaves this unloaded so the next call retries, and
+    /// arms the guard that stops a write from destroying what could not be read.
     private func ensureLoaded() {
         guard !isLoaded else { return }
-        isLoaded = true
-        records = Self.load(from: fileURL)
+        switch Self.load(from: fileURL) {
+        case .empty:
+            records = [:]
+            isLoaded = true
+            lastLoadFailure = nil
+        case .loaded(let stored):
+            records = stored
+            isLoaded = true
+            lastLoadFailure = nil
+        case .unreadable(let reason):
+            lastLoadFailure = reason
+        }
+    }
+
+    /// Refuses a mutation while the existing register is unaccounted for.
+    ///
+    /// Writing persists the whole file, so a write on top of a failed read replaces a register
+    /// that may hold several accounts with whatever this one call knows about. Throwing keeps
+    /// the file intact and surfaces the storage fault, which is recoverable; the overwrite is
+    /// not.
+    private func requireLoaded() throws {
+        ensureLoaded()
+        if let reason = lastLoadFailure { throw reason }
     }
 
     // MARK: - Reading
@@ -63,7 +99,7 @@ public actor AccountRepository {
     // MARK: - Writing
 
     public func upsert(_ account: ProviderAccount) throws {
-        ensureLoaded()
+        try requireLoaded()
         // The snapshot is kept across an account being re-saved. Re-authenticating an account
         // updates its tokens, not its quota, and blanking the numbers would make a successful
         // sign-in look like a regression.
@@ -73,7 +109,7 @@ public actor AccountRepository {
     }
 
     public func remove(id: String) throws {
-        ensureLoaded()
+        try requireLoaded()
         var updated = records
         updated[id] = nil
         try persist(updated)
@@ -86,7 +122,7 @@ public actor AccountRepository {
     /// than blanking a card because one refresh did not come back — and the caller can tell the
     /// two apart, which it could not if the windows were simply gone.
     public func record(_ outcome: SyncOutcome, at time: Date) throws {
-        ensureLoaded()
+        try requireLoaded()
         var updated = records
         switch outcome {
         case .success(let accountID, let result):
@@ -161,17 +197,47 @@ public actor AccountRepository {
         records = updated
     }
 
-    private static func load(from url: URL) -> [String: Stored] {
-        guard let data = try? Data(contentsOf: url) else { return [:] }
+    /// What a read attempt found.
+    private enum Loaded {
+        /// No file. A first launch, or a container that has never been written.
+        case empty
+        case loaded([String: Stored])
+        /// The file is there and this process could not turn it into records.
+        case unreadable(AccountStoreError)
+    }
+
+    private static func load(from url: URL) -> Loaded {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            // `fileExists` answers even when the contents cannot be opened, so a protected or
+            // briefly unavailable file is not mistaken for one that was never written.
+            return FileManager.default.fileExists(atPath: url.path)
+                ? .unreadable(.unreadable)
+                : .empty
+        }
+
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-
-        // A cache that cannot be read is treated as empty rather than fatal. It holds no
-        // tokens, so nothing is lost that a sync cannot rebuild — whereas refusing to launch
-        // over an unreadable cache would strand the user completely.
-        guard let stored = try? decoder.decode([Stored].self, from: data) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: stored.map { ($0.account.id, $0) })
+        guard let stored = try? decoder.decode([Stored].self, from: data) else {
+            // Deliberately NOT empty. Undecodable content is a register this build cannot
+            // read, not an absence of accounts, and the difference decides whether the next
+            // write preserves it or destroys it.
+            return .unreadable(.corrupt)
+        }
+        // A duplicate id would silently drop an account through `uniqueKeysWithValues`, and
+        // uniquing keeps the later record rather than trapping.
+        return .loaded(Dictionary(stored.map { ($0.account.id, $0) }, uniquingKeysWith: { _, later in later }))
     }
+}
+
+/// Why the account register could not be used.
+public enum AccountStoreError: Error, Equatable, Sendable {
+    /// The file is present and could not be opened — data protection, or a transient I/O fault.
+    case unreadable
+    /// The file was read and could not be decoded.
+    case corrupt
 }
 
 /// Adapts the repository to the sync engine's sink.
