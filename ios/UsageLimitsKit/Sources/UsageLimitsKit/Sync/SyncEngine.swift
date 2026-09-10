@@ -243,6 +243,30 @@ public actor SyncEngine {
     /// double refresh that used to strand accounts.
     /// - Parameter force: exchange even when the stored pair does not look expired. Set only by
     ///   the rejection path, where the provider has already said the token is dead.
+    /// A pair fit to send now, renewing through the same coordinator a sync uses.
+    ///
+    /// Exists for the deliberate one-off actions that are not syncs — spending a reset credit
+    /// is the one that matters — which loaded the stored pair and sent it as-is. Leave the app
+    /// open past the access token's expiry, tap redeem, and it failed with 401 while a
+    /// perfectly good refresh token sat in the store. The user is told their credit could not
+    /// be spent for a reason that is entirely inside this app.
+    ///
+    /// It goes through `renewedCredentials` rather than refreshing on its own so that it joins
+    /// an exchange already running instead of spending a second rotation beside it.
+    public func usableCredentials(
+        reference: String,
+        provider providerID: String
+    ) async throws -> OAuthCredentials {
+        guard let provider = providers[providerID] else {
+            throw SyncEngineError.providerNotRegistered(providerID)
+        }
+        guard let stored = try await credentials.load(reference: reference) else {
+            throw SyncEngineError.credentialsAbsent
+        }
+        guard stored.isExpired(now: now(), leeway: Self.expiryLeeway) else { return stored }
+        return try await renewedCredentials(reference: reference, provider: provider).credentials
+    }
+
     private func renewedCredentials(reference: String,
                                     provider: any SyncProvider,
                                     rejectedAccessToken: String? = nil) async throws -> Exchange {
