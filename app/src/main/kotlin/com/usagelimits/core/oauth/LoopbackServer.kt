@@ -90,8 +90,22 @@ class LoopbackServer(private val port: Int) : Closeable {
             throw ProviderException.LoginCancelled("Login was interrupted")
         }
         return client.use { connection ->
+            // A read deadline on the ACCEPTED socket, which `socket.soTimeout` above does not
+            // provide: that one bounds `accept()` on the listening socket and says nothing
+            // about how long a peer may take to speak once connected. Without this, a local
+            // process that connects and then sends NOTHING blocks the read for ever — the
+            // deadline below is never re-checked, cancellation cannot interrupt a blocking
+            // read, and no genuine redirect can be served while that connection is held. The
+            // 8 KB cap does not help: it bounds how much a peer may say, not how long it may
+            // stay silent.
+            connection.soTimeout = READ_TIMEOUT_MS
             val reader = BufferedReader(InputStreamReader(connection.getInputStream()))
-            val requestLine = readBoundedLine(reader)
+            val requestLine = try {
+                readBoundedLine(reader)
+            } catch (e: SocketTimeoutException) {
+                // Said nothing in time. Not an answer, and not a reason to end the sign-in.
+                return@use null
+            }
             val parsed = parseRequestLine(requestLine)
             connection.getOutputStream().write(httpResponse(parsed).toByteArray(Charsets.UTF_8))
             connection.getOutputStream().flush()
@@ -106,7 +120,11 @@ class LoopbackServer(private val port: Int) : Closeable {
             //
             // A real redirect always carries one or the other: `code` on success, `error` when
             // the user declines. Anything else is answered politely and ignored.
-            if (parsed.code == null && parsed.error == null) null else parsed
+            // Blank counts as absent. `?code=` parses to an empty string, which is non-null
+            // and would otherwise pass as an answer — then fail at the caller for having no
+            // state, ending the sign-in on a request that carried nothing at all.
+            val hasAnswer = !parsed.code.isNullOrBlank() || !parsed.error.isNullOrBlank()
+            if (hasAnswer) parsed else null
         }
     }
 
@@ -211,6 +229,9 @@ class LoopbackServer(private val port: Int) : Closeable {
 
         /** Far above any real redirect line, far below anything that could exhaust memory. */
         const val MAX_REQUEST_LINE_BYTES = 8 * 1024
+
+        /** How long a connected peer may stay silent before it is dropped and ignored. */
+        const val READ_TIMEOUT_MS = 5_000
         const val NANOS_PER_MS = 1_000_000L
     }
 }
