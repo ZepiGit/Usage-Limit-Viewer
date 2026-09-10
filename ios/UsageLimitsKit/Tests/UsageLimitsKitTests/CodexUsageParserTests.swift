@@ -284,7 +284,9 @@ final class CodexUsageParserTests: XCTestCase {
     }
 
     func testPlanTypeIsRead() {
-        XCTAssertEqual(CodexUsageParser.parsePlan(payload(#"{"plan_type": "plus"}"#)), "plus")
+        // OpenAI sends the tier lowercase; it is capitalised at the parser so a Codex row and
+        // a Claude row on the same screen spell their tiers the same way.
+        XCTAssertEqual(CodexUsageParser.parsePlan(payload(#"{"plan_type": "plus"}"#)), "Plus")
     }
 
     // MARK: - When position may stand in for a duration

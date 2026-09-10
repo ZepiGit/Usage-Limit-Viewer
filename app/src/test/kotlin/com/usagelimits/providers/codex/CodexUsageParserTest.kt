@@ -581,13 +581,16 @@ class CodexUsageParserTest {
     // endregion
 
     @Test
-    fun `parsePlan reads plan_type in either spelling`() {
+    fun `parsePlan reads plan_type in either spelling, and titles it`() {
+        // OpenAI sends the tier lowercase. Anthropic sends "Max" and "Max 5×". Passing OpenAI's
+        // value straight through put "OpenAI Codex plus" one row above "Claude Max 5×" on the
+        // same screen, so the tier is normalised at the parser rather than patched in the view.
         assertEquals(
-            "team",
+            "Team",
             CodexUsageParser.parsePlan(JsonSupport.parseObject("""{ "plan_type": "team" }""")),
         )
         assertEquals(
-            "pro",
+            "Pro",
             CodexUsageParser.parsePlan(JsonSupport.parseObject("""{ "planType": "pro" }""")),
         )
         assertNull(CodexUsageParser.parsePlan(JsonSupport.parseObject("{}")))
@@ -635,7 +638,8 @@ class CodexUsageParserTest {
         assertTrue(windows[0].exhausted)
         // The absolute epoch-seconds stamp wins over the 469200s relative offset.
         assertEquals(1_789_457_449_000L, windows[0].resetAt)
-        assertEquals("plus", CodexUsageParser.parsePlan(payload))
+        // Captured lowercase from the live account; shown capitalised, like every other tier.
+        assertEquals("Plus", CodexUsageParser.parsePlan(payload))
     }
 
     @Test

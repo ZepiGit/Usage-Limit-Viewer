@@ -244,3 +244,44 @@ extension String {
     /// one label must not produce two ledger entries on one platform and one on the other.
     var canonical: String { precomposedStringWithCanonicalMapping }
 }
+
+/// A provider's raw plan string, as a subscriber would recognise it.
+///
+/// Providers disagree about case. Anthropic hands back `default_claude_max_5x`; OpenAI hands
+/// back a bare `plus`. The Codex path used to pass its value straight through, so an account
+/// read "OpenAI Codex plus" while the Claude beside it read "Claude Max 5×".
+///
+/// Read structurally rather than from a table of known tiers, for the reason
+/// `ClaudeUsageParser.planFromTier` already gives: vendors add tiers, and a table renders a new
+/// one as no plan at all — which looks exactly like an account with no subscription.
+///
+/// Separators are `_` and space, matching the Kotlin twin and `planFromTier` below it. A
+/// hyphen is deliberately NOT a separator: no vendor issues a hyphenated tier id, and guessing
+/// one would only make the two apps print different things for the same account.
+public func planLabel(_ raw: String?) -> String? {
+    let parts = (raw ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .split(whereSeparator: { $0 == "_" || $0 == " " })
+        .map(String.init)
+    guard !parts.isEmpty else { return nil }
+
+    // A trailing `5x` multiplies the tier — but only when there is a tier for it to multiply.
+    // `claude_20x` strips to a bare `20x`, which is the whole name, and reading it as a
+    // multiplier of nothing yields no plan at all.
+    var words = parts
+    var multiplier: String?
+    if parts.count > 1, let last = parts.last, last.hasSuffix("x") {
+        let digits = String(last.dropLast())
+        // ASCII digits only. `isNumber` accepts every Unicode numeric category, so an
+        // Arabic-Indic digit would become a multiplier here and not on Android.
+        if !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }) {
+            multiplier = digits
+            words.removeLast()
+        }
+    }
+
+    let name = words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    guard let multiplier else { return name }
+    return "\(name) \(multiplier)×"
+}

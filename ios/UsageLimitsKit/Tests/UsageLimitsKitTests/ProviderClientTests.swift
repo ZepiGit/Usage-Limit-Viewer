@@ -76,7 +76,7 @@ final class ProviderClientTests: XCTestCase {
 
         XCTAssertEqual(result.resetCreditCount, 2)
         XCTAssertEqual(result.applicableResetCreditCount, 0)
-        XCTAssertEqual(result.plan, "plus")
+        XCTAssertEqual(result.plan, "Plus")
     }
 
     func testCodexClassifiesAWeeklyWindowInThePrimarySlot() async throws {

@@ -117,7 +117,7 @@ final class UsageLimitsContainerTests: XCTestCase {
         XCTAssertEqual(usage.count, 1)
         XCTAssertEqual(usage.first?.snapshot?.status, .ok)
         XCTAssertEqual(usage.first?.snapshot?.windows.first?.usedPercent, 40)
-        XCTAssertEqual(usage.first?.account.plan, "plus")
+        XCTAssertEqual(usage.first?.account.plan, "Plus")
     }
 
     func testAProviderFailureLandsOnTheAccountRatherThanTheRun() async throws {
@@ -223,7 +223,7 @@ final class UsageLimitsContainerTests: XCTestCase {
         XCTAssertEqual(challenge.userCode, "ABCD")
         XCTAssertEqual(account.externalAccountID, "acct-1")
         XCTAssertEqual(account.email, "someone@example.com")
-        XCTAssertEqual(account.plan, "plus")
+        XCTAssertEqual(account.plan, "Plus")
         // The account id scopes team and enterprise quota, and travels as a header on the usage
         // call — so it has to survive from the sign-in that learned it.
         XCTAssertEqual(account.attributes["chatgpt_account_id"], "acct-1")
