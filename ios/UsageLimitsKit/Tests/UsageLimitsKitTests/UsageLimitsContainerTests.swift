@@ -487,6 +487,13 @@ final class UsageLimitsContainerTests: XCTestCase {
         func save(_ credentials: OAuthCredentials, reference: String) async throws {
             stored[reference] = credentials
         }
+        func updateIfPresent(
+            _ credentials: OAuthCredentials, reference: String
+        ) async throws -> Bool {
+            guard stored[reference] != nil else { return false }
+            stored[reference] = credentials
+            return true
+        }
         func delete(reference: String) async throws { throw Refused() }
         func removeAll() async throws { throw Refused() }
         func allReferences() async throws -> [String] { Array(stored.keys) }

@@ -118,12 +118,24 @@ final class SyncEngineTests: XCTestCase {
         struct Unwritable: Error {}
         private var stored: [String: OAuthCredentials]
         private(set) var attemptedSaves = 0
+        /// Counted separately from `save` so a test can prove WHICH write the engine used.
+        private(set) var attemptedUpdates = 0
 
         init(_ stored: [String: OAuthCredentials]) { self.stored = stored }
 
         func load(reference: String) async throws -> OAuthCredentials? { stored[reference] }
         func save(_ credentials: OAuthCredentials, reference: String) async throws {
             attemptedSaves += 1
+            throw Unwritable()
+        }
+        /// Refuses exactly as `save` does, and counts the same way: the engine persists
+        /// rotations through this method now, and the point of the double is that no write
+        /// of either kind can succeed.
+        func updateIfPresent(
+            _ credentials: OAuthCredentials, reference: String
+        ) async throws -> Bool {
+            attemptedSaves += 1
+            attemptedUpdates += 1
             throw Unwritable()
         }
         func delete(reference: String) async throws {}
@@ -400,5 +412,40 @@ extension SyncEngineTests {
         // momentary and the cost of not writing is the whole account.
         let attempts = await store.attemptedSaves
         XCTAssertGreaterThan(attempts, 1)
+
+        // And every one of them went through the update-only path. `save` is an upsert: were
+        // the engine still persisting rotations with it, a refresh completing after the user
+        // removed the account would put the deleted credential back.
+        let updates = await store.attemptedUpdates
+        XCTAssertEqual(updates, attempts, "rotations must persist update-only, never upsert")
+    }
+
+    // MARK: - A removal must beat a refresh that is already running
+
+    func testRotationDoesNotRecreateACredentialThatWasRemoved() async throws {
+        // The defect: `persist` used `save`, an upsert. A refresh that began before the user
+        // removed an account finished afterwards and wrote its rotated pair back, inserting
+        // the credential the removal had just deleted. The account was gone from the list
+        // while a working token stayed in the keychain, referenced by nothing and cleaned up
+        // by nothing — the opposite of what the user asked for when they removed it.
+        let store = InMemoryCredentialStore(credentials: [:])
+
+        let recreated = try await store.updateIfPresent(expired("access-9"), reference: "ref-gone")
+
+        XCTAssertFalse(recreated, "an absent reference must not be brought back")
+        let references = try await store.allReferences()
+        XCTAssertEqual(references, [], "update-only must never insert")
+    }
+
+    func testUpdateIfPresentReplacesWhatIsAlreadyThere() async throws {
+        // The other half of the contract: when the account still exists, a rotation must land.
+        // A method that never wrote anything would pass the test above and lose every token.
+        let store = InMemoryCredentialStore(credentials: ["ref-a": expired("access-1")])
+
+        let updated = try await store.updateIfPresent(expired("access-2"), reference: "ref-a")
+
+        XCTAssertTrue(updated)
+        let stored = try await store.load(reference: "ref-a")
+        XCTAssertEqual(stored?.accessToken, "access-2")
     }
 }

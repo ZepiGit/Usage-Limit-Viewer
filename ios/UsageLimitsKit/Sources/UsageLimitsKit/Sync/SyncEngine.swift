@@ -208,24 +208,21 @@ public actor SyncEngine {
             // exchange instead: the provider itself has said the token is dead, which is better
             // evidence than any clock.
             //
-            // Once only. If the freshly exchanged pair is rejected too, the credential is
+            // What is passed is the access token this request actually tried, not a bare
+            // "force". The difference matters twice. A concurrent pass may already have saved a
+            // DIFFERENT token, which this request has not tried and which no evidence says is
+            // dead — so it is worth one attempt before spending a rotation. And the retry
+            // condition below used to be `!renewed.exchanged`, which spent a second rotation
+            // even when the pair handed back was a different, freshly saved one. Identity of the
+            // rejected token answers both questions exactly; `exchanged` only approximated them.
+            //
+            // Once only. If the pair that comes back is rejected too, the credential is
             // genuinely revoked and retrying is just a second way to fail.
-            var renewed = try await renewedCredentials(
+            let renewed = try await renewedCredentials(
                 reference: account.credentialReference,
                 provider: provider,
-                force: true
+                rejectedAccessToken: usable.accessToken
             )
-            if !renewed.exchanged {
-                // The force joined an exchange already in flight, and that one decided the
-                // stored pair looked fine and returned it unexchanged — which is precisely the
-                // pair the provider has just rejected. Retrying the fetch with it would report a
-                // healthy account as revoked. One more attempt, now that the earlier exchange
-                // has finished and cannot be joined again.
-                renewed = try await renewedCredentials(
-                    reference: account.credentialReference,
-                    provider: provider,
-                    force: true)
-            }
             try Task.checkCancellation()
             return try await provider.fetchUsage(
                 credentials: renewed.credentials, attributes: account.attributes)
@@ -248,9 +245,21 @@ public actor SyncEngine {
     ///   the rejection path, where the provider has already said the token is dead.
     private func renewedCredentials(reference: String,
                                     provider: any SyncProvider,
-                                    force: Bool = false) async throws -> Exchange {
-        if let running = refreshes[reference] {
-            return try await running.value
+                                    rejectedAccessToken: String? = nil) async throws -> Exchange {
+        // A loop rather than a single join. A caller whose token was REJECTED can join an
+        // exchange that was started proactively, decided nothing needed doing, and handed back
+        // the very token the provider just refused. Retrying the endpoint with it would report a
+        // healthy account as revoked. By the time that value is available the joined task's
+        // `defer` has already cleared its entry, so coordinating again either starts a real
+        // exchange or joins a later one — it cannot rejoin the same no-op.
+        while let running = refreshes[reference] {
+            let result = try await running.value
+            if let rejectedAccessToken,
+               !result.exchanged,
+               result.credentials.accessToken == rejectedAccessToken {
+                continue
+            }
+            return result
         }
 
         // The exchange runs as a deliberately unstructured task, which the engine never cancels:
@@ -266,7 +275,15 @@ public actor SyncEngine {
                 throw SyncEngineError.credentialsAbsent
             }
 
-            if !force, !current.isExpired(now: self.now(), leeway: Self.expiryLeeway) {
+            if let rejectedAccessToken {
+                if current.accessToken != rejectedAccessToken {
+                    // The store has moved on: a concurrent pass saved a different token, and
+                    // nothing has rejected THAT one. Offer it before spending a rotation.
+                    return Exchange(credentials: current, exchanged: false)
+                }
+                // Otherwise the stored token is the rejected one, and its expiry is irrelevant —
+                // the provider has already said it is dead, which beats any clock.
+            } else if !current.isExpired(now: self.now(), leeway: Self.expiryLeeway) {
                 // An exchange for this reference has already finished; the saved pair is fresh,
                 // and spending another rotation here is the very bug this routine exists to
                 // prevent.
@@ -306,7 +323,12 @@ public actor SyncEngine {
     private func persist(_ credentials: OAuthCredentials, reference: String) async {
         for attempt in 1...Self.saveAttempts {
             do {
-                try await self.credentials.save(credentials, reference: reference)
+                // Update-only, never insert. A rotation that started before the user removed
+                // the account finishes afterwards, and `save` would put the deleted credential
+                // straight back: the account is gone from the list while a usable token stays
+                // in the keychain with nothing left to clean it up. A false return means
+                // removal won, which is a correct outcome and not a failure to retry.
+                _ = try await self.credentials.updateIfPresent(credentials, reference: reference)
                 return
             } catch {
                 guard attempt < Self.saveAttempts else { return }
