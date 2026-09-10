@@ -115,6 +115,12 @@ final class UsageStore: ObservableObject {
             lastError = "This build cannot reach its shared storage."
             return
         }
+        // Before anything reads or writes an account. Keychain items outlive the app being
+        // deleted, so a reinstall inherits every credential of the install before it; this is
+        // where that is noticed and cleaned up. A failure here is not fatal — the check retries
+        // on the next launch — and must not stop the cache from rendering.
+        try? await container.prepareForUse()
+
         applyLoaded(await container.settings())
 
         let cached = await container.usage()

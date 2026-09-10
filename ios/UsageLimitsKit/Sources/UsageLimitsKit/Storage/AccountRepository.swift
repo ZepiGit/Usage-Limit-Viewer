@@ -27,7 +27,11 @@ public actor AccountRepository {
     /// inline on whichever thread constructed it, which here is the main thread before the first
     /// frame. Reading and decoding a file there is a stall the user watches. The read happens on
     /// this actor's own executor instead, at the first call that needs it.
-    public init(directory: URL, fileName: String = "accounts.json") {
+    /// The file this repository writes, named once so a caller that needs to ask whether it
+    /// exists — the install check does — cannot spell it differently.
+    public static let fileName = "accounts.json"
+
+    public init(directory: URL, fileName: String = AccountRepository.fileName) {
         self.fileURL = directory.appendingPathComponent(fileName)
     }
 
