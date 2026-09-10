@@ -51,13 +51,30 @@ class HttpClient(
          * perfectly good account.
          */
         badRequestMeansExpired: Boolean = false,
+        /**
+         * Whether this request spends something the server can only accept once.
+         *
+         * A rotating refresh grant and an authorization code are consumed by the act of
+         * ARRIVING, not by the response getting back. If the server rotates R1 to R2 and the
+         * reply is then lost — a dropped connection, a 502 from something in front of it —
+         * resending the same body presents R1 a second time. A provider that treats reuse as
+         * theft can revoke the entire token family, so the retry that was meant to paper over
+         * a blip signs the account out instead. The failure it prevents costs one refresh
+         * cycle; the failure it causes costs the account.
+         *
+         * So a one-time grant is retried only where the server has SAID it did not act: 429 is
+         * an explicit refusal, and nothing was spent. Transport failures and 5xx are exactly
+         * the cases where delivery is unknown, and those are not retried. Plain reads keep the
+         * full policy — a usage GET spends nothing and is safe to repeat.
+         */
+        oneTimeGrant: Boolean = false,
     ): HttpResponse {
         requireSecure(url)
         var attempt = 0
         var lastError: ProviderException? = null
         while (attempt <= retries) {
             try {
-                return executeOnce(url, method, headers, body, badRequestMeansExpired)
+                return executeOnce(url, method, headers, body, badRequestMeansExpired, oneTimeGrant)
             } catch (e: ProviderException.RateLimited) {
                 lastError = e
                 // Honour Retry-After when the provider sent one, otherwise back off — but
@@ -71,11 +88,13 @@ class HttpClient(
                 delay(wait)
             } catch (e: ProviderException.ServerError) {
                 lastError = e
-                if (attempt == retries) throw e
+                // Delivery is unknown here: the request reached something, and whether the
+                // grant was consumed before the error is not observable from this side.
+                if (oneTimeGrant || attempt == retries) throw e
                 delay(backoffMs(attempt))
             } catch (e: ProviderException.Offline) {
                 lastError = e
-                if (attempt == retries) throw e
+                if (oneTimeGrant || attempt == retries) throw e
                 delay(backoffMs(attempt))
             }
             attempt++
@@ -89,13 +108,24 @@ class HttpClient(
         headers: Map<String, String>,
         body: RequestBody?,
         badRequestMeansExpired: Boolean = false,
+        oneTimeGrant: Boolean = false,
     ): HttpResponse = withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url)
         headers.forEach { (k, v) -> builder.header(k, v) }
         builder.method(method, body)
 
+        // OkHttp retries connection failures itself, below the loop above and invisibly to it,
+        // so leaving it on would resend a spent grant no matter what that loop decided. The
+        // derived client shares this one's connection pool and dispatcher — `newBuilder` keeps
+        // them — so this costs a wrapper object and no sockets.
+        val call = if (oneTimeGrant) {
+            client.newBuilder().retryOnConnectionFailure(false).build()
+        } else {
+            client
+        }
+
         try {
-            client.newCall(builder.build()).execute().use { response ->
+            call.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 val headerMap = response.headers.names().associateWith { response.headers[it].orEmpty() }
                 when {

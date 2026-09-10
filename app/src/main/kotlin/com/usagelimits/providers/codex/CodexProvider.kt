@@ -173,6 +173,8 @@ class CodexProvider(
             ),
             // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
             badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         val refreshed = toCredentials(JsonSupport.parseObject(response.body))
