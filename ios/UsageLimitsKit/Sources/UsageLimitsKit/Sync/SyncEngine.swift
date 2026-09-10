@@ -106,6 +106,42 @@ public actor SyncEngine {
     /// account still syncs and is recorded — one bad account never aborts the batch. The one error
     /// that escapes is `CancellationError`: a cancelled run is not a broken account, so it
     /// propagates to the caller instead of being recorded as a failure.
+    /// Rotated pairs the store would not accept, kept as authoritative for this process.
+    ///
+    /// `persist` gives up after its attempts and returns without throwing, on the grounds that
+    /// the rotation has already happened and the caller should keep working. It did keep
+    /// working — for exactly one sync. The refresh task's entry is removed when it ends, so the
+    /// NEXT sync read the keychain again, got the superseded pair back, and presented a refresh
+    /// grant the provider had already spent. On a provider that treats reuse as theft that is
+    /// how the whole grant dies, which is the opposite of what returning-without-throwing was
+    /// for.
+    ///
+    /// Keyed by reference, holding both halves: the pair the store still has, and the one that
+    /// supersedes it. The store is only overridden while it still holds precisely that
+    /// superseded pair — so a later successful write, a re-login, or a removal all take
+    /// precedence, and this cannot resurrect anything.
+    private var unsaved: [String: (superseded: OAuthCredentials, renewed: OAuthCredentials)] = [:]
+
+    /// What this process believes is current for `reference`.
+    ///
+    /// Every read goes through here rather than straight to the store, so an unwritable
+    /// keychain degrades to "works until the process ends" instead of "works for one sync".
+    private func currentCredentials(reference: String) async throws -> OAuthCredentials? {
+        let stored = try await credentials.load(reference: reference)
+        guard let pending = unsaved[reference] else { return stored }
+        guard let stored else {
+            // Removed. The override goes with it; nothing may bring it back.
+            unsaved[reference] = nil
+            return nil
+        }
+        guard stored == pending.superseded else {
+            // Something newer landed — a successful write, or a fresh login. It wins.
+            unsaved[reference] = nil
+            return stored
+        }
+        return pending.renewed
+    }
+
     /// Accounts with a fetch-and-record in flight, and who is queued behind each.
     private var busyAccounts: Set<String> = []
     private var accountWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -218,7 +254,7 @@ public actor SyncEngine {
             throw SyncEngineError.providerNotRegistered(providerID)
         }
 
-        guard let stored = try await credentials.load(reference: account.credentialReference) else {
+        guard let stored = try await currentCredentials(reference: account.credentialReference) else {
             // Nothing can be exchanged without a pair to exchange, so the account fails here
             // rather than somewhere deeper inside the provider.
             throw SyncEngineError.credentialsAbsent
@@ -305,7 +341,7 @@ public actor SyncEngine {
         guard let provider = providers[providerID] else {
             throw SyncEngineError.providerNotRegistered(providerID)
         }
-        guard let stored = try await credentials.load(reference: reference) else {
+        guard let stored = try await currentCredentials(reference: reference) else {
             throw SyncEngineError.credentialsAbsent
         }
         guard stored.isExpired(now: now(), leeway: Self.expiryLeeway) else { return stored }
@@ -340,7 +376,7 @@ public actor SyncEngine {
             // exchange or re-reads a store this exchange has already written to.
             defer { self.refreshes[reference] = nil }
 
-            guard let current = try await self.credentials.load(reference: reference) else {
+            guard let current = try await self.currentCredentials(reference: reference) else {
                 throw SyncEngineError.credentialsAbsent
             }
 
@@ -422,10 +458,20 @@ public actor SyncEngine {
                     return
                 }
                 guard stored == expected else { return }
-                _ = try await self.credentials.updateIfPresent(credentials, reference: reference)
+                if try await self.credentials.updateIfPresent(credentials, reference: reference) {
+                    // Written. Any earlier override for this reference is now obsolete.
+                    self.unsaved[reference] = nil
+                }
                 return
             } catch {
-                guard attempt < Self.saveAttempts else { return }
+                guard attempt < Self.saveAttempts else {
+                    // Out of attempts. The rotation has happened at the provider whatever this
+                    // store does, so the pair is remembered as authoritative for this process
+                    // rather than dropped — otherwise the next sync reloads the superseded one
+                    // and presents a refresh grant that has already been spent.
+                    self.unsaved[reference] = (superseded: expected, renewed: credentials)
+                    return
+                }
                 // A short, fixed pause. The plausible causes are momentary; a long backoff would
                 // hold the exchange lock open while every other account waits on it.
                 try? await Task.sleep(nanoseconds: 100 * 1_000_000)
