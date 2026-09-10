@@ -808,4 +808,41 @@ class NotificationEvaluatorTest {
             outcome.keys().isNotEmpty() && outcome.keys().all { it.startsWith("acct|") },
         )
     }
+
+    @Test
+    fun `aliasing windows do not manufacture a fresh episode on every sync`() {
+        // The sharper consequence of two windows sharing an identity, and the reason the
+        // identity fix matters beyond one swallowed line.
+        //
+        // With a shared WindowState the loop mutates it per window and reads it back for the
+        // next: a healthy window DEACTIVATES the episode its low neighbour just started, so
+        // the neighbour opens a brand-new episode on the following sync. Every key is then
+        // unclaimed, and the ledger cannot suppress what it has never seen. Nothing about the
+        // account changes but `fetchedAt`, and the user is warned again, and again, for ever.
+        //
+        // Separate identities make it structurally impossible; this pins that.
+        val publisher = publisher()
+        val lines = (0..3).map { sync ->
+            publisher.sync(
+                listOf(
+                    twoAliasingWindows(
+                        firstRemaining = 50.0,
+                        secondRemaining = 15.0,
+                        // A NEW fetch each time, which is what gets past the freshness guard
+                        // and into the quota path at all.
+                        fetchedAt = now + sync,
+                    ),
+                ),
+                settings,
+                now + sync,
+            )
+        }
+
+        val spoken = lines.count { it.isNotEmpty() }
+        assertEquals(
+            "the same unchanged account must be warned once, not once per sync: $lines",
+            1,
+            spoken,
+        )
+    }
 }
