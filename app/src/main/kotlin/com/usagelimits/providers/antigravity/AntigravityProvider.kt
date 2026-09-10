@@ -186,6 +186,8 @@ class AntigravityProvider(
             ),
             // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
             badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
         )
 
         // Google never returns a refresh token on a refresh; the original stays valid until it
