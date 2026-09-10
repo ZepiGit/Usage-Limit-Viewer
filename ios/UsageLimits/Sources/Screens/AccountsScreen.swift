@@ -5,6 +5,7 @@ import UsageLimitsKit
 struct AccountsScreen: View {
 
     @EnvironmentObject private var store: UsageStore
+    @State private var isAdding = false
 
     var body: some View {
         NavigationStack {
@@ -14,13 +15,15 @@ struct AccountsScreen: View {
                         AccountSummaryCard(account: account, now: store.now)
                     }
 
-                    AddAccountCard()
+                    Button { isAdding = true } label: { AddAccountCard() }
+                        .buttonStyle(.plain)
                 }
                 .padding(16)
             }
             .background(UsageColors.background)
             .navigationTitle("Accounts")
             .refreshable { await store.refresh() }
+            .sheet(isPresented: $isAdding) { AddAccountSheet() }
         }
     }
 }
@@ -60,10 +63,10 @@ private struct AddAccountCard: View {
             Text("+ Add account")
                 .font(.headline)
                 .foregroundStyle(UsageColors.terracotta)
-            // Sign-in opens the provider's own page in a system browser session. Stated here
-            // because the alternative — an embedded web view — is what credential-harvesting
+            // Sign-in happens in the user's own browser, on the provider's own page. Stated
+            // here because the alternative — an embedded web view — is what credential-harvesting
             // apps do, and a user has no way to tell one from the other inside the app.
-            Text("Opens the provider's normal sign-in page in Safari.")
+            Text("Opens the provider's normal sign-in page in your browser.")
                 .font(.footnote)
                 .foregroundStyle(UsageColors.textSecondary)
         }

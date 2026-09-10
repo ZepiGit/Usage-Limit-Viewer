@@ -18,6 +18,7 @@ public actor UsageLimitsContainer {
     public let repository: AccountRepository
     private let credentials: any CredentialStore
     private let engine: SyncEngine
+    private let logins: [ProviderID: any DeviceLoginProvider]
     private let settingsStore: SettingsStore
     private let ledger: NotificationLedger
     private let containerDirectory: URL
@@ -50,6 +51,11 @@ public actor UsageLimitsContainer {
             ProviderID.xai.rawValue: XaiClient(httpClient: http),
         ]
 
+        self.logins = [
+            .codex: CodexDeviceLogin(httpClient: http, now: now),
+            .xai: XaiDeviceLogin(httpClient: http, now: now),
+        ]
+
         self.engine = SyncEngine(
             providers: providers,
             credentials: credentials,
@@ -79,6 +85,68 @@ public actor UsageLimitsContainer {
 
     public func usage() async -> [AccountUsage] {
         await repository.usage()
+    }
+
+    // MARK: - Signing in
+
+    /// Asks a provider for a code to show the user.
+    ///
+    /// Throws `unsupportedOnThisPlatform` for the two providers whose sign-in a phone cannot
+    /// complete, carrying the reason — so a caller renders an explanation rather than a control
+    /// that starts something which cannot finish.
+    public func beginLogin(provider: ProviderID) async throws -> DeviceLoginChallenge {
+        guard let login = logins[provider] else {
+            throw DeviceLoginError.unsupportedOnThisPlatform(
+                DeviceLoginSupport.unsupportedReason(for: provider)
+                    ?? "This provider cannot be signed into here.")
+        }
+        return try await login.begin()
+    }
+
+    /// Waits for the user to approve, then stores the account and its credentials.
+    ///
+    /// The order is credentials first, account second. An account whose credentials failed to
+    /// save is a row that can never sync and offers no way to repair itself; a credential with
+    /// no account is invisible but harmless, and the next sign-in overwrites it.
+    ///
+    /// The account id is derived from the provider and the provider's own account identifier,
+    /// so signing in again UPDATES the existing account rather than adding a second copy of it —
+    /// and the repository keeps the previous usage across that, because re-authenticating
+    /// changes the tokens, not the quota.
+    @discardableResult
+    public func completeLogin(
+        provider: ProviderID,
+        challenge: DeviceLoginChallenge
+    ) async throws -> ProviderAccount {
+        guard let login = logins[provider] else {
+            throw DeviceLoginError.unsupportedOnThisPlatform(
+                DeviceLoginSupport.unsupportedReason(for: provider)
+                    ?? "This provider cannot be signed into here.")
+        }
+
+        let credentials = try await login.complete(challenge)
+        let profile = try await login.profile(credentials)
+
+        let identifier = "\(provider.rawValue):\(profile.externalAccountID)"
+        try await self.credentials.save(credentials, reference: identifier)
+
+        let existing = await repository.accounts().first { $0.id == identifier }
+        let account = ProviderAccount(
+            id: identifier,
+            provider: provider,
+            externalAccountID: profile.externalAccountID,
+            email: profile.email,
+            displayName: profile.displayName,
+            plan: profile.plan,
+            credentialReference: identifier,
+            // Kept from the original sign-in, so re-authenticating does not move the account to
+            // the bottom of a list ordered by when it was added.
+            createdAt: existing?.createdAt ?? now(),
+            lastSuccessfulSync: existing?.lastSuccessfulSync,
+            attributes: profile.attributes)
+
+        try await add(account)
+        return account
     }
 
     // MARK: - Settings
