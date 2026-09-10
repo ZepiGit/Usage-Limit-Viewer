@@ -54,15 +54,15 @@ final class DeviceLoginTests: XCTestCase {
 
     // MARK: - Which providers can sign in here at all
 
-    func testTheTwoProvidersAPhoneCannotCompleteSayWhyRatherThanOfferAButton() {
-        // Claude and Antigravity issue their code to a loopback address only a desktop listener
-        // can receive. A button that starts a flow which cannot finish is worse than a sentence
-        // explaining the constraint.
-        XCTAssertNil(DeviceLoginSupport.unsupportedReason(for: .codex))
-        XCTAssertNil(DeviceLoginSupport.unsupportedReason(for: .xai))
-        XCTAssertNotNil(DeviceLoginSupport.unsupportedReason(for: .claude))
-        XCTAssertNotNil(DeviceLoginSupport.unsupportedReason(for: .antigravity))
-        XCTAssertEqual(DeviceLoginSupport.supported, [.codex, .xai])
+    func testEveryProviderHasAFlowAndTheRightOne() {
+        // All four can be signed into. Claude and Antigravity redirect to a loopback address,
+        // which the app receives itself — the first reading of that constraint, that a phone
+        // cannot, was wrong.
+        XCTAssertEqual(DeviceLoginSupport.style(for: .codex), .deviceCode)
+        XCTAssertEqual(DeviceLoginSupport.style(for: .xai), .deviceCode)
+        XCTAssertEqual(DeviceLoginSupport.style(for: .claude), .loopbackRedirect)
+        XCTAssertEqual(DeviceLoginSupport.style(for: .antigravity), .loopbackRedirect)
+        XCTAssertEqual(DeviceLoginSupport.supported, ProviderID.allCases)
     }
 
     // MARK: - JWT claims

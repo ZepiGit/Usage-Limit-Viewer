@@ -128,7 +128,19 @@ public actor UsageLimitsContainer {
 
         let credentials = try await login.complete(challenge)
         let profile = try await login.profile(credentials)
+        return try await store(profile: profile, credentials: credentials, provider: provider)
+    }
 
+    /// Saves the credentials and the account they belong to.
+    ///
+    /// Shared by both sign-in styles, because the part that can go wrong — the ORDER, and the
+    /// identity the account is filed under — is the same either way and must not be written
+    /// twice.
+    private func store(
+        profile: ProviderProfile,
+        credentials: OAuthCredentials,
+        provider: ProviderID
+    ) async throws -> ProviderAccount {
         let identifier = "\(provider.rawValue):\(profile.externalAccountID)"
         try await self.credentials.save(credentials, reference: identifier)
 
@@ -149,6 +161,33 @@ public actor UsageLimitsContainer {
 
         try await add(account)
         return account
+    }
+
+    /// Starts a loopback sign-in and returns what the app needs to present it.
+    ///
+    /// The caller opens `challenge.url` in `ASWebAuthenticationSession` — which presents in
+    /// process, so the app stays foregrounded and the listener stays alive — and then calls
+    /// `completeLoopbackLogin`.
+    public func beginLoopbackLogin(provider: ProviderID) throws -> LoopbackChallenge {
+        try LoopbackLogin(provider: provider, httpClient: http, now: now).begin()
+    }
+
+    /// Finishes a loopback sign-in from the code the listener received.
+    ///
+    /// Deliberately takes the code rather than waiting for it: the socket exists only where
+    /// `Network` does, so keeping it out of here is what lets everything either side of it be
+    /// exercised on Linux.
+    @discardableResult
+    public func completeLoopbackLogin(
+        code: String,
+        challenge: LoopbackChallenge
+    ) async throws -> ProviderAccount {
+        let login = LoopbackLogin(
+            provider: challenge.provider, httpClient: http, now: now)
+        let credentials = try await login.exchange(code: code, challenge: challenge)
+        let profile = try await login.profile(credentials)
+        return try await store(profile: profile, credentials: credentials,
+                               provider: challenge.provider)
     }
 
     // MARK: - Spending a reset credit

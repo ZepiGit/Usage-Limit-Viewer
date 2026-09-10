@@ -28,6 +28,7 @@ struct AddAccountSheet: View {
 
     @State private var stage: Stage = .choosing
     @State private var login: Task<Void, Never>?
+    @State private var loopback = LoopbackSignIn()
 
     var body: some View {
         NavigationStack {
@@ -67,30 +68,22 @@ struct AddAccountSheet: View {
 
     private var chooser: some View {
         ForEach(ProviderID.allCases, id: \.self) { provider in
-            if let reason = DeviceLoginSupport.unsupportedReason(for: provider) {
+            Button { start(provider) } label: {
                 UsageCard {
                     Text(provider.displayName)
                         .font(.headline)
-                        .foregroundStyle(UsageColors.textSecondary)
-                    Text(reason)
+                        .foregroundStyle(UsageColors.terracotta)
+                    // Named before the tap, not after: a user should know what the button is
+                    // about to do with their account before it does it. The two flows feel
+                    // different enough that saying which one is coming is worth a line.
+                    Text(DeviceLoginSupport.style(for: provider) == .deviceCode
+                         ? "Shows a code to approve in your browser."
+                         : "Opens the provider's sign-in page.")
                         .font(.footnote)
-                        .foregroundStyle(UsageColors.textTertiary)
+                        .foregroundStyle(UsageColors.textSecondary)
                 }
-            } else {
-                Button { start(provider) } label: {
-                    UsageCard {
-                        Text(provider.displayName)
-                            .font(.headline)
-                            .foregroundStyle(UsageColors.terracotta)
-                        // Named before the tap, not after: a user should know what the button
-                        // is about to do with their account before it does it.
-                        Text("Shows a code to approve in your browser.")
-                            .font(.footnote)
-                            .foregroundStyle(UsageColors.textSecondary)
-                    }
-                }
-                .buttonStyle(.plain)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -184,11 +177,22 @@ struct AddAccountSheet: View {
                 return
             }
             do {
-                let challenge = try await container.beginLogin(provider: provider)
-                stage = .waiting(provider, challenge)
+                switch DeviceLoginSupport.style(for: provider) {
+                case .deviceCode:
+                    let challenge = try await container.beginLogin(provider: provider)
+                    stage = .waiting(provider, challenge)
+                    // Blocks until the user approves, the code expires, or the provider refuses.
+                    _ = try await container.completeLogin(
+                        provider: provider, challenge: challenge)
 
-                // Blocks until the user approves, the code expires, or the provider refuses.
-                _ = try await container.completeLogin(provider: provider, challenge: challenge)
+                case .loopbackRedirect:
+                    // The listener is bound INSIDE `authorize`, before the browser opens: a
+                    // provider that redirects promptly would otherwise find nothing listening.
+                    let challenge = try await container.beginLoopbackLogin(provider: provider)
+                    let code = try await loopback.authorize(challenge)
+                    _ = try await container.completeLoopbackLogin(
+                        code: code, challenge: challenge)
+                }
 
                 // Straight into a refresh: an account that appears with no numbers looks like it
                 // failed, when in fact nothing has asked yet.
