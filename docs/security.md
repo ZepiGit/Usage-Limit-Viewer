@@ -254,8 +254,14 @@ what was rejected and why.
 
 ### 1. The Antigravity client secret is in the APK
 
-`ProviderEndpoints.Antigravity.CLIENT_SECRET` contains a real `GOCSPX-…` string, which
-directly contradicts the usual rule that an APK must contain no client secrets.
+`ProviderEndpoints.Antigravity.CLIENT_SECRET` contains a real `GOCSPX-…` string. This
+contradicts a requirement the project owner stated without qualification — *"keine Client
+Secrets in der APK"* — and it is not a slip: the string is present in `classes.dex` of every
+build, which was confirmed by scanning the built artefact rather than assumed from the source.
+
+**Decision.** The owner was shown the conflict and the two real options — keep it, or drop
+Antigravity — and chose to keep it, as a documented exception. What follows is the reasoning
+that was put to them, so the choice can be revisited on its merits rather than rediscovered.
 
 It is defensible because this is a Google **installed-application** client secret, a category
 that is explicitly not confidential: RFC 8252 §8.5 states that native app secrets cannot be
@@ -282,6 +288,11 @@ confidential.
 Residual risk: the client id and secret identify the app to Google as the Antigravity client
 during login. If Google restricts or rotates that client, the provider stops working. That is
 a functionality risk, not a credential-leak risk — no user token is exposed by this value.
+
+The stated rule exists to stop the app carrying anything that could open a user's account.
+That purpose is intact: this value opens nothing on its own. The wording is what it breaches,
+and the breach is recorded here rather than quietly reasoned away. Revisit it if Google ever
+reclassifies this client as confidential — at which point *(d)* above becomes the only option.
 
 ### 2. Codex device flow: the PKCE pair is generated server-side
 
