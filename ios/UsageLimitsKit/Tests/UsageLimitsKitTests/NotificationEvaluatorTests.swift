@@ -434,4 +434,51 @@ final class NotificationEvaluatorTests: XCTestCase {
     func testNoFindingsAtAllWhenEverythingIsHealthy() {
         XCTAssertTrue(Publisher().sync([account(remaining: 80)], settings, now).isEmpty)
     }
+
+    // MARK: - Windows that share a category and a label
+
+    private func twoAliasingWindows(first: Double, second: Double) -> AccountSummary {
+        func window(_ id: String, _ remaining: Double) -> UsageWindow {
+            UsageWindow(
+                id: id, label: "Usage", category: .other,
+                usedPercent: 100 - remaining,
+                periodSeconds: nil, resetAt: nil, exhausted: remaining <= 0)
+        }
+        return AccountSummary(
+            accountId: "acct",
+            label: "Account acct",
+            snapshot: UsageSnapshot(
+                accountID: "acct", fetchedAt: now, status: .ok,
+                windows: [window("w1", first), window("w2", second)]))
+    }
+
+    func testAliasingWindowsGetDistinctKeys() {
+        // Identity is category and label on purpose: ids are provider-assigned, and
+        // renumbering them would re-arm every reset alert already sent. But nothing upstream
+        // promises that pair is unique, and two windows collapsing to one identity share an
+        // episode and its tier keys — the defect per-window episodes exist to fix,
+        // reappearing inside the aliasing group.
+        //
+        // Asserted on the KEYS rather than on the emitted lines, deliberately. With these
+        // inputs this evaluator emits an exhausted line either way, so a line-level assertion
+        // passes with the disambiguation removed and proves nothing — I wrote that version
+        // first and checked. The keys are what dedup is keyed on, and two physically distinct
+        // windows sharing one is exactly the fault. Kotlin's line-level test does fail without
+        // its fix; that the two platforms differ on the emitted line here is a separate parity
+        // question, recorded and not silently smoothed over.
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [twoAliasingWindows(first: 0, second: 15)],
+            settings: settings,
+            states: [:],
+            now: now)
+
+        let identities = Set(outcome.events.map { event -> String in
+            let parts = event.key.split(separator: "|", omittingEmptySubsequences: false)
+            return parts.count > 1 ? String(parts[1]) : event.key
+        })
+
+        XCTAssertEqual(
+            identities.count, 2,
+            "each physical window needs its own identity, got \(identities.sorted())")
+    }
 }

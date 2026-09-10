@@ -225,8 +225,9 @@ object NotificationEvaluator {
         // Each window decides for itself. Judging the account by its worst window meant one
         // exhausted window spoke for all of them: its episode claimed every tier, and a
         // second window crossing the same thresholds later found nothing left to claim.
+        val keys = windowKeys(snapshot.windows)
         for (window in snapshot.windows) {
-            val id = windowKey(window)
+            val id = keys.getValue(window.id)
             val state = windowStates[id] ?: WindowState()
             val remaining = window.remainingPercent
             val exhausted = window.severity == Severity.EXHAUSTED
@@ -299,6 +300,7 @@ object NotificationEvaluator {
         settings: AppSettings,
         nowMs: Long,
     ): List<Event> {
+        val keys = windowKeys(snapshot.windows)
         // Claimed even while the setting is off, so switching it on delivers what happens next
         // rather than a heads-up for a reset that has been approaching since yesterday. Only
         // the text is withheld.
@@ -313,7 +315,7 @@ object NotificationEvaluator {
             val minutes = ceil(remainingMs.toDouble() / MINUTE_MS).toLong()
             Event(
                 snapshot.accountId,
-                key(snapshot.accountId, windowKey(window), "reset-approaching", resetAt.toString()),
+                key(snapshot.accountId, keys.getValue(window.id), "reset-approaching", resetAt.toString()),
                 if (settings.notifyOnResetApproaching) {
                     "$name · ${window.label} resets in about $minutes minutes"
                 } else {
@@ -407,12 +409,30 @@ object NotificationEvaluator {
     }
 
     /**
-     * A window's identity within its account.
+     * Identities for every window in one snapshot, keyed by the window's own id.
      *
      * Category and label together, because ids are provider-assigned and a provider that
      * renumbers them would re-arm every reset alert it has already sent.
+     *
+     * But that pair is not guaranteed unique, and nothing upstream promises it is. Two windows
+     * of one account sharing a category and a label collapsed to ONE identity, so they shared
+     * an episode and their tier keys — which is the bug per-window episodes exist to fix,
+     * reappearing inside an aliasing group. The exhausted one claimed the warning key
+     * silently, and the other window's real warning had nothing left to say.
+     *
+     * So the id is used, but only where it has to be: a pair that identifies exactly one
+     * window in the snapshot keeps the stable spelling, and only a colliding group falls back
+     * to appending the id. Windows that alias may re-arm if the provider renumbers them, which
+     * is a repeated notification; not disambiguating them means silence about an exhausted
+     * limit, which is the thing this app exists to prevent.
      */
-    private fun windowKey(window: UsageWindow): String = "${window.category.name}:${window.label}"
+    private fun windowKeys(windows: List<UsageWindow>): Map<String, String> {
+        val base = windows.associate { it.id to "${it.category.name}:${it.label}" }
+        val counts = base.values.groupingBy { it }.eachCount()
+        return base.mapValues { (id, key) ->
+            if (counts.getValue(key) == 1) key else "$key#$id"
+        }
+    }
 
     private fun key(vararg parts: Any): String = parts.joinToString("|")
 }

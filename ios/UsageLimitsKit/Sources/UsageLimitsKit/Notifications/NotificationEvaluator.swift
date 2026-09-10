@@ -266,8 +266,9 @@ public enum NotificationEvaluator {
 
             // Each window decides for itself — see `AccountState.windows` for what judging the
             // account by its worst window cost.
+            let keys = windowKeys(snapshot.windows)
             for window in snapshot.windows {
-                let id = windowKey(window)
+                guard let id = keys[window.id] else { continue }
                 var windowState = state.windows[id] ?? WindowState()
                 let remaining = window.remainingPercent
                 let exhausted = window.exhausted
@@ -439,9 +440,32 @@ public enum NotificationEvaluator {
     ///
     /// `allSatisfy` over an empty list is true, which is the same judgement: an account
     /// reporting no windows is not an account known to be low.
-    /// A window's identity within its account: category and label, as on Android.
-    private static func windowKey(_ window: UsageWindow) -> String {
-        "\(window.category.rawValue):\(window.label)"
+    /// Identities for every window in one snapshot, keyed by the window's own id.
+    ///
+    /// Category and label together, as on Android, because ids are provider-assigned and a
+    /// provider that renumbers them would re-arm every reset alert it has already sent.
+    ///
+    /// That pair is not guaranteed unique, though, and nothing upstream promises it is. Two
+    /// windows of one account sharing a category and a label collapsed to ONE identity, so
+    /// they shared an episode and its tier keys — the bug per-window episodes exist to fix,
+    /// reappearing inside an aliasing group: the exhausted window claimed the warning key
+    /// silently, and the other window's real warning had nothing left to say.
+    ///
+    /// So the id is used, but only where it must be. A pair naming exactly one window keeps
+    /// the stable spelling; only a colliding group appends the id. Aliased windows may re-arm
+    /// if the provider renumbers them, which is a repeated notification — where not
+    /// disambiguating them is silence about an exhausted limit.
+    private static func windowKeys(_ windows: [UsageWindow]) -> [String: String] {
+        var counts: [String: Int] = [:]
+        for window in windows {
+            counts["\(window.category.rawValue):\(window.label)", default: 0] += 1
+        }
+        var keys: [String: String] = [:]
+        for window in windows {
+            let base = "\(window.category.rawValue):\(window.label)"
+            keys[window.id] = counts[base] == 1 ? base : "\(base)#\(window.id)"
+        }
+        return keys
     }
 
     private static func hasRecovered(_ windows: [UsageWindow]) -> Bool {
@@ -475,6 +499,7 @@ public enum NotificationEvaluator {
         into events: inout [Event]
     ) {
         let lead = TimeInterval(settings.resetApproachingMinutes) * 60
+        let keys = windowKeys(windows)
 
         for window in windows {
             guard let resetAt = window.resetAt else { continue }
@@ -484,8 +509,14 @@ public enum NotificationEvaluator {
             let minutes = Int(ceil(remaining / 60))
             events.append(Event(
                 accountId: accountId,
-                key: "\(accountId)|\(window.category.rawValue):\(window.label)"
-                    + "|reset-approaching|\(resetAt.timeIntervalSince1970)",
+                // Milliseconds as an integer, which is what Kotlin's `resetAt.toString()`
+                // spells — its resetAt is already a Long of epoch milliseconds. This used to
+                // interpolate a `TimeInterval`, so the same reset produced
+                // "…|1757003600.0" here and "…|1757003600000" there. The keys are per
+                // platform, so that divergence notified nobody twice; it did mean the two
+                // ledgers could never be compared, and a shared fixture could not pin either.
+                key: "\(accountId)|\(keys[window.id] ?? "")"
+                    + "|reset-approaching|\(Int((resetAt.timeIntervalSince1970 * 1000).rounded()))",
                 line: settings.notifyOnResetApproaching
                     ? "\(accountLabel) · \(window.label) resets in about \(minutes) minutes"
                     : ""))
