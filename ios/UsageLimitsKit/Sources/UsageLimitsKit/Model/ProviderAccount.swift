@@ -173,7 +173,20 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     ///
     /// It falls back to the held count only when the provider stated no applicable figure, which
     /// is the older shape of the payload — there, held is the best evidence available.
-    public var spendableResetCredits: Int { applicableResetCreditCount ?? heldResetCredits }
+    public var spendableResetCredits: Int { spendableResetCredits(at: Date()) }
+
+    /// Credits available AND not past their own expiry at `now`. A snapshot is a photograph:
+    /// a credit that read "available, expires at 14:00" is still in it at 15:00, and counting
+    /// it offered a spend the provider would refuse. A provider count is authoritative as of
+    /// the fetch and is left alone — subtracting from it with a possibly truncated row list
+    /// would invent a number. Same rule as Android.
+    public func spendableResetCredits(at now: Date) -> Int {
+        if let applicable = applicableResetCreditCount { return applicable }
+        if let count = resetCreditCount, resetCredits.isEmpty { return count }
+        return resetCredits.filter {
+            $0.status.lowercased() == "available" && ($0.expiresAt.map { $0 > now } ?? true)
+        }.count
+    }
 
     /// The window closest to running out — what a summary leads with.
     public var mostCritical: UsageWindow? {

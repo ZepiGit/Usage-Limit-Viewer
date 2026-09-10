@@ -105,13 +105,31 @@ data class UsageSnapshot(
             ?: resetCredits.count { it.status.equals("available", ignoreCase = true) }
 
     /**
+     * Credits that are available AND not past their own expiry at [nowMs].
+     *
+     * A snapshot is a photograph. A credit that read "available, expires at 14:00" is still
+     * in the photograph at 15:00, and counting it told the user — and the standing
+     * notification — that they held a credit to spend an hour after it lapsed. Only rows can
+     * be checked this way; a provider count is authoritative as of the fetch and is left
+     * alone, because subtracting from it using a row list that may be truncated invents a
+     * number.
+     */
+    fun spendableResetCreditsAt(nowMs: Long): Int {
+        applicableResetCreditCount?.let { return it }
+        if (resetCreditCount != null && resetCredits.isEmpty()) return resetCreditCount
+        return resetCredits.count {
+            it.status.equals("available", ignoreCase = true) && (it.expiresAt == null || it.expiresAt > nowMs)
+        }
+    }
+
+    /**
      * How many credits can actually be spent right now — what the redeem button is gated on.
      *
      * Falls back to the held count when the provider does not distinguish, so a provider that
      * only reports one number keeps working exactly as before.
      */
     val spendableResetCredits: Int
-        get() = applicableResetCreditCount ?: heldResetCredits
+        get() = spendableResetCreditsAt(System.currentTimeMillis())
 
     /** The window closest to running out — what the summary card leads with. */
     val mostCritical: UsageWindow?

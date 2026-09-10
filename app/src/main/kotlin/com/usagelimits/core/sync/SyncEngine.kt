@@ -48,6 +48,22 @@ class SyncEngine(
     private val refreshMutexes = mutableMapOf<String, Mutex>()
     private val mutexGuard = Mutex()
 
+    /**
+     * One fetch-through-save at a time per account.
+     *
+     * Two passes over one account — the periodic worker and a pull-to-refresh, say — used to
+     * race from fetch to save with nothing between them. A fetch that returned 80 % and was
+     * slow to complete could land AFTER a later fetch that returned 5 %, and because
+     * `fetchedAt` is stamped at completion the older figure arrived wearing the newer time:
+     * the account rose from 5 % to 80 % with a reassuring fresh timestamp. Wall-clock
+     * completion time is not an ordering. Holding this lock from fetch to save makes the
+     * order of starts the order of writes, so the later attempt's figures are the ones kept.
+     */
+    private val accountLocks = mutableMapOf<String, Mutex>()
+
+    private suspend fun accountLock(accountId: String): Mutex =
+        mutexGuard.withLock { accountLocks.getOrPut(accountId) { Mutex() } }
+
     /** Syncs every account concurrently. Never throws; failures surface per account. */
     suspend fun syncAll(): List<SyncOutcome> = coroutineScope {
         repository.accounts()
@@ -61,8 +77,8 @@ class SyncEngine(
         return syncAccount(account)
     }
 
-    suspend fun syncAccount(account: ProviderAccount): SyncOutcome {
-        return try {
+    suspend fun syncAccount(account: ProviderAccount): SyncOutcome = accountLock(account.localId).withLock {
+        try {
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
 

@@ -125,14 +125,22 @@ object NotificationEvaluator {
                 snapshot.fetchedAt <= previous.lastProcessedFetchedAt
             ) {
                 newStates[id] = previous
-                standing += standingFindings(usage, snapshot, settings)
+                standing += standingFindings(usage, snapshot, settings, nowMs)
+                // Quota edges are a property of the snapshot and fire once; DEADLINES are a
+                // property of the clock. A reset two hours away at fetch time, with a
+                // thirty-minute lead and a three-hour sync interval, was never announced: the
+                // snapshot was already processed by the time the lead began, and the next
+                // fetch found the reset gone. The keys carry the instant, so re-evaluating
+                // here cannot say anything twice.
+                events += evaluateResetApproaching(usage.account.label, snapshot, settings, nowMs)
+                events += evaluateExpiringCredits(usage, snapshot, settings, nowMs)
                 continue
             }
 
             val (state, accountEvents) = evaluateAccount(usage, snapshot, settings, previous, nowMs)
             newStates[id] = state
             events += accountEvents
-            standing += standingFindings(usage, snapshot, settings)
+            standing += standingFindings(usage, snapshot, settings, nowMs)
         }
 
         return Outcome(newStates.values.toList(), events, standing)
@@ -378,9 +386,10 @@ object NotificationEvaluator {
         usage: AccountUsage,
         snapshot: UsageSnapshot,
         settings: AppSettings,
+        nowMs: Long,
     ): List<String> {
         if (!settings.notifyOnResetCreditAvailable) return emptyList()
-        val count = snapshot.spendableResetCredits
+        val count = snapshot.spendableResetCreditsAt(nowMs)
         if (count <= 0) return emptyList()
 
         val noun = if (count == 1) "reset credit" else "reset credits"

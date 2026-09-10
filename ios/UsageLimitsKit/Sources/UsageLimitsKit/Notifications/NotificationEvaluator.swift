@@ -243,13 +243,24 @@ public enum NotificationEvaluator {
             if let lastProcessed = state.lastProcessedFetchedAt,
                snapshot.fetchedAt <= lastProcessed {
                 // Already fired once: re-delivering the same snapshot must not repeat its
-                // edges, but the facts it states are as true as they were.
+                // QUOTA edges, but the facts it states are as true as they were — and its
+                // deadlines are a property of the clock, not of the fetch. A reset two hours
+                // away at fetch time with a thirty-minute lead was never announced when the
+                // next fetch came three hours later. The keys carry the instant, so this
+                // cannot say anything twice. Same rule as Android.
                 appendCreditsAvailableFinding(
                     accountLabel: account.label,
                     settings: settings,
                     snapshot: snapshot,
+                    now: now,
                     into: &findings
                 )
+                appendResetApproachingEvents(
+                    accountId: id, accountLabel: account.label, windows: snapshot.windows,
+                    settings: settings, now: now, into: &events)
+                appendCreditExpiringEvents(
+                    accountId: id, accountLabel: account.label, snapshot: snapshot,
+                    settings: settings, now: now, into: &events)
                 continue
             }
 
@@ -324,6 +335,7 @@ public enum NotificationEvaluator {
                 accountLabel: account.label,
                 settings: settings,
                 snapshot: snapshot,
+                now: now,
                 into: &findings
             )
 
@@ -534,6 +546,7 @@ public enum NotificationEvaluator {
         accountLabel: String,
         settings: NotificationSettings,
         snapshot: UsageSnapshot,
+        now: Date,
         into findings: inout [String]
     ) {
         guard settings.notifyOnResetCreditAvailable else { return }
@@ -545,7 +558,7 @@ public enum NotificationEvaluator {
         // user holding two credits that they had none. And "spendable" already encodes which
         // credits actually apply to the limit in force; re-deciding it at this call site with a
         // cruder predicate meant announcing credits the provider would refuse to apply.
-        let count = snapshot.spendableResetCredits
+        let count = snapshot.spendableResetCredits(at: now)
         guard count > 0 else { return }
 
         let noun = count == 1 ? "reset credit" : "reset credits"
