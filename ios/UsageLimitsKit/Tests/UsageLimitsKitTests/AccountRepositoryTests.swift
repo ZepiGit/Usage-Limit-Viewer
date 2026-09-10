@@ -227,4 +227,80 @@ final class AccountRepositoryTests: XCTestCase {
         let snapshot = await repository.usage().first?.snapshot
         XCTAssertEqual(snapshot?.windows.first?.usedPercent, 35)
     }
+
+    // MARK: - A read that fails must not become an empty register
+
+    private var accountsFile: URL { directory.appendingPathComponent(AccountRepository.fileName) }
+
+    func testAnUndecodableRegisterIsNotTreatedAsNoAccounts() async throws {
+        // The file is not a usage cache a sync could rebuild: it names the credential
+        // reference for every account. Reading it as "no accounts" strands keychain entries
+        // that no row points at any more.
+        try Data("not json".utf8).write(to: accountsFile)
+        let repository = AccountRepository(directory: directory)
+
+        do {
+            try await repository.upsert(account("new"))
+            XCTFail("a mutation on top of an unreadable register must not be persisted")
+        } catch let error as AccountStoreError {
+            XCTAssertEqual(error, .corrupt)
+        }
+    }
+
+    func testAFailedReadDoesNotLetTheNextWriteReplaceTheRegister() async throws {
+        // The destructive half. `upsert` persists the WHOLE file, so a write on top of a
+        // failed read replaces a register holding several accounts with the one this call
+        // knows about. The bytes must still be there afterwards.
+        let original = Data("not json".utf8)
+        try original.write(to: accountsFile)
+        let repository = AccountRepository(directory: directory)
+
+        _ = try? await repository.upsert(account("new"))
+
+        XCTAssertEqual(try Data(contentsOf: accountsFile), original,
+                       "the unreadable file must be left intact for recovery")
+    }
+
+    func testAReadIsRetriedAfterItFails() async throws {
+        // `isLoaded` used to be set before the outcome was known, so one transient failure
+        // emptied the list for the life of the process and never tried again.
+        try Data("not json".utf8).write(to: accountsFile)
+        let repository = AccountRepository(directory: directory)
+        let duringFailure = await repository.accounts()
+        XCTAssertEqual(duringFailure.count, 0)
+
+        // The fault clears — the file becomes readable.
+        try FileManager.default.removeItem(at: accountsFile)
+        let writable = AccountRepository(directory: directory)
+        try await writable.upsert(account("a"))
+
+        let recovered = await repository.accounts()
+        XCTAssertEqual(recovered.map(\.id), ["a"], "the next call must read again, not stay empty")
+    }
+
+    func testAMissingFileIsAGenuineEmptyStateAndStillAcceptsWrites() async throws {
+        // The other direction: a first launch has no file, which is not a fault, and must not
+        // be blocked by the guard that protects an unreadable one.
+        let repository = AccountRepository(directory: directory)
+
+        try await repository.upsert(account("a"))
+
+        let ids = await repository.accounts().map(\.id)
+        XCTAssertEqual(ids, ["a"])
+    }
+
+    func testADuplicateAccountIdDoesNotTrap() async throws {
+        // `uniqueKeysWithValues` traps on a duplicate key, which would crash on launch over a
+        // file this app itself could have written before ids were enforced.
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a"))
+        let one = try Data(contentsOf: accountsFile)
+        let doubled = try JSONSerialization.jsonObject(with: one) as! [Any]
+        try JSONSerialization.data(withJSONObject: doubled + doubled).write(to: accountsFile)
+
+        let reopened = AccountRepository(directory: directory)
+
+        let ids = await reopened.accounts().map(\.id)
+        XCTAssertEqual(ids, ["a"])
+    }
 }
