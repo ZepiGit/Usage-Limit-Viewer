@@ -9,6 +9,8 @@ import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.providers.ProviderRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -79,11 +81,30 @@ class SyncEngine(
                 ),
             )
             SyncOutcome(account.localId, success = true)
+        } catch (e: CancellationException) {
+            // Cancellation is not a sync failure and must never be recorded as one.
+            //
+            // `CancellationException` IS an `Exception` on the JVM, so the catch below used to
+            // swallow it: WorkManager stopping a periodic pass — a constraint lost, doze, the
+            // system reclaiming the worker — wrote "Unexpected error while refreshing" onto
+            // every account still in flight. Accounts that were perfectly healthy came back as
+            // error cards, and swallowing it also breaks structured concurrency, since the
+            // coroutine carries on after its scope has been cancelled.
+            //
+            // `recordFailure` already rethrew it for exactly this reason; this is the same
+            // hazard one level up.
+            throw e
         } catch (e: ProviderException) {
+            // A cancelled call reaches here too, wearing the wrong clothes: OkHttp answers
+            // cancellation with IOException("Canceled"), which the client maps to Offline. So
+            // the scope is checked before anything is persisted — otherwise a cancelled sync
+            // records "No network connection" against an account with a working connection.
+            currentCoroutineContext().ensureActive()
             recordFailure(account.localId, e.userMessage())
             SyncOutcome(account.localId, success = false, message = e.userMessage())
         } catch (e: Exception) {
             // A provider bug must not take the whole sync pass down with it.
+            currentCoroutineContext().ensureActive()
             val message = "Unexpected error while refreshing"
             recordFailure(account.localId, message)
             SyncOutcome(account.localId, success = false, message = message)
