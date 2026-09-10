@@ -677,7 +677,10 @@ struct UsageWidget: Widget {
     private static let kind = "com.usagelimits.widget.usage"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: Self.kind, provider: UsageProvider.self) { entry in
+        // An instance, not `UsageProvider.self`. `StaticConfiguration` takes a provider VALUE;
+        // a metatype does not conform to `TimelineProvider`, so the metatype spelling does not
+        // compile — and this file had never been compiled anywhere.
+        StaticConfiguration(kind: Self.kind, provider: UsageProvider()) { entry in
             UsageWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Usage Limits")
