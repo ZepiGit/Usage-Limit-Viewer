@@ -78,6 +78,55 @@ class LoopbackServerNoiseTest {
     }
 
     @Test
+    fun `a peer that connects and says nothing does not stall the sign-in`() = runBlocking {
+        // The worst of the local-process attacks, and the one the byte cap does NOT stop: it
+        // bounds how much a peer may say, not how long it may stay silent. Without a read
+        // deadline on the accepted socket this blocks for ever — the wait's own deadline is
+        // never re-checked, and a blocking read cannot be interrupted by cancellation, so the
+        // sign-in can never finish and never time out either.
+        val port = freePort()
+        val server = LoopbackServer(port)
+        server.start()
+
+        val waiting = async(Dispatchers.IO) { server.awaitRedirect(timeoutMs = 30_000) }
+
+        withContext(Dispatchers.IO) {
+            val silent = Socket(InetAddress.getByName("127.0.0.1"), port)
+            // Held open, deliberately never written to, and still open while the real
+            // redirect arrives.
+            send(port, "GET /callback?code=survived&state=the-state HTTP/1.1")
+            runCatching { silent.close() }
+        }
+
+        val response = waiting.await()
+        server.close()
+
+        assertEquals("survived", response.code)
+    }
+
+    @Test
+    fun `an empty code parameter is not an answer`() = runBlocking {
+        // `?code=` parses to an empty string, which is non-null. Treating that as the redirect
+        // would end the wait on a request carrying nothing, and the caller would then fail it
+        // for having no state — a sign-in killed by six characters from any app on the phone.
+        val port = freePort()
+        val server = LoopbackServer(port)
+        server.start()
+
+        val waiting = async(Dispatchers.IO) { server.awaitRedirect(timeoutMs = 20_000) }
+        withContext(Dispatchers.IO) {
+            send(port, "GET /callback?code= HTTP/1.1")
+            send(port, "GET /callback?error= HTTP/1.1")
+            send(port, "GET /callback?code=real&state=the-state HTTP/1.1")
+        }
+
+        val response = waiting.await()
+        server.close()
+
+        assertEquals("real", response.code)
+    }
+
+    @Test
     fun `a request line that never ends is bounded rather than unbounded`() = runBlocking {
         val port = freePort()
         val server = LoopbackServer(port)
