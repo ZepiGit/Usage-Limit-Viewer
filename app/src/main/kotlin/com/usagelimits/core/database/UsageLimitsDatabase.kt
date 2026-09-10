@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
@@ -111,4 +112,16 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
                 DATABASE_NAME,
             ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     }
+}
+
+/**
+ * The real transaction scope, backed by Room.
+ *
+ * `withTransaction` serialises against every other write on this database, which is what makes
+ * the repository's read-then-write pairs atomic: a delete issued while a sync is mid-pair runs
+ * as its own transaction and cannot interleave inside this one.
+ */
+class RoomTransactionRunner(private val database: UsageLimitsDatabase) : TransactionRunner {
+    override suspend fun <T> inTransaction(block: suspend () -> T): T =
+        database.withTransaction { block() }
 }

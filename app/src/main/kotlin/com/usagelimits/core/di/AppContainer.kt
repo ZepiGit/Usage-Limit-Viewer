@@ -4,6 +4,7 @@ import android.content.Context
 import com.usagelimits.core.auth.CredentialStore
 import com.usagelimits.core.auth.KeystoreCredentialStore
 import com.usagelimits.core.database.UsageLimitsDatabase
+import com.usagelimits.core.database.RoomTransactionRunner
 import com.usagelimits.core.database.UsageRepository
 import com.usagelimits.core.network.HttpClient
 import com.usagelimits.core.settings.SettingsStore
@@ -32,7 +33,11 @@ class AppContainer(context: Context) {
     private val database: UsageLimitsDatabase by lazy { UsageLimitsDatabase.build(appContext) }
 
     val repository: UsageRepository by lazy {
-        UsageRepository(database.accountDao(), database.usageSnapshotDao())
+        UsageRepository(
+            database.accountDao(),
+            database.usageSnapshotDao(),
+            transactions = RoomTransactionRunner(database),
+        )
     }
 
     val widgetConfigDao by lazy { database.widgetConfigDao() }
