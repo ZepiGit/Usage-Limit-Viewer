@@ -1,10 +1,12 @@
 #!/bin/bash
 # Type-check the iOS app and widget targets without an Apple SDK.
 #
-# Those targets need Xcode, so on Linux nothing compiles them — and the macOS job that could
-# has been unable to start for most of this project's life. A commit once deleted five
-# declarations from a widget file and left every call site; it survived five commits because
-# the only build that would have failed was unavailable.
+# Those targets need Xcode, so on Linux nothing compiles them. This was written when the
+# macOS job could not start at all — a commit had deleted five declarations from a widget
+# file and left every call site, and it survived five commits because the only build that
+# would have failed was unavailable. That job runs now, so this is no longer the last line
+# of defence; it is the first, and it reports a missing name in seconds rather than after a
+# macOS runner has been allocated and Xcode has built the world.
 #
 # What this does: aliases each Apple framework the app imports to a hand-written stand-in
 # module, rebuilds the KIT against Security and Network stand-ins so its Darwin-only sources

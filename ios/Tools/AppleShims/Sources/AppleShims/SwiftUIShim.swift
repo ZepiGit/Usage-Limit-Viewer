@@ -1,11 +1,12 @@
 // A stand-in for the Apple frameworks the app imports, so the app and widget TARGETS can be
 // type-checked on a machine with no Apple SDK.
 //
-// Why this exists: those targets need Xcode, so on Linux nothing compiles them, and the one
-// job that could has been unable to start. A commit deleted five declarations from a widget
-// file and left every call site; it sat in the tree for five commits because the only build
-// that would have failed was unavailable. Grep-level checks caught that particular shape and
-// nothing else.
+// Why this exists: those targets need Xcode, so on Linux nothing compiles them. It was
+// written while the one job that could was unable to start — a commit had deleted five
+// declarations from a widget file and left every call site, and it sat in the tree for five
+// commits because the only build that would have failed was unavailable. Grep-level checks
+// caught that particular shape and nothing else. The macOS job runs now; this stays as the
+// check that fails first and cheapest.
 //
 // What it is and is not. It is permissive on purpose: every modifier returns `Self`, and
 // arguments are widely typed, so this does NOT reproduce SwiftUI's overload resolution and

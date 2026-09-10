@@ -39,11 +39,14 @@ jobs:
     container: swift:6.0.3
     steps:
       - uses: actions/checkout@v4
-      # The app and widget targets are compiled by the macOS job below and nowhere else, so
-      # when that job cannot run — it has been unable to start for most of this project — they
-      # are checked by nothing at all. This type-checks them here, against stand-ins for the
-      # Apple frameworks. It is not a substitute for the real build; it is the difference
-      # between some checking and none.
+      # The macOS job below is the real build. This is the cheap one that runs first: it
+      # type-checks the same app and widget sources against stand-ins for the Apple
+      # frameworks, in about twenty seconds, on a runner that costs a tenth as much.
+      #
+      # It was written when the macOS job could not start at all, and it earned its place
+      # then — it is what caught five declarations deleted from a widget file while every
+      # call site stayed. It keeps its place now for a duller reason: a missing name fails
+      # here before a macOS runner is spent on it.
       - name: The app and widget type-check against framework shims
         run: ./ios/Tools/typecheck-app.sh
       - name: Build
