@@ -40,6 +40,31 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
     public var resetCreditExpiryLeadMinutes = 1440
 
     public init() {}
+
+    /// Decoded field by field, each falling back to its default.
+    ///
+    /// Swift's synthesised decoder ignores property defaults and requires every key, so adding
+    /// one toggle in a later version would make every stored settings file undecodable — and the
+    /// store treats an undecodable file as "use defaults", which silently resets every
+    /// preference the user had set. A settings file is exactly the place where forward
+    /// compatibility has to be deliberate rather than synthesised.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func flag(_ key: CodingKeys, _ fallback: Bool) throws -> Bool {
+            try container.decodeIfPresent(Bool.self, forKey: key) ?? fallback
+        }
+        notifyBelow20Percent = try flag(.notifyBelow20Percent, true)
+        notifyBelow10Percent = try flag(.notifyBelow10Percent, true)
+        notifyOnExhausted = try flag(.notifyOnExhausted, true)
+        notifyOnResetCreditAvailable = try flag(.notifyOnResetCreditAvailable, true)
+        notifyOnAuthExpired = try flag(.notifyOnAuthExpired, true)
+        notifyOnResetApproaching = try flag(.notifyOnResetApproaching, false)
+        notifyOnResetCreditExpiring = try flag(.notifyOnResetCreditExpiring, true)
+        resetApproachingMinutes =
+            try container.decodeIfPresent(Int.self, forKey: .resetApproachingMinutes) ?? 30
+        resetCreditExpiryLeadMinutes =
+            try container.decodeIfPresent(Int.self, forKey: .resetCreditExpiryLeadMinutes) ?? 1440
+    }
 }
 
 // MARK: - Evaluator
@@ -63,7 +88,10 @@ public enum NotificationEvaluator {
 
     /// What the evaluator remembers between syncs — deliberately minimal, since anything
     /// richer drifts out of step with the snapshot history it summarises.
-    public struct AccountState: Sendable, Equatable {
+    /// `Codable` because it is the whole point of the evaluator that this survives between
+    /// syncs: an episode counter that resets when the process does would mint fresh keys every
+    /// launch, and every threshold would re-fire.
+    public struct AccountState: Sendable, Equatable, Codable {
         public let accountId: String
 
         /// Numbers each dip below the warning threshold. Quota keys embed it, so a fresh

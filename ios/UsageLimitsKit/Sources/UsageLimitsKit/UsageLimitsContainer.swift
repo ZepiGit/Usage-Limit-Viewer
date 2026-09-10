@@ -18,6 +18,8 @@ public actor UsageLimitsContainer {
     public let repository: AccountRepository
     private let credentials: any CredentialStore
     private let engine: SyncEngine
+    private let settingsStore: SettingsStore
+    private let ledger: NotificationLedger
     private let containerDirectory: URL
     private let now: @Sendable () -> Date
 
@@ -38,6 +40,8 @@ public actor UsageLimitsContainer {
         self.containerDirectory = directory
         self.repository = repository
         self.credentials = credentials
+        self.settingsStore = SettingsStore(directory: directory)
+        self.ledger = NotificationLedger(directory: directory)
         self.now = now
         let providers: [String: any SyncProvider] = [
             ProviderID.codex.rawValue: CodexClient(httpClient: http),
@@ -77,6 +81,53 @@ public actor UsageLimitsContainer {
         await repository.usage()
     }
 
+    // MARK: - Settings
+
+    public func settings() async -> AppSettings {
+        await settingsStore.settings()
+    }
+
+    /// Stores the user's choices and reports what was actually stored, since the sync interval
+    /// is floored at what the platform will honour.
+    @discardableResult
+    public func save(settings: AppSettings) async throws -> AppSettings {
+        try await settingsStore.save(settings)
+    }
+
+    // MARK: - Notifications
+
+    /// Decides what to say about the current usage, and claims it before anybody says it.
+    ///
+    /// Returns only the edges not previously delivered, so the caller can post every event it
+    /// receives without deduplicating anything itself. The claim happens here, before the
+    /// caller posts: a file write cannot commit atomically with a notification being scheduled,
+    /// and losing one alert in that window beats repeating an alert on every sync — which is
+    /// what makes people switch notifications off.
+    ///
+    /// Deliberately separate from `refresh`, because a background refresh and a user pulling to
+    /// refresh want the same sync and different notification behaviour, and because a failure to
+    /// persist the ledger must not fail the refresh the user is watching.
+    public func pendingNotifications() async throws -> [NotificationEvaluator.Event] {
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: await repository.usage().map(AccountSummary.init),
+            settings: await settingsStore.settings().notifications,
+            states: await ledger.states(),
+            now: now())
+
+        // State first. If the claim fails after this, the worst case is an edge announced twice;
+        // if the state were saved last and failed, every episode would restart on the next sync
+        // and every threshold would fire again.
+        try await ledger.save(states: outcome.states)
+
+        // EVERY edge is claimed, including the ones carrying no text. A blank line means the
+        // evaluator reached a threshold the user has switched off, or a weaker tier consumed by
+        // a stronger one — and the claim is what stops it arriving later as a stale alert the
+        // moment that setting is switched back on. Only the ones with something to say come
+        // back, so the caller can post each of them without inspecting anything.
+        let claimed = try await ledger.claim(outcome.events, at: now())
+        return claimed.filter { !$0.line.isEmpty }
+    }
+
     public func add(_ account: ProviderAccount) async throws {
         try await repository.upsert(account)
         publish(await repository.usage())
@@ -93,6 +144,13 @@ public actor UsageLimitsContainer {
             try await credentials.delete(reference: account.credentialReference)
         }
         try await repository.remove(id: id)
+
+        // The ledger is cleared too. Its keys embed the account id, so an account removed and
+        // added back under the same id would inherit records saying every one of its edges had
+        // already been announced — and go silent while genuinely low. Best-effort: a ledger that
+        // will not write must not leave the account half-removed.
+        try? await ledger.forget(accountID: id)
+
         publish(await repository.usage())
     }
 
