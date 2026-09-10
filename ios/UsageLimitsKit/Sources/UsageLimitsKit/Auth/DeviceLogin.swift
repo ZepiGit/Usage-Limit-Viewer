@@ -442,33 +442,35 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
 
 // MARK: - The providers a phone cannot sign into
 
-/// Why Claude and Antigravity offer no button.
+/// How each provider signs in.
 ///
-/// Stated as data rather than left implicit, so the screen can show the reason rather than a
-/// dead control or a flow that fails halfway through with something unhelpful.
+/// All four can, which was not true when this file was written. Claude and Antigravity redirect
+/// to `http://localhost:PORT/...`, and the first reading of that was that a phone cannot receive
+/// it — so the app said so and offered no button. That reading was wrong: RFC 8252 §7.3 names
+/// loopback as the redirect for exactly this case, an iOS app can bind 127.0.0.1, and
+/// `ASWebAuthenticationSession` keeps the app foregrounded while the browser loads it. The
+/// listener lives in `LoopbackListener` and the flow in `LoopbackLogin`.
+public enum LoginStyle: Sendable, Equatable {
+    /// The provider shows a short code the user approves in a browser. No redirect to receive.
+    case deviceCode
+
+    /// The provider redirects to a loopback address this app listens on.
+    case loopbackRedirect
+}
+
 public enum DeviceLoginSupport {
 
-    /// Nil when the provider can be signed into here; otherwise the reason it cannot.
-    public static func unsupportedReason(for provider: ProviderID) -> String? {
+    public static func style(for provider: ProviderID) -> LoginStyle {
         switch provider {
-        case .codex, .xai:
-            return nil
-        case .claude:
-            return """
-                Claude issues its sign-in to a local address only a desktop app can receive. \
-                Until a mobile redirect is registered with Anthropic, add this account on a \
-                computer.
-                """
-        case .antigravity:
-            return """
-                Antigravity issues its sign-in to a local address only a desktop app can \
-                receive. Until a mobile redirect is registered with Google, add this account on \
-                a computer.
-                """
+        case .codex, .xai: return .deviceCode
+        case .claude, .antigravity: return .loopbackRedirect
         }
     }
 
-    public static var supported: [ProviderID] {
-        ProviderID.allCases.filter { unsupportedReason(for: $0) == nil }
-    }
+    /// Nil for every provider now. Kept because "can this be signed into here" is a question the
+    /// UI asks, and answering it through a function leaves one place to change if a provider
+    /// ever withdraws a flow.
+    public static func unsupportedReason(for provider: ProviderID) -> String? { nil }
+
+    public static var supported: [ProviderID] { ProviderID.allCases }
 }

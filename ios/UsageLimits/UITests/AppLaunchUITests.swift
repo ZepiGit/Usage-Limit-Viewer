@@ -61,9 +61,9 @@ final class AppLaunchUITests: XCTestCase {
         }
     }
 
-    func testTheAddAccountSheetOpensAndSaysWhichProvidersCannotSignInHere() {
-        // Two of the four providers issue their code to a loopback redirect. Whatever the app
-        // decides to do about that, the sheet must open rather than dead-end.
+    func testTheAddAccountSheetOffersEveryProvider() {
+        // All four can be signed into: two by device code, two by a loopback redirect the app
+        // receives itself. The sheet must open and offer each of them rather than dead-end.
         let app = launch()
 
         let accounts = app.buttons["Accounts"]
@@ -77,5 +77,11 @@ final class AppLaunchUITests: XCTestCase {
         XCTAssertTrue(
             app.navigationBars["Add account"].waitForExistence(timeout: 10),
             "the add-account sheet should open")
+
+        for provider in ["OpenAI Codex", "Claude", "Antigravity", "Grok"] {
+            XCTAssertTrue(
+                app.staticTexts[provider].waitForExistence(timeout: 5),
+                "\(provider) should be offered")
+        }
     }
 }
