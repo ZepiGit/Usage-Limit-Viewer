@@ -448,4 +448,71 @@ extension SyncEngineTests {
         let stored = try await store.load(reference: "ref-a")
         XCTAssertEqual(stored?.accessToken, "access-2")
     }
+
+    func testALoginDuringARefreshIsNotOverwritten() async throws {
+        // The user reconnects the same provider while a refresh is in the air. The login
+        // writes fresh credentials under the same reference; the refresh must not then
+        // overwrite them with a pair derived from the session that was just replaced — which
+        // users report as "I logged in and it signed me straight back out".
+        //
+        // The store is made to hand back a DIFFERENT pair than the exchange started from,
+        // which is exactly what a completed login looks like from here. A presence check
+        // cannot tell the difference: the reference very much exists.
+        let login = OAuthCredentials(accessToken: "login-access", refreshToken: "login-refresh")
+        let store = SwappingCredentialStore(
+            initial: expired("access-1"),
+            afterFirstLoad: login)
+        let provider = RotatingProvider()
+        let sink = RecordingSink()
+        let engine = SyncEngine(
+            providers: ["codex": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+
+        _ = try? await engine.sync(accounts: [account("a")])
+
+        let stored = await store.current
+        XCTAssertEqual(stored?.accessToken, "login-access",
+                       "the sign-in the user just completed must survive the refresh")
+    }
+
+    /// Hands back the original pair for the first reads and the login afterwards — a sign-in
+    /// landing while a refresh is in flight, without needing real concurrency to schedule it.
+    ///
+    /// The count matters and is the whole reason this double is delicate. The engine reads
+    /// three times for one refresh: once to see whether the token is usable, once inside the
+    /// exchange, and once more when persisting the result. Swapping any earlier than that
+    /// third read means the exchange itself sees the login, decides nothing needs doing, and
+    /// never persists at all — so the test passes with the fix removed and proves nothing. It
+    /// did exactly that on the first attempt.
+    private actor SwappingCredentialStore: CredentialStore {
+        private var stored: OAuthCredentials?
+        private let afterFirstLoad: OAuthCredentials
+        private var loads = 0
+
+        init(initial: OAuthCredentials, afterFirstLoad: OAuthCredentials) {
+            stored = initial
+            self.afterFirstLoad = afterFirstLoad
+        }
+
+        var current: OAuthCredentials? { stored }
+
+        func load(reference: String) async throws -> OAuthCredentials? {
+            loads += 1
+            if loads > 2, stored != afterFirstLoad { stored = afterFirstLoad }
+            return stored
+        }
+        func save(_ credentials: OAuthCredentials, reference: String) async throws {
+            stored = credentials
+        }
+        func updateIfPresent(
+            _ credentials: OAuthCredentials, reference: String
+        ) async throws -> Bool {
+            guard stored != nil else { return false }
+            stored = credentials
+            return true
+        }
+        func delete(reference: String) async throws { stored = nil }
+        func removeAll() async throws { stored = nil }
+        func allReferences() async throws -> [String] { stored == nil ? [] : ["ref-a"] }
+    }
 }
