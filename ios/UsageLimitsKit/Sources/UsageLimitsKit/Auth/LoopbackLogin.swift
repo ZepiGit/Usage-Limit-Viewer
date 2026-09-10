@@ -238,15 +238,91 @@ public struct LoopbackLogin: Sendable {
             guard let id = JSONSupport.string(payload, "id", "sub") else {
                 throw DeviceLoginError.malformedResponse("the profile names no account")
             }
+
+            // The quota RPC is addressed by GCP project, and nothing maps an account to its
+            // project at fetch time — so it is resolved here, once, and stored. Without it
+            // the account authenticates and then fails every refresh with "project_id
+            // attribute is required", which is exactly what every Antigravity account added
+            // on iOS did: the profile was built with an empty attribute map while Android
+            // has resolved the project at login all along.
+            let (projectID, tier) = try await resolveProject(credentials: credentials)
             return ProviderProfile(
                 externalAccountID: id,
                 email: JSONSupport.string(payload, "email"),
-                displayName: JSONSupport.string(payload, "name"))
+                displayName: JSONSupport.string(payload, "name"),
+                plan: tier,
+                attributes: ["project_id": projectID])
 
         case .codex, .xai:
             throw DeviceLoginError.unsupportedOnThisPlatform(
                 "This provider signs in with a device code, not a redirect.")
         }
+    }
+
+    /// Which GCP project this account's Antigravity quota lives under, and its paid tier.
+    ///
+    /// A port of Android's `resolveProjectId`: POST `loadCodeAssist` on each host in turn,
+    /// read the project id from whichever shape it arrives in — a bare string or an object
+    /// carrying an `id` — and the tier name beside it. A failure here is fatal to adding the
+    /// account rather than to one refresh, because an account with no project can never
+    /// read a number.
+    private func resolveProject(credentials: OAuthCredentials) async throws -> (String, String?) {
+        let body = try JSONSerialization.data(
+            withJSONObject: ["metadata": ProviderEndpoints.Antigravity.loadCodeAssistMetadata],
+            options: [])
+        let headers = [
+            "Authorization": "Bearer \(credentials.accessToken)",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        ]
+        var lastError: Error?
+
+        for url in ProviderEndpoints.Antigravity.loadCodeAssistURLs {
+            do {
+                let response = try await ProviderHTTP.request(
+                    httpClient, url: url, method: "POST", headers: headers, body: body,
+                    endpoint: "antigravity loadCodeAssist")
+                let payload = try ProviderHTTP.decodeObject(
+                    response.body, endpoint: "antigravity loadCodeAssist")
+                if let project = Self.projectID(in: payload) {
+                    return (project, Self.tierName(in: payload))
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Which host serves a given account varies; the next may answer.
+                lastError = error
+            }
+        }
+
+        if let lastError { throw lastError }
+        throw DeviceLoginError.malformedResponse(
+            "loadCodeAssist returned no GCP project id. If this account has never used "
+                + "Antigravity, sign in to the desktop client once to provision it, then add it here.")
+    }
+
+    /// Either shape upstream is known to emit: `"cloudaicompanionProject": "p"` or
+    /// `"cloudaicompanionProject": {"id": "p"}`. Reading only the string form fails the
+    /// login with the id sitting in plain view in the response.
+    static func projectID(in payload: [String: Any]) -> String? {
+        let keys = ["cloudaicompanionProject", "cloudaicompanion_project", "projectId", "project_id", "project"]
+        for key in keys {
+            if let direct = JSONSupport.string(payload, key), !direct.isEmpty { return direct }
+            if let nested = JSONSupport.object(payload, key),
+               let id = JSONSupport.string(nested, "id", "projectId", "project_id"), !id.isEmpty {
+                return id
+            }
+        }
+        return nil
+    }
+
+    static func tierName(in payload: [String: Any]) -> String? {
+        for key in ["currentTier", "current_tier", "paidTier", "paid_tier"] {
+            guard let tier = JSONSupport.object(payload, key) else { continue }
+            if let name = JSONSupport.string(tier, "name"), !name.isEmpty { return name }
+            if let id = JSONSupport.string(tier, "id"), !id.isEmpty { return id }
+        }
+        return nil
     }
 
     // MARK: - Per-provider constants

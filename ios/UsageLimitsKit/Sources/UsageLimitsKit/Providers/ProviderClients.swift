@@ -361,13 +361,12 @@ public struct ClaudeClient: SyncProvider, Sendable {
 public struct AntigravityClient: SyncProvider, Sendable {
     public let providerID = "antigravity"
 
-    /// Tried in the order the service hands them out: the daily-prefixed shard hosts most
-    /// accounts, the unprefixed one the rest, and neither is guaranteed for any given
-    /// account.
-    private static let quotaHosts = [
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-    ]
+    /// The shared list, not a private copy of it. This client carried its own two-host list
+    /// that silently shadowed `ProviderEndpoints.Antigravity.quotaURLs`, which has three —
+    /// so an account routed to the sandbox shard fell out of the loop on iOS and showed an
+    /// error card while Android, using the full list, showed its buckets. One list, one
+    /// place to update it.
+    private static var quotaHosts: [String] { ProviderEndpoints.Antigravity.quotaURLs }
 
     /// Shared with the token exchange in `ProviderTokenRefresh.swift`, so one adapter makes one
     /// kind of request through one client.
