@@ -19,13 +19,30 @@ enum BackgroundRefresh {
 
     /// Registers the handler. Must be called before the app finishes launching; later is too
     /// late, and iOS treats it as a programmer error.
-    static func register(container: UsageLimitsContainer) {
-        BGTaskScheduler.shared.register(
+    /// Returns whether the system accepted the registration.
+    ///
+    /// The result used to be dropped. It is the only signal there is: a `taskIdentifier` that
+    /// does not appear in `BGTaskSchedulerPermittedIdentifiers` is refused here and nowhere
+    /// else, and the consequence is that the app never refreshes in the background again —
+    /// which looks to the user exactly like limits that quietly stop updating. Silently
+    /// discarding the one indication of that is the worst available option.
+    ///
+    /// Deliberately not fatal. A build without the entitlement still works in the foreground,
+    /// and refusing to launch over it would turn a degraded app into no app.
+    @discardableResult
+    static func register(container: UsageLimitsContainer) -> Bool {
+        let registered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: taskIdentifier, using: nil
         ) { task in
             guard let task = task as? BGAppRefreshTask else { return }
             Task { @MainActor in await run(task, container: container) }
         }
+        if !registered {
+            // No token material here, and nothing user-specific: just the identifier that the
+            // Info.plist and this constant have to agree on.
+            print("[UsageLimits] background refresh registration refused for \(taskIdentifier)")
+        }
+        return registered
     }
 
     /// Asks for the next opportunity.

@@ -45,6 +45,13 @@ jobs:
       # broken build; one commit removed five and nothing noticed.
       - name: App sources reference only declared types
         run: python3 ios/Tools/check-private-symbols.py
+      # The app and widget targets are compiled by the macOS job below and nowhere else, so
+      # when that job cannot run — it has been unable to start for most of this project — they
+      # are checked by nothing at all. This type-checks them here, against stand-ins for the
+      # Apple frameworks. It is not a substitute for the real build; it is the difference
+      # between some checking and none.
+      - name: The app and widget type-check against framework shims
+        run: ./ios/Tools/typecheck-app.sh
       - name: Build
         working-directory: ios/UsageLimitsKit
         run: swift build -v
