@@ -113,8 +113,22 @@ public actor LoopbackListener {
             let finished = Finished()
 
             listener.stateUpdateHandler = { state in
-                if case .failed = state, finished.claim() {
-                    continuation.resume(throwing: ListenError.portUnavailable(self.port))
+                switch state {
+                case .failed:
+                    if finished.claim() {
+                        continuation.resume(throwing: ListenError.portUnavailable(self.port))
+                    }
+                case .cancelled:
+                    // Cancellation MUST resume the continuation, and this is the only place it
+                    // can. Without this arm the sign-in deadlocks rather than ending: the
+                    // timeout or the user closing the sheet cancels the listener, the
+                    // continuation is never resumed, and the task group — which waits for every
+                    // child before returning — waits for a child that can never finish.
+                    if finished.claim() {
+                        continuation.resume(throwing: CancellationError())
+                    }
+                default:
+                    break
                 }
             }
 
