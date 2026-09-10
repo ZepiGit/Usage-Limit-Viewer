@@ -40,27 +40,41 @@ final class LoopbackSignIn: NSObject {
 
         return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask { try await listener.awaitCode() }
-            group.addTask { @MainActor in
-                let callback = try await self.present(challenge.url)
-
-                if let callback {
-                    // The session intercepted the redirect. The challenge does the reading, so
-                    // this never handles the state and cannot get the comparison wrong — and it
-                    // is the same check, through the same function, that the listener applies.
-                    return try challenge.code(fromCallback: callback)
-                }
-
-                // The sheet closed without a callback. That is not an answer: the user may have
-                // finished in the browser and dismissed it while the redirect was still in
-                // flight, so give the listener a moment rather than racing it to a conclusion.
-                try await Task.sleep(nanoseconds: 2 * NSEC_PER_SEC)
-                throw CancellationError()
-            }
+            // A plain closure that awaits into this actor, rather than one annotated
+            // `@MainActor` in place. Both mean the same thing, but the annotated form is a
+            // shape the region-based isolation checker rejects outright — "does not understand
+            // how to check" — because the closure is main-actor-isolated while `addTask` wants
+            // a sendable one, and the values crossing that edge are a class and a struct it
+            // cannot follow. Naming the isolated work as a method moves the hop to a call it
+            // does understand.
+            group.addTask { try await self.interceptedCode(for: challenge) }
 
             defer { group.cancelAll(); self.session?.cancel(); self.session = nil }
             guard let code = try await group.next() else { throw CancellationError() }
             return code
         }
+    }
+
+    /// The browser half of the race: present the sign-in and read a code out of an intercepted
+    /// redirect, if there is one to read.
+    ///
+    /// Isolated to the main actor because presenting is, and because `session` is this object's
+    /// mutable state.
+    private func interceptedCode(for challenge: LoopbackChallenge) async throws -> String {
+        let callback = try await present(challenge.url)
+
+        if let callback {
+            // The session intercepted the redirect. The challenge does the reading, so this
+            // never handles the state and cannot get the comparison wrong — and it is the same
+            // check, through the same function, that the listener applies.
+            return try challenge.code(fromCallback: callback)
+        }
+
+        // The sheet closed without a callback. That is not an answer: the user may have finished
+        // in the browser and dismissed it while the redirect was still in flight, so give the
+        // listener a moment rather than racing it to a conclusion.
+        try await Task.sleep(nanoseconds: 2 * NSEC_PER_SEC)
+        throw CancellationError()
     }
 
     /// Opens the provider's own sign-in page, and reports the callback URL if it intercepts one.
