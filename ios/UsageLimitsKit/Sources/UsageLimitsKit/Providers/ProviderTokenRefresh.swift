@@ -260,6 +260,12 @@ extension XaiClient {
     static func validated(_ rawURL: String) throws -> String {
         guard let components = URLComponents(string: rawURL),
               components.scheme?.lowercased() == "https",
+              // Userinfo is refused outright. `https://x.ai@evil.example` is already caught by
+              // the host check — URLComponents puts `evil.example` in `host` — but
+              // `https://anything@auth.x.ai` passes it, and some HTTP stacks turn that userinfo
+              // into a Basic-auth header on a request that is about to carry a refresh token.
+              // The endpoints this validates never legitimately carry credentials in the URL.
+              components.user == nil, components.password == nil,
               let host = components.host?.lowercased(),
               host == ProviderEndpoints.Xai.issuerHost
                 || host.hasSuffix(".\(ProviderEndpoints.Xai.issuerHost)")
@@ -269,6 +275,16 @@ extension XaiClient {
             throw ProviderError.malformedPayload(
                 "xai discovery named an endpoint outside \(ProviderEndpoints.Xai.issuerHost)")
         }
-        return rawURL
+        // The re-composed URL, not the string that came in. The checks above ran against the
+        // PARSED view, so returning the original would send bytes nobody inspected — whatever a
+        // lenient parser happened to tolerate around the parts that were checked.
+        //
+        // The query survives on purpose: `verification_uri_complete` is a sign-in page with the
+        // user's code already in it, and stripping the query would turn the one URL that saves
+        // the user typing into the one that does not work.
+        guard let normalised = components.url?.absoluteString else {
+            throw ProviderError.malformedPayload("xai discovery named an unusable endpoint")
+        }
+        return normalised
     }
 }

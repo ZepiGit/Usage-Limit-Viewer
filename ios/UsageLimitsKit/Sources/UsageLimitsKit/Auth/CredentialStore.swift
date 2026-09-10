@@ -99,7 +99,16 @@ public struct OAuthCredentials: Codable, Sendable, Equatable {
             accessToken: refreshed.accessToken,
             refreshToken: refreshed.refreshToken ?? refreshToken,
             idToken: refreshed.idToken ?? idToken,
-            expiresAt: refreshed.expiresAt ?? expiresAt,
+            // The expiry is NOT inherited, unlike everything else here — this is the one field
+            // where carrying the old value forward is actively harmful. A response that omits
+            // `expires_in` while the stored expiry is already past would stamp a dead timestamp
+            // onto a brand-new access token, and the proactive branch would then judge that
+            // token expired on the very next sync. On a provider that rotates, every sync would
+            // burn a rotation, for ever, over a field the provider simply did not mention.
+            //
+            // Nil is the honest value: it means "the provider did not say", which is exactly
+            // what happened, and it is the state the reactive 401 path already exists to handle.
+            expiresAt: refreshed.expiresAt,
             scope: refreshed.scope ?? scope)
     }
 }
