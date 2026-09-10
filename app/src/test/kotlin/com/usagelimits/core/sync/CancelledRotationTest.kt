@@ -56,9 +56,7 @@ class CancelledRotationTest {
         override suspend fun getAll(): List<AccountEntity> = emptyList()
         override suspend fun getById(localId: String): AccountEntity? = null
         override suspend fun getByExternalId(provider: String, externalAccountId: String) = null
-        override suspend fun insert(account: AccountEntity) = Unit
         override suspend fun upsert(account: AccountEntity) = Unit
-        override suspend fun delete(account: AccountEntity) = Unit
         override suspend fun deleteById(localId: String) = Unit
         override suspend fun markSynced(localId: String, timestamp: Long) = Unit
     }
@@ -67,7 +65,6 @@ class CancelledRotationTest {
         override fun observeAll(): Flow<List<UsageSnapshotEntity>> = flowOf(emptyList())
         override suspend fun getAll(): List<UsageSnapshotEntity> = emptyList()
         override suspend fun getForAccount(accountId: String): UsageSnapshotEntity? = null
-        override fun observeForAccount(accountId: String): Flow<UsageSnapshotEntity?> = flowOf(null)
         override suspend fun upsert(snapshot: UsageSnapshotEntity) = Unit
         override suspend fun deleteForAccount(accountId: String) = Unit
     }

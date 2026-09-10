@@ -56,8 +56,7 @@ internal fun maskEmail(email: String): String {
     if (at <= 0) return email
     val local = email.substring(0, at)
     val domain = email.substring(at)
-    return when (local.length) {
-        1 -> "$local***$domain"
-        else -> "${local.first()}***$domain"
-    }
+    // `local.first()` IS `local` when the local part is one character, and `at <= 0` has
+    // already returned, so the two branches this used to have produced identical output.
+    return "${local.first()}***$domain"
 }

@@ -27,14 +27,10 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE provider = :provider AND externalAccountId = :externalAccountId")
     suspend fun getByExternalId(provider: String, externalAccountId: String): AccountEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(account: AccountEntity)
 
     @Upsert
     suspend fun upsert(account: AccountEntity)
 
-    @Delete
-    suspend fun delete(account: AccountEntity)
 
     @Query("DELETE FROM accounts WHERE localId = :localId")
     suspend fun deleteById(localId: String)
@@ -55,8 +51,6 @@ interface UsageSnapshotDao {
     @Query("SELECT * FROM usage_snapshots WHERE accountId = :accountId")
     suspend fun getForAccount(accountId: String): UsageSnapshotEntity?
 
-    @Query("SELECT * FROM usage_snapshots WHERE accountId = :accountId")
-    fun observeForAccount(accountId: String): Flow<UsageSnapshotEntity?>
 
     @Upsert
     suspend fun upsert(snapshot: UsageSnapshotEntity)

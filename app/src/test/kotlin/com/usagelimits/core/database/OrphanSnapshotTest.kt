@@ -32,9 +32,7 @@ class OrphanSnapshotTest {
         override suspend fun getByExternalId(provider: String, externalAccountId: String) =
             rows.values.firstOrNull { it.provider == provider && it.externalAccountId == externalAccountId }
 
-        override suspend fun insert(account: AccountEntity) { rows[account.localId] = account }
         override suspend fun upsert(account: AccountEntity) { rows[account.localId] = account }
-        override suspend fun delete(account: AccountEntity) { rows.remove(account.localId) }
         override suspend fun deleteById(localId: String) { rows.remove(localId) }
         override suspend fun markSynced(localId: String, timestamp: Long) { markSyncedCalls++ }
     }
@@ -47,7 +45,6 @@ class OrphanSnapshotTest {
         override fun observeAll(): Flow<List<UsageSnapshotEntity>> = flowOf(rows.values.toList())
         override suspend fun getAll(): List<UsageSnapshotEntity> = rows.values.toList()
         override suspend fun getForAccount(accountId: String) = rows[accountId]
-        override fun observeForAccount(accountId: String): Flow<UsageSnapshotEntity?> = flowOf(rows[accountId])
         override suspend fun deleteForAccount(accountId: String) { rows.remove(accountId) }
 
         override suspend fun upsert(snapshot: UsageSnapshotEntity) {

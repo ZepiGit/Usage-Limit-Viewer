@@ -71,12 +71,10 @@ class HttpClient(
     ): HttpResponse {
         requireSecure(url)
         var attempt = 0
-        var lastError: ProviderException? = null
         while (attempt <= retries) {
             try {
                 return executeOnce(url, method, headers, body, badRequestMeansExpired, oneTimeGrant)
             } catch (e: ProviderException.RateLimited) {
-                lastError = e
                 // Honour Retry-After when the provider sent one, otherwise back off — but
                 // clamped. Providers routinely set Retry-After to the whole remaining
                 // rate-limit window (an hour is common), and this delay holds the calling
@@ -87,19 +85,20 @@ class HttpClient(
                 if (attempt == retries) throw e
                 delay(wait)
             } catch (e: ProviderException.ServerError) {
-                lastError = e
                 // Delivery is unknown here: the request reached something, and whether the
                 // grant was consumed before the error is not observable from this side.
                 if (oneTimeGrant || attempt == retries) throw e
                 delay(backoffMs(attempt))
             } catch (e: ProviderException.Offline) {
-                lastError = e
                 if (oneTimeGrant || attempt == retries) throw e
                 delay(backoffMs(attempt))
             }
             attempt++
         }
-        throw lastError ?: ProviderException.Unexpected("request failed")
+        // Unreachable: every catch above throws on the final attempt, so the loop cannot
+        // exit normally. Kept because the compiler needs the function to end in a value or a
+        // throw; the variable that used to be carried here was only ever written.
+        throw ProviderException.Unexpected("request failed")
     }
 
     private suspend fun executeOnce(
