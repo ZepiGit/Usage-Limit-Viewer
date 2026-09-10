@@ -21,6 +21,10 @@ jobs:
   android:
     name: Android release
     runs-on: ubuntu-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +82,10 @@ jobs:
   ios:
     name: iOS archive
     runs-on: macos-latest
+    # Bounded so a hung step cannot run to the six-hour default. A UI test that waits
+    # on a simulator alert nobody can dismiss looks exactly like a slow one, and on a
+    # macOS runner that mistake is billed at ten times the rate.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
