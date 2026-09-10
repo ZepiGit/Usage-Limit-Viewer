@@ -458,4 +458,65 @@ extension GlanceModelTests {
 
         XCTAssertEqual(snapshot.accounts.first?.title, "\(ProviderID.codex.displayName) Max 5×")
     }
+
+    // MARK: - The long-horizon row
+
+    private func withWindows(_ windows: [UsageWindow]) -> AccountUsage {
+        AccountUsage(
+            account: account("a", .codex),
+            snapshot: UsageSnapshot(
+                accountID: "a", fetchedAt: now, status: .ok, windows: windows))
+    }
+
+    private func longWindow(
+        _ id: String, _ label: String, _ category: WindowCategory, usedPercent: Double?
+    ) -> UsageWindow {
+        UsageWindow(
+            id: id, label: label, category: category,
+            usedPercent: usedPercent,
+            periodSeconds: category == .weekly ? 604_800 : 2_592_000,
+            resetAt: now.addingTimeInterval(86_400),
+            exhausted: usedPercent == 100)
+    }
+
+    func testAnExhaustedMonthlyWindowIsShownEvenBesideAHealthyWeeklyOne() {
+        // `weekly ?? monthly ?? other` short-circuits on the mere existence of a weekly window,
+        // so an account whose monthly quota had run out showed its healthy weekly bar and the
+        // exhausted limit appeared nowhere on the tile. Kotlin had the identical defect.
+        let snapshot = GlanceModel.build(
+            [withWindows([
+                longWindow("wk", "Weekly", .weekly, usedPercent: 5),
+                longWindow("mo", "Monthly", .monthly, usedPercent: 100),
+            ])],
+            now: now, scope: .allAccounts, accountID: nil)
+
+        let labels = snapshot.accounts[0].rows.map(\.label)
+        XCTAssertTrue(labels.contains("Monthly"), "expected the exhausted monthly row, got \(labels)")
+    }
+
+    func testTheWeeklyWindowStillWinsWhenNothingIsMoreUrgent() {
+        // The other direction: with both equally healthy, the better-understood category keeps
+        // the slot. The change is one of ranking, not of preference.
+        let snapshot = GlanceModel.build(
+            [withWindows([
+                longWindow("wk", "Weekly", .weekly, usedPercent: 5),
+                longWindow("mo", "Monthly", .monthly, usedPercent: 5),
+            ])],
+            now: now, scope: .allAccounts, accountID: nil)
+
+        XCTAssertEqual(snapshot.accounts[0].rows.map(\.label), ["Weekly"])
+    }
+
+    func testAnUnreadableWindowDoesNotDisplaceOneKnownToBeEmpty() {
+        // `.error` ranks below `.exhausted` deliberately: a window whose percentage could not be
+        // read says nothing actionable, one at zero says the user has run out.
+        let snapshot = GlanceModel.build(
+            [withWindows([
+                longWindow("wk", "Weekly", .weekly, usedPercent: 100),
+                longWindow("mo", "Monthly", .monthly, usedPercent: nil),
+            ])],
+            now: now, scope: .allAccounts, accountID: nil)
+
+        XCTAssertEqual(snapshot.accounts[0].rows.map(\.label), ["Weekly"])
+    }
 }

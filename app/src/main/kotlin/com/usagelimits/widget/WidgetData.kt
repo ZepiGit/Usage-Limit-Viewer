@@ -173,20 +173,49 @@ object WidgetDataBuilder {
             .minByOrNull { it.remainingPercent ?: -1.0 }
             ?.toRow()
 
+    /**
+     * The one long-horizon row, chosen by how much it needs attention rather than by category.
+     *
+     * This used to be `WEEKLY ?: MONTHLY ?: OTHER`, which reads as a sensible preference and is
+     * not one: the elvis short-circuits on the mere EXISTENCE of a weekly window, so an account
+     * reporting a healthy weekly limit and an exhausted monthly one showed the weekly. The
+     * monthly window was never evaluated. A user whose monthly quota had run out saw a full bar
+     * on the home screen, which is the single worst thing this app can show — and the widget is
+     * where they were most likely to look.
+     *
+     * [Severity.urgency] is the ranking, because the file that defines it says it is the one
+     * answer the overview list and the widget both use, so they cannot disagree. It also settles
+     * what an unreadable window is worth here: ERROR sits BELOW exhausted, so a window whose
+     * percentage could not be read does not displace one known to be empty. Ties go to the lower
+     * remaining percentage, and then to the better-understood category — which is what keeps
+     * OTHER, whose duration no provider documents, a last resort among equals rather than a
+     * category that can never appear.
+     */
+    private fun longHeadline(windows: List<UsageWindow>): WidgetRow? =
+        windows.filter { it.category != WindowCategory.FIVE_HOUR }
+            .minWithOrNull(
+                compareBy(
+                    { it.severity.urgency },
+                    { it.remainingPercent ?: Double.MAX_VALUE },
+                    { longCategoryRank(it.category) },
+                )
+            )
+            ?.toRow()
+
+    private fun longCategoryRank(category: WindowCategory): Int = when (category) {
+        WindowCategory.WEEKLY -> 0
+        WindowCategory.MONTHLY -> 1
+        else -> 2
+    }
+
     private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
 
         // Show the two horizons that matter, not every window an account reports — a widget
         // has room for about two rows before it stops being glanceable.
-        //
-        // OTHER is the last resort for the long slot. A window whose duration no provider
-        // documents still counts against the account, and leaving the slot empty would hide a
-        // limit the app knows is being consumed while showing a healthier one beside it.
         val rows = listOfNotNull(
             headline(windows, WindowCategory.FIVE_HOUR),
-            headline(windows, WindowCategory.WEEKLY)
-                ?: headline(windows, WindowCategory.MONTHLY)
-                ?: headline(windows, WindowCategory.OTHER),
+            longHeadline(windows),
         )
 
         return WidgetAccount(

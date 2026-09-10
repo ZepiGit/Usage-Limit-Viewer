@@ -246,6 +246,43 @@ public enum GlanceModel {
             .map(row)
     }
 
+    /// The one long-horizon row, chosen by how much it needs attention rather than by category.
+    ///
+    /// This was `weekly ?? monthly ?? other`, which reads as a sensible preference and is not
+    /// one: `??` short-circuits on the mere EXISTENCE of a weekly window, so an account with a
+    /// healthy weekly limit and an exhausted monthly one showed the weekly and the monthly was
+    /// never considered. A user whose monthly quota had run out saw a full bar on the tile.
+    ///
+    /// `urgency` is the ranking, the same one that orders the accounts themselves, so the row
+    /// and the list cannot disagree. It also settles what an unreadable window is worth: `.error`
+    /// ranks BELOW `.exhausted`, so a window whose percentage could not be read does not
+    /// displace one known to be empty. Ties go to the lower remaining percentage, then to the
+    /// better-understood category — which keeps `.other`, whose duration no provider documents,
+    /// a last resort among equals rather than one that can never appear.
+    ///
+    /// Kotlin's `WidgetDataBuilder.longHeadline` is the same rule; the two must agree.
+    private static func longHeadline(_ windows: [UsageWindow]) -> GlanceRow? {
+        windows
+            .filter { $0.category != .fiveHour }
+            .min { lhs, rhs in
+                let lu = urgency(lhs.severity), ru = urgency(rhs.severity)
+                if lu != ru { return lu < ru }
+                let lp = lhs.remainingPercent ?? .greatestFiniteMagnitude
+                let rp = rhs.remainingPercent ?? .greatestFiniteMagnitude
+                if lp != rp { return lp < rp }
+                return longCategoryRank(lhs.category) < longCategoryRank(rhs.category)
+            }
+            .map(row)
+    }
+
+    private static func longCategoryRank(_ category: WindowCategory) -> Int {
+        switch category {
+        case .weekly: return 0
+        case .monthly: return 1
+        default: return 2
+        }
+    }
+
     private static func glanceAccount(
         _ usage: AccountUsage, now: Date, staleAfter: TimeInterval
     ) -> GlanceAccount {
@@ -253,13 +290,9 @@ public enum GlanceModel {
 
         // Two horizons, not every window an account reports: a tile has room for about two
         // rows before it stops being readable at a glance, which is the entire point of it.
-        //
-        // `.other` is the last resort for the long slot. A window whose duration no provider
-        // documents still counts against the account, and leaving the slot empty would hide a
-        // limit the app knows is being consumed while showing a healthier one beside it.
         let rows = [
             headline(windows, .fiveHour),
-            headline(windows, .weekly) ?? headline(windows, .monthly) ?? headline(windows, .other),
+            longHeadline(windows),
         ].compactMap { $0 }
 
         var title = usage.account.provider.displayName
