@@ -132,7 +132,8 @@ object NotificationEvaluator {
                 // snapshot was already processed by the time the lead began, and the next
                 // fetch found the reset gone. The keys carry the instant, so re-evaluating
                 // here cannot say anything twice.
-                events += evaluateResetApproaching(usage.account.label, snapshot, settings, nowMs)
+                events += evaluateResetApproaching(
+                    usage.account.localId, usage.account.label, snapshot, settings, nowMs)
                 events += evaluateExpiringCredits(usage, snapshot, settings, nowMs)
                 continue
             }
@@ -156,9 +157,10 @@ object NotificationEvaluator {
         val name = usage.account.label
         val events = mutableListOf<Event>()
 
-        val (state, lowEvents) = evaluateLowQuota(name, snapshot, settings, previous)
+        val accountId = usage.account.localId
+        val (state, lowEvents) = evaluateLowQuota(accountId, name, snapshot, settings, previous)
         events += lowEvents
-        events += evaluateResetApproaching(name, snapshot, settings, nowMs)
+        events += evaluateResetApproaching(accountId, name, snapshot, settings, nowMs)
         events += evaluateExpiringCredits(usage, snapshot, settings, nowMs)
 
         return state.copy(lastProcessedFetchedAt = snapshot.fetchedAt) to events
@@ -213,12 +215,23 @@ object NotificationEvaluator {
      * backlog this design exists to prevent.
      */
     private fun evaluateLowQuota(
+        accountId: String,
         name: String,
         snapshot: UsageSnapshot,
         settings: AppSettings,
         previous: AccountState,
     ): Pair<AccountState, List<Event>> {
-        val account = snapshot.accountId
+        // The ENCLOSING account's id, not the snapshot's.
+        //
+        // State was looked up by `usage.account.localId` while every event was keyed by
+        // `snapshot.accountId`. The two are the same by construction today, and the moment
+        // they are not — a snapshot written under one id and attached to another — state and
+        // events live in different namespaces: the ledger remembers episodes for one account
+        // while the keys claim them for another, and dedup stops working with no symptom
+        // except notifications that repeat or never arrive. One source, chosen to match the
+        // state lookup, removes the possibility rather than relying on the invariant. Swift
+        // passes the enclosing id throughout for the same reason.
+        val account = accountId
         val windowStates = previous.windows.toMutableMap()
         val events = mutableListOf<Event>()
 
@@ -295,6 +308,7 @@ object NotificationEvaluator {
      * measured from the present.
      */
     private fun evaluateResetApproaching(
+        accountId: String,
         name: String,
         snapshot: UsageSnapshot,
         settings: AppSettings,
@@ -314,8 +328,8 @@ object NotificationEvaluator {
 
             val minutes = ceil(remainingMs.toDouble() / MINUTE_MS).toLong()
             Event(
-                snapshot.accountId,
-                key(snapshot.accountId, keys.getValue(window.id), "reset-approaching", resetAt.toString()),
+                accountId,
+                key(accountId, keys.getValue(window.id), "reset-approaching", resetAt.toString()),
                 if (settings.notifyOnResetApproaching) {
                     "$name · ${window.label} resets in about $minutes minutes"
                 } else {
@@ -367,8 +381,8 @@ object NotificationEvaluator {
         return expiring.sortedBy { it.expiresAt }.map { credit ->
             val remainingMs = (credit.expiresAt ?: nowMs) - nowMs
             Event(
-                snapshot.accountId,
-                key(snapshot.accountId, credit.id, "credit-expiring"),
+                usage.account.localId,
+                key(usage.account.localId, credit.id, "credit-expiring"),
                 if (settings.notifyOnResetCreditExpiring) {
                     "$name · a reset credit expires in ${Countdown.format(remainingMs)}"
                 } else {

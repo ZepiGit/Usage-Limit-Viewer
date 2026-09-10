@@ -769,4 +769,43 @@ class NotificationEvaluatorTest {
     }
 
     // endregion
+
+    @Test
+    fun `state and events are keyed in the same namespace`() {
+        // State was looked up by the account's own id while every event was keyed by the
+        // snapshot's. The two agree by construction today — which is exactly what makes the
+        // disagreement invisible if it ever stops being true: the ledger would remember
+        // episodes under one id while the keys claimed them under another, and dedup would
+        // stop working with no symptom but notifications that repeat or never arrive.
+        //
+        // A snapshot carrying a different id than the account it is attached to is the shape
+        // of that mistake, so it is what is fed in here.
+        val mismatched = AccountUsage(
+            account = account("acct"),
+            snapshot = UsageSnapshot(
+                accountId = "some-other-id",
+                fetchedAt = now,
+                status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow(
+                        id = "w",
+                        label = "5h limit",
+                        category = WindowCategory.FIVE_HOUR,
+                        usedPercent = 95.0,
+                        periodSeconds = 18_000,
+                        resetAt = now + 3_600_000,
+                        exhausted = false,
+                    ),
+                ),
+            ),
+        )
+
+        val outcome = run(listOf(mismatched), emptyMap())
+
+        assertEquals(listOf("acct"), outcome.states.map { it.accountId })
+        assertTrue(
+            "every key must sit in the account's namespace, not the snapshot's: ${outcome.keys()}",
+            outcome.keys().isNotEmpty() && outcome.keys().all { it.startsWith("acct|") },
+        )
+    }
 }
