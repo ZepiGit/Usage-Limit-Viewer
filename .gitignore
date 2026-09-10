@@ -29,3 +29,8 @@ ios/UsageLimits/Info.plist
 # truststore paths, so they are not something to put in a public repository.
 .kotlin/
 ios/Tools/AppleShims/.build/
+
+# Scratch worktrees for delegated agents. Repository content, not the repository: an agent that
+# dies mid-run leaves one behind, and one did — holding a deliberate sabotage of SyncEngine it
+# never got to draw a conclusion from. `.claude/skills/` stays tracked.
+.claude/worktrees/
