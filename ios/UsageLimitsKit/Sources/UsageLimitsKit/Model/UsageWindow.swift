@@ -67,7 +67,13 @@ public struct UsageWindow: Sendable, Codable, Equatable {
     }
 
     public var remainingPercent: Double? {
-        usedPercent.map { min(max(100.0 - $0, 0.0), 100.0) }
+        // A non-finite figure is UNKNOWN, not zero and not full. A limit of zero divided into
+        // anything yields one, and clamping propagates it rather than catching it: NaN compares
+        // false against every bound, so `min`/`max` hand it straight back. Downstream it reaches
+        // an `Int(_:)` conversion, which in Swift traps rather than saturating — inside a widget
+        // extension that is a dead tile with nothing anywhere saying why.
+        guard let used = usedPercent, used.isFinite else { return nil }
+        return min(max(100.0 - used, 0.0), 100.0)
     }
 
     public var severity: Severity {

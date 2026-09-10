@@ -349,3 +349,113 @@ final class GlanceModelTests: XCTestCase {
         XCTAssertEqual(snapshot.accounts.first?.rows.count, 2)
     }
 }
+
+// MARK: - Where the two platforms had drifted apart
+
+/// Three divergences from the Kotlin original, found by reading them side by side.
+///
+/// The kit exists so an Android phone and an iPhone say the same thing about the same account.
+/// A difference here is not a style question: it is one user being told 3 % and another being
+/// told 80 % about the same subscription.
+extension GlanceModelTests {
+
+    private var parityNow: Date { Date(timeIntervalSince1970: 1_757_000_000) }
+
+    private func parityAccount(_ id: String, plan: String? = nil) -> ProviderAccount {
+        ProviderAccount(
+            id: id, provider: .codex, externalAccountID: "ext-\(id)",
+            email: "\(id)@example.com", displayName: nil, plan: plan,
+            credentialReference: "ref-\(id)",
+            createdAt: Date(timeIntervalSince1970: 0), lastSuccessfulSync: nil)
+    }
+
+    private func parityWindow(used: Double?) -> UsageWindow {
+        UsageWindow(
+            id: "5h", label: "5h limit", category: .fiveHour, usedPercent: used,
+            periodSeconds: 18_000, resetAt: parityNow.addingTimeInterval(3_600),
+            exhausted: false)
+    }
+
+    private func parityUsage(
+        _ id: String, used: Double?, fetchedAt: Date, plan: String? = nil
+    ) -> AccountUsage {
+        AccountUsage(
+            account: parityAccount(id, plan: plan),
+            snapshot: UsageSnapshot(
+                accountID: id, fetchedAt: fetchedAt, status: .ok,
+                windows: [parityWindow(used: used)]))
+    }
+
+    func testTheStaleThresholdFollowsTheSyncIntervalRatherThanAConstant() throws {
+        // At the three-hour interval the settings screen offers, a fixed one-hour threshold
+        // marks a two-hour-old snapshot stale — and stale sorts LAST. The account at 3 % would
+        // be pushed below a healthy one, and the headline would read 80 % with a 3 % card under
+        // it. This is the whole reason the Kotlin builder takes the threshold as a parameter.
+        let critical = parityUsage(
+            "critical", used: 97, fetchedAt: parityNow.addingTimeInterval(-2 * 60 * 60))
+        let healthy = parityUsage(
+            "healthy", used: 20, fetchedAt: parityNow)
+
+        let snapshot = GlanceModel.build(
+            [healthy, critical], now: parityNow, scope: .mostCritical,
+            staleAfter: Severity.staleAfter(syncIntervalMinutes: 180))
+
+        XCTAssertEqual(snapshot.accounts.first?.id, "critical")
+        XCTAssertEqual(snapshot.headlineShort?.remainingPercent, 3)
+    }
+
+    func testTheDefaultThresholdStillMarksATrulyOldSnapshotStale() throws {
+        // The parameter must not become a way to never be stale.
+        let old = parityUsage(
+            "old", used: 97, fetchedAt: parityNow.addingTimeInterval(-2 * 60 * 60))
+
+        let snapshot = GlanceModel.build([old], now: parityNow, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.severity, .stale)
+    }
+
+    func testANonFiniteUsageIsUnknownRatherThanACrash() throws {
+        // A limit of zero divided into anything yields a non-finite figure, and clamping
+        // propagates it: NaN compares false against every bound. Downstream it reaches an
+        // `Int(_:)` conversion, which in Swift TRAPS where Kotlin's `.toInt()` saturates —
+        // inside a widget extension that is a blank tile with nothing saying why.
+        for hostile in [Double.nan, .infinity, -.infinity] {
+            let usage = parityUsage("a", used: hostile, fetchedAt: parityNow)
+
+            let snapshot = GlanceModel.build([usage], now: parityNow, scope: .mostCritical)
+
+            XCTAssertNil(
+                snapshot.accounts.first?.rows.first?.remainingPercent,
+                "\(hostile) should read as unknown")
+        }
+    }
+
+    func testAnAbsurdButFiniteUsageIsClampedRatherThanRefused() throws {
+        // The clamp handles every finite value, so the guard above is about non-finite ones
+        // alone: a merely enormous figure still means "nothing left", which is a statement the
+        // app can honestly make.
+        let usage = parityUsage("a", used: 1e300, fetchedAt: parityNow)
+
+        let snapshot = GlanceModel.build([usage], now: parityNow, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.rows.first?.remainingPercent, 0)
+    }
+
+    func testAPlanThatIsOnlyWhitespaceIsNotAPlan() throws {
+        // `.whitespaces` is space and tab only — a plan of "\n" survived it and appended a blank
+        // line to a title in a fixed-height tile. Kotlin's `isNotBlank` counts newlines.
+        let usage = parityUsage("a", used: 20, fetchedAt: parityNow, plan: "\n ")
+
+        let snapshot = GlanceModel.build([usage], now: parityNow, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.title, ProviderID.codex.displayName)
+    }
+
+    func testARealPlanIsStillAppended() throws {
+        let usage = parityUsage("a", used: 20, fetchedAt: parityNow, plan: "Max 5×")
+
+        let snapshot = GlanceModel.build([usage], now: parityNow, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.accounts.first?.title, "\(ProviderID.codex.displayName) Max 5×")
+    }
+}

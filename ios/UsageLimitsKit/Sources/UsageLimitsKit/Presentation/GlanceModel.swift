@@ -128,7 +128,8 @@ public enum GlanceModel {
         now: Date,
         scope: GlanceScope,
         accountID: String? = nil,
-        providerID: String? = nil
+        providerID: String? = nil,
+        staleAfter: TimeInterval = Severity.staleAfter
     ) -> GlanceSnapshot {
         let selected: [AccountUsage]
         switch scope {
@@ -142,7 +143,7 @@ public enum GlanceModel {
 
         guard !selected.isEmpty else { return .empty }
 
-        let accounts = selected.map { glanceAccount($0, now: now) }
+        let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter) }
         let ordered = scope == .mostCritical ? sortedByUrgency(accounts) : accounts
 
         // The headline belongs to ONE account — the one leading the list — not to a pool.
@@ -194,7 +195,15 @@ public enum GlanceModel {
 
     /// Five-point buckets, so sub-point drift cannot reorder a home screen.
     private static func band(_ remaining: Double) -> Int {
-        remaining >= .greatestFiniteMagnitude ? Int.max : Int(remaining / 5)
+        // Saturating, never trapping. `Int(_:)` in Swift traps on a value outside Int's range
+        // where Kotlin's `.toInt()` saturates, and this runs inside a widget extension where a
+        // trap is a blank tile and no diagnostic. `remainingPercent` already refuses non-finite
+        // values; this is the second lock on the same door.
+        guard remaining.isFinite else { return Int.max }
+        let banded = remaining / 5
+        guard banded < Double(Int.max) else { return Int.max }
+        guard banded > Double(Int.min) else { return Int.min }
+        return Int(banded)
     }
 
     /// Rank for the automatic scope, lowest first.
@@ -237,7 +246,9 @@ public enum GlanceModel {
             .map(row)
     }
 
-    private static func glanceAccount(_ usage: AccountUsage, now: Date) -> GlanceAccount {
+    private static func glanceAccount(
+        _ usage: AccountUsage, now: Date, staleAfter: TimeInterval
+    ) -> GlanceAccount {
         let windows = usage.snapshot?.windows ?? []
 
         // Two horizons, not every window an account reports: a tile has room for about two
@@ -252,7 +263,11 @@ public enum GlanceModel {
         ].compactMap { $0 }
 
         var title = usage.account.provider.displayName
-        if let plan = usage.account.plan, !plan.trimmingCharacters(in: .whitespaces).isEmpty {
+        // `whitespacesAndNewlines`, not `whitespaces`: the latter is space and tab only, so a
+        // plan of "\n" survived as a plan and appended a blank line to a title in a
+        // fixed-height tile. Kotlin's `isNotBlank` counts newlines, and the two must agree.
+        if let plan = usage.account.plan,
+           !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             title += " \(plan)"
         }
 
@@ -262,7 +277,7 @@ public enum GlanceModel {
             // The masked form, never the raw address: a widget renders on a lock screen.
             subtitle: usage.account.maskedEmail,
             rows: rows,
-            severity: usage.snapshot?.severity(at: now) ?? .stale)
+            severity: usage.snapshot?.severity(at: now, staleAfter: staleAfter) ?? .stale)
     }
 
     private static func row(_ window: UsageWindow) -> GlanceRow {

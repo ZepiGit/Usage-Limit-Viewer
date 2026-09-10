@@ -53,7 +53,16 @@ data class UsageWindow(
     val group: String? = null,
 ) {
     val remainingPercent: Double?
-        get() = usedPercent?.let { (100.0 - it).coerceIn(0.0, 100.0) }
+        get() {
+            // A non-finite figure is UNKNOWN, not zero and not full. A limit of zero divided
+            // into anything yields one, and the clamp propagates it rather than catching it:
+            // NaN compares false against every bound, so coerceIn hands it straight back. The
+            // iOS twin refuses it for the same reason, where the consequence is worse — Swift's
+            // Int conversion traps on it inside a widget extension rather than saturating.
+            val used = usedPercent ?: return null
+            if (!used.isFinite()) return null
+            return (100.0 - used).coerceIn(0.0, 100.0)
+        }
 
     val severity: Severity
         get() = Severity.fromRemainingPercent(remainingPercent, exhausted)
