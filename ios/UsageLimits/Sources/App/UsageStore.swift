@@ -12,9 +12,32 @@ final class UsageStore: ObservableObject {
 
     @Published private(set) var accounts: [AccountUsage] = []
 
-    /// Writable, because the settings screen binds straight to it. Persisting it belongs to a
-    /// store this class will own once there is anything to persist.
-    @Published var settings = AppSettings()
+    /// Writable, because the settings screen binds straight to it.
+    ///
+    /// Saved on every change rather than on leaving the screen: a toggle the user flips and then
+    /// force-quits over must still be the setting they get back. `didSet` fires for a write
+    /// through the binding chain too, since mutating a nested struct rewrites the whole value.
+    @Published var settings = AppSettings() {
+        didSet {
+            guard settings != oldValue, !isLoadingSettings else { return }
+            let value = settings
+            // Inherits this actor, so everything below is already on the main actor and needs
+            // no hop of its own.
+            Task { [weak self, container] in
+                guard let container else { return }
+                // The stored value can differ from the one written — the sync interval is
+                // floored at what the platform will honour — so the screen is corrected to
+                // what will actually happen rather than left showing what was asked for.
+                if let stored = try? await container.save(settings: value) {
+                    self?.applyLoaded(stored)
+                }
+                BackgroundRefresh.schedule(after: value.syncIntervalMinutes)
+            }
+        }
+    }
+
+    /// Suppresses the save that would otherwise fire when the stored settings are read back in.
+    private var isLoadingSettings = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
 
@@ -28,7 +51,7 @@ final class UsageStore: ObservableObject {
     /// lock is that there is exactly one per credential reference.
     private let container: UsageLimitsContainer?
 
-    init(container: UsageLimitsContainer? = UsageStore.makeContainer()) {
+    init(container: UsageLimitsContainer? = UsageStore.sharedContainer) {
         self.container = container
 
         // A countdown that only moves when the data refreshes is worse than no countdown: it
@@ -68,7 +91,7 @@ final class UsageStore: ObservableObject {
     /// container is the entirety of what the home screen knows. `UsageLimitsContainer` writes it
     /// from the same `GlanceModel` call this screen renders — one derivation, one answer, rather
     /// than the app and the widget each deciding what "most critical" means.
-    static let appGroupID = "group.com.usagelimits.shared"
+    nonisolated static let appGroupID = "group.com.usagelimits.shared"
 
     /// Loads whatever the last run left behind, before any network is touched.
     ///
@@ -78,7 +101,16 @@ final class UsageStore: ObservableObject {
     /// render while the real answer is on its way.
     func load() async {
         guard let container else { return }
+        applyLoaded(await container.settings())
         accounts = await container.usage()
+    }
+
+    /// Installs settings that came from storage, without treating the assignment as a change the
+    /// user made — which would save them straight back and, worse, reschedule on every launch.
+    private func applyLoaded(_ stored: AppSettings) {
+        isLoadingSettings = true
+        settings = stored
+        isLoadingSettings = false
     }
 
     func refresh() async {
@@ -100,6 +132,12 @@ final class UsageStore: ObservableObject {
             // this to re-read it: re-reading races the write that just happened.
             accounts = try await container.refresh()
             lastError = nil
+
+            // Posted from the foreground too, not only from the background task. A user who
+            // opens the app and pulls to refresh should hear about a limit that has just run
+            // out; the ledger is what stops them hearing it twice when the background task
+            // reaches the same conclusion later.
+            await NotificationScheduler.post(try await container.pendingNotifications())
         } catch is CancellationError {
             // The screen was closed. Not a failure, and not something to paint red.
         } catch {
@@ -111,14 +149,29 @@ final class UsageStore: ObservableObject {
 
         // The container publishes the widget snapshot itself as part of a refresh, so the app
         // does not write the same file a second time from a second process-shared path.
+
+        // Requested after every refresh, foreground ones included: a submitted request is
+        // consumed when it runs, so an app that only asks from inside the background task gets
+        // exactly one background refresh in its life.
+        BackgroundRefresh.schedule(after: settings.syncIntervalMinutes)
     }
 
-    /// The shared container both this app and its widget name, or nil when the entitlement is
-    /// missing and there is nowhere shared to write.
-    private static func makeContainer() -> UsageLimitsContainer? {
+
+    /// The one container this process uses, or nil when the App Group entitlement is missing
+    /// and there is nowhere shared to write.
+    ///
+    /// A single shared instance, because the app builds one at launch for the background task
+    /// and the store takes one as a default argument — and two would mean two credential stores
+    /// and two sets of in-flight refresh locks. That lock exists precisely so one rotating
+    /// refresh token cannot be spent twice; duplicating the object that holds it defeats it.
+    ///
+    /// `nonisolated`, because a default argument is evaluated at the call site and the call site
+    /// is a `@StateObject` initialiser whose isolation is not this type's to assume. The
+    /// container is an actor, so it is safe to reach from anywhere.
+    nonisolated static let sharedContainer: UsageLimitsContainer? = {
         guard let directory = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupID) else { return nil }
         return UsageLimitsContainer(
             directory: directory, credentials: KeychainCredentialStore())
-    }
+    }()
 }

@@ -175,6 +175,101 @@ final class UsageLimitsContainerTests: XCTestCase {
         XCTAssertFalse(contents.contains("synthetic-refresh"))
     }
 
+    // MARK: - Notifications
+
+    /// A payload whose 5-hour window is nearly spent, so the evaluator has something to say.
+    private let codexLow = """
+    { "plan_type": "plus",
+      "rate_limit": { "allowed": true, "limit_reached": false,
+        "primary_window": { "used_percent": 95, "limit_window_seconds": 18000,
+                            "reset_after_seconds": 3600, "reset_at": 1757003600 },
+        "secondary_window": null } }
+    """
+
+    func testAnEdgeIsOfferedOnceAndNotAgain() async throws {
+        // The property the whole ledger exists for. Re-deriving from the snapshot would say
+        // "low quota" every thirty minutes for as long as the account stayed low, which is what
+        // makes people switch notifications off.
+        let (subject, _) = container([(200, codexLow), (200, #"{"credits": []}"#)])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        let first = try await subject.pendingNotifications()
+        let second = try await subject.pendingNotifications()
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertTrue(second.isEmpty)
+    }
+
+    func testAClaimSurvivesTheProcessThatMadeIt() async throws {
+        // A background refresh runs in a fresh process. Without the file, every one of them
+        // would re-announce the same edge.
+        let (subject, credentials) = container([(200, codexLow), (200, #"{"credits": []}"#)])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+        _ = try await subject.pendingNotifications()
+
+        let restarted = UsageLimitsContainer(
+            directory: directory, credentials: credentials,
+            transport: Transport([]), now: { [now] in now })
+
+        let again = try await restarted.pendingNotifications()
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testAnAlertTheUserTurnedOffIsNotOffered() async throws {
+        let (subject, _) = container([(200, codexLow), (200, #"{"credits": []}"#)])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        var settings = AppSettings()
+        settings.notifications.notifyBelow20Percent = false
+        settings.notifications.notifyBelow10Percent = false
+        settings.notifications.notifyOnExhausted = false
+        try await subject.save(settings: settings)
+
+        let pending = try await subject.pendingNotifications()
+        XCTAssertTrue(pending.isEmpty, "offered: \(pending.map(\.key))")
+    }
+
+    func testSettingsSurviveTheProcess() async throws {
+        let (subject, credentials) = container([])
+        try await subject.save(settings: AppSettings(syncIntervalMinutes: 180))
+
+        let restarted = UsageLimitsContainer(
+            directory: directory, credentials: credentials,
+            transport: Transport([]), now: { [now] in now })
+
+        let minutes = await restarted.settings().syncIntervalMinutes
+        XCTAssertEqual(minutes, 180)
+    }
+
+    func testRemovingAnAccountClearsWhatWasSaidAboutIt() async throws {
+        // Re-added under the same id, it would otherwise inherit records saying every edge had
+        // already been announced, and stay silent while genuinely low.
+        // Four replies: usage and credits for each of the two refreshes below.
+        let (subject, credentials) = container([
+            (200, codexLow), (200, #"{"credits": []}"#),
+            (200, codexLow), (200, #"{"credits": []}"#),
+        ])
+        try await subject.add(account())
+        _ = try await subject.refresh()
+        let before = try await subject.pendingNotifications()
+        XCTAssertFalse(before.isEmpty)
+
+        try await subject.remove(id: "a")
+        // Re-adding an account means signing in again, so the credential comes back with it —
+        // `remove` deleted it, which is the behaviour a neighbouring test pins.
+        try await credentials.save(
+            OAuthCredentials(accessToken: "synthetic-access", refreshToken: "synthetic-refresh"),
+            reference: "ref-a")
+        try await subject.add(account())
+        _ = try await subject.refresh()
+
+        let after = try await subject.pendingNotifications()
+        XCTAssertFalse(after.isEmpty, "nothing offered for the re-added account")
+    }
+
     // MARK: - Removing an account
 
     func testRemovingAnAccountRemovesItsCredentialToo() async throws {

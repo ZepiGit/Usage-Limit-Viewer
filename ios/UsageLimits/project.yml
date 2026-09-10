@@ -41,16 +41,31 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    # A generated Info.plist rather than INFOPLIST_KEY_* build settings, because two of the keys
+    # below are arrays and the build-setting spelling cannot express one. Written by XcodeGen,
+    # so it is still generated rather than hand-maintained.
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
         # Dark-only by design: a half-finished light palette would look worse than a deliberate
         # dark one, and the reference design is dark.
-        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
-          UIInterfaceOrientationPortrait
-          UIInterfaceOrientationLandscapeLeft
-          UIInterfaceOrientationLandscapeRight
-        TARGETED_DEVICE_FAMILY: "1,2"
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Without this the app can never refresh while closed, so the widget shows whatever was
+        # on screen when the user last opened it and a limit can run out unannounced.
+        UIBackgroundModes:
+          - fetch
+        # Must match BackgroundRefresh.taskIdentifier exactly. A mismatch is not reported: the
+        # registration throws at launch and background refresh silently never happens again.
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.usagelimits.app.refresh
     # The app and the widget are separate processes; the shared container is the only thing
     # they have in common, and a missing entitlement makes the container URL nil at runtime —
     # which shows up as a permanently blank tile rather than as any kind of error.
