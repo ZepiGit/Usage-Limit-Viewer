@@ -125,8 +125,10 @@ jobs:
         working-directory: ios/UsageLimits
         run: |
           set -o pipefail
-          # Every flag below exists because the step ran for 25 minutes with no output and had
-          # to be killed, which taught nothing about why.
+          # These flags are insurance, not a diagnosis. They were added after this step was
+          # cancelled twice while I believed it had hung; the timestamps say it had run for
+          # four and a half minutes, which for a first build of the test target is ordinary.
+          # They stay because each one is worth having on its own terms:
           #
           # -test-timeouts-enabled with an allowance: a test that hangs — waiting on a system
           #   alert nobody will dismiss, or on an app that never becomes responsive — now FAILS,
