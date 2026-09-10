@@ -202,8 +202,20 @@ public actor UsageLimitsContainer {
     ///
     /// The gate is the APPLICABLE count, not the held one. An account can hold three credits and
     /// be able to apply none of them.
+    /// Accounts with a credit spend in flight. See `redeemResetCredit`.
+    private var redeeming: Set<String> = []
+
     @discardableResult
     public func redeemResetCredit(accountID: String) async throws -> [AccountUsage] {
+        // One spend in flight per account. A redemption is a network round-trip that consumes
+        // a real credit, and a button can be tapped twice before the first answer lands; two
+        // requests in flight are two credits spent for one reset. The guard lives here, in
+        // the actor, rather than only in the button, because the widget and a shortcut can
+        // reach this too.
+        guard !redeeming.contains(accountID) else { throw ResetCreditError.alreadyRedeeming }
+        redeeming.insert(accountID)
+        defer { redeeming.remove(accountID) }
+
         guard let usage = await repository.usage().first(where: { $0.account.id == accountID }),
               usage.account.provider == .codex
         else {
@@ -231,6 +243,8 @@ public actor UsageLimitsContainer {
     public enum ResetCreditError: Error, LocalizedError, Equatable {
         case notAvailable
         case noneApplicable
+        /// A spend for this account is already in flight; the second request is refused.
+        case alreadyRedeeming
 
         public var errorDescription: String? {
             switch self {
@@ -238,6 +252,8 @@ public actor UsageLimitsContainer {
                 return "This account cannot use reset credits."
             case .noneApplicable:
                 return "No reset credit can be applied to this limit right now."
+            case .alreadyRedeeming:
+                return "A reset is already being requested for this account."
             }
         }
     }
