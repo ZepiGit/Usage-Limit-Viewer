@@ -666,4 +666,24 @@ extension SyncEngineTests {
             }
         }
     }
+
+    // A test for "a cancelled waiter does not strand the account lock" was written here and
+    // then deleted, which is worth recording so it is not written again.
+    //
+    // It could not fail. The lock is built on `withCheckedContinuation`, which is not
+    // cancellation-aware, so a waiter blocked on it is not woken by cancelling its task. Any
+    // test that waits for a stranded holder therefore hangs rather than failing — including
+    // through a task group, because the group awaits every child at scope exit and the child
+    // waiting on the holder never returns. Verified by deliberately stranding the lock: the
+    // run was killed at 200 seconds with no assertion message either time.
+    //
+    // A test that can only pass or hang is worse than none: green implies a guarantee nothing
+    // checked. The property itself does hold by construction — the holder always releases
+    // through `defer`, and release hands ownership straight to the next waiter rather than
+    // clearing the flag — and a stranded lock requires a holder that never finishes, which is
+    // a different bug with different symptoms. Making the lock cancellation-aware would make
+    // this testable, and is the right change if a cancelled sync ever needs to stop promptly
+    // rather than merely eventually; it is not worth reworking a correct primitive for the
+    // convenience of a test.
+
 }
