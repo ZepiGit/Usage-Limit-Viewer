@@ -70,19 +70,23 @@ public enum XaiBillingParser: Sendable {
     public static func parseBilling(_ payload: [String: Any], now _: Date) -> [UsageWindow] {
         let body = config(payload)
         let monthlyLimit = cents(body, "monthlyLimit", "monthly_limit")
+        // Every name the production shape carries for spend — see the Kotlin twin for why
+        // reading `used` alone rendered a 90 %-spent account as untouched.
         let used = cents(body, "used")
+            ?? cents(body, "includedUsed", "included_used")
+            ?? cents(body, "totalUsed", "total_used")
 
         guard monthlyLimit != nil || used != nil else {
             return []
         }
 
-        let usedCents = used ?? 0
         let resetAt = date(body, "billingPeriodEnd", "billing_period_end")
 
-        // Excess spend belongs to the on-demand row, not the included allowance.
-        // A missing allowance stays unknown rather than fabricating a zero limit.
-        let includedPercent = monthlyLimit.flatMap {
-            percentOf(amount: min(usedCents, $0), total: $0)
+        // Excess spend belongs to the on-demand row. Absent spend stays UNKNOWN: a limit with
+        // no spend figure is a window whose percentage the app does not know, not one it has
+        // decided is untouched.
+        let includedPercent = monthlyLimit.flatMap { limit in
+            used.flatMap { percentOf(amount: min($0, limit), total: limit) }
         }
 
         var windows = [
@@ -100,25 +104,23 @@ public enum XaiBillingParser: Sendable {
         // Without a positive cap, there is no on-demand facility worth showing.
         let onDemandCap = cents(body, "onDemandCap", "on_demand_cap") ?? 0
         if onDemandCap > 0 {
-            // Older responses expose only total spend. Deriving excess requires a known
-            // allowance; treating an absent allowance as zero invents on-demand usage.
+            // Deriving overage needs BOTH a known allowance and known spend; with either
+            // missing the row is shown with an unknown percentage rather than omitted.
             let onDemandUsed = cents(body, "onDemandUsed", "on_demand_used")
-                ?? monthlyLimit.map { max(0, usedCents - $0) }
+                ?? monthlyLimit.flatMap { limit in used.map { max(0, $0 - limit) } }
+            let onDemandPercent = onDemandUsed.flatMap { percentOf(amount: $0, total: onDemandCap) }
 
-            if let onDemandUsed {
-                let onDemandPercent = percentOf(amount: onDemandUsed, total: onDemandCap)
-                windows.append(
-                    UsageWindow(
-                        id: onDemandWindowID,
-                        label: "On-demand",
-                        category: .monthly,
-                        usedPercent: onDemandPercent,
-                        periodSeconds: billingPeriodSeconds,
-                        resetAt: resetAt,
-                        exhausted: isExhausted(onDemandPercent)
-                    )
+            windows.append(
+                UsageWindow(
+                    id: onDemandWindowID,
+                    label: "On-demand",
+                    category: .monthly,
+                    usedPercent: onDemandPercent,
+                    periodSeconds: billingPeriodSeconds,
+                    resetAt: resetAt,
+                    exhausted: isExhausted(onDemandPercent)
                 )
-            }
+            )
         }
 
         return windows
