@@ -81,6 +81,27 @@ public struct OAuthCredentials: Codable, Sendable, Equatable {
         guard let expiresAt else { return false }
         return now >= expiresAt.addingTimeInterval(-leeway)
     }
+
+    /// A refresh response, folded onto the credentials it refreshed.
+    ///
+    /// A token response is not a complete credential. Providers that do NOT rotate their
+    /// refresh token simply omit `refresh_token` from the response, and several omit `scope`
+    /// and `id_token` too. Storing that response as-is deletes the refresh token the account
+    /// depends on — the account is then lost even though nothing ever invalidated it, which is
+    /// among the worst outcomes available here because it looks like the provider revoked
+    /// access.
+    ///
+    /// Applied at the refresh boundary rather than inside `save`, so that saving still means
+    /// exactly what it says. Only an absent field inherits; a field the provider did send wins,
+    /// including a rotated refresh token.
+    public func merging(refreshed: OAuthCredentials) -> OAuthCredentials {
+        OAuthCredentials(
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken ?? refreshToken,
+            idToken: refreshed.idToken ?? idToken,
+            expiresAt: refreshed.expiresAt ?? expiresAt,
+            scope: refreshed.scope ?? scope)
+    }
 }
 
 // MARK: - Store protocol
@@ -91,6 +112,15 @@ public struct OAuthCredentials: Codable, Sendable, Equatable {
 /// caller's thread and the in-memory one serialises through an actor; the
 /// protocol keeps callers from needing to know which is underneath.
 public protocol CredentialStore: Sendable {
+    /// Removes every credential this store holds.
+    ///
+    /// Exists for one specific reason: keychain items survive an app being deleted, while
+    /// everything in the app's container does not. A user who deletes the app to revoke its
+    /// access, then reinstalls it, would otherwise find every paid account still connected
+    /// with no sign-in — access they believed they had removed. The app calls this the first
+    /// time it runs after an install, detected by a flag in its own container.
+    func removeAll() async throws
+
     /// The credentials stored under `reference`, or nil when nothing is.
     /// Absence is not an error: the app treats it as "this account is signed
     /// out", which is a state rather than a fault.
@@ -277,6 +307,20 @@ public final class KeychainCredentialStore: CredentialStore {
         }
     }
 
+    public func removeAll() async throws {
+        // One delete against the service, rather than a listing followed by a delete each: an
+        // item added between the two would survive a loop, and this runs precisely when the
+        // guarantee wanted is "nothing of ours is left".
+        let status = SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ] as CFDictionary)
+
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw CredentialStoreError.keychain(status)
+        }
+    }
+
     public func allReferences() async throws -> [String] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -398,6 +442,10 @@ public actor InMemoryCredentialStore: CredentialStore {
 
     public func save(_ credentials: OAuthCredentials, reference: String) async throws {
         self.credentials[reference] = credentials
+    }
+
+    public func removeAll() async throws {
+        credentials.removeAll()
     }
 
     public func delete(reference: String) async throws {
