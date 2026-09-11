@@ -119,34 +119,76 @@ final class LoopbackSignIn: NSObject {
     ///
     /// Both authorize endpoints are https end to end, so there is no intermediate http
     /// navigation for this to match by accident.
+    ///
+    /// Cancellation-aware, and that is the part that matters. When the listener wins the race,
+    /// `authorize` cancels this child — but the task group still waits for it to FINISH, and a
+    /// continuation parked on `ASWebAuthenticationSession`'s completion handler never does:
+    /// `cancel()` dismisses the sheet without calling the handler. So the child hung, the group
+    /// hung with it, and a sign-in that had succeeded on the listener never reached the token
+    /// exchange. The handler below resumes the continuation when the task is cancelled, once,
+    /// through a per-presentation waiter so an old attempt's cancellation cannot resolve a new
+    /// attempt's continuation.
     private func present(_ url: URL) async throws -> URL? {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL?, any Error>) in
-            let session = ASWebAuthenticationSession(
-                url: url, callbackURLScheme: "http"
-            ) { callback, error in
-                if let sessionError = error as? ASWebAuthenticationSessionError,
-                   sessionError.code == .canceledLogin {
-                    // The user closed the sheet. Not a failure to report — the listener may
-                    // still have the answer.
-                    continuation.resume(returning: nil)
-                } else if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: callback)
+        let waiter = PresentationWaiter()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL?, any Error>) in
+                waiter.continuation = continuation
+                guard !Task.isCancelled else {
+                    waiter.cancel()
+                    return
+                }
+
+                let session = ASWebAuthenticationSession(
+                    url: url, callbackURLScheme: "http"
+                ) { callback, error in
+                    Task { @MainActor in
+                        if let sessionError = error as? ASWebAuthenticationSessionError,
+                           sessionError.code == .canceledLogin {
+                            // The user closed the sheet. Not a failure to report — the listener
+                            // may still have the answer.
+                            waiter.finish(.success(nil))
+                        } else if let error {
+                            waiter.finish(.failure(error))
+                        } else {
+                            waiter.finish(.success(callback))
+                        }
+                    }
+                }
+                session.presentationContextProvider = self
+                // A fresh session every time. Reusing the browser's cookies would silently sign
+                // the user into whichever account the browser already holds, which is wrong for
+                // an app whose entire purpose is holding SEVERAL accounts per provider.
+                session.prefersEphemeralWebBrowserSession = true
+                waiter.session = session
+                self.session = session
+
+                if !session.start() {
+                    waiter.finish(.failure(
+                        DeviceLoginError.malformedResponse("the sign-in page could not be opened")))
                 }
             }
-            session.presentationContextProvider = self
-            // A fresh session every time. Reusing the browser's cookies would silently sign the
-            // user into whichever account the browser already holds, which is wrong for an app
-            // whose entire purpose is holding SEVERAL accounts per provider.
-            session.prefersEphemeralWebBrowserSession = true
-            self.session = session
+        } onCancel: {
+            Task { @MainActor in waiter.cancel() }
+        }
+    }
 
-            if !session.start() {
-                continuation.resume(
-                    throwing: DeviceLoginError.malformedResponse(
-                        "the sign-in page could not be opened"))
-            }
+    /// One presentation's continuation, resumed at most once from whichever side gets there
+    /// first — the browser's completion handler or the task's cancellation.
+    @MainActor
+    private final class PresentationWaiter {
+        var continuation: CheckedContinuation<URL?, any Error>?
+        var session: ASWebAuthenticationSession?
+
+        func finish(_ result: Result<URL?, any Error>) {
+            let pending = continuation
+            continuation = nil
+            session = nil
+            pending?.resume(with: result)
+        }
+
+        func cancel() {
+            session?.cancel()
+            finish(.failure(CancellationError()))
         }
     }
 }

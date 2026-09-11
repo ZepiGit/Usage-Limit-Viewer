@@ -190,7 +190,19 @@ private struct WidgetFocus {
     init?(snapshot: GlanceSnapshot) {
         guard let account = snapshot.accounts.first else { return nil }
         self.account = account
-        self.row = snapshot.headlineShort ?? snapshot.headlineLong ?? account.rows.first
+        self.row = snapshot.widgetRow(for: account)
+    }
+}
+
+private extension GlanceSnapshot {
+    /// The row a tile shows for one account: the kit's headline for the LEAD, and every other
+    /// account's own first row. Stated once — three views spelled it out separately, and the
+    /// precedence decides which number a user sees.
+    func widgetRow(for account: GlanceAccount) -> GlanceRow? {
+        if account.id == accounts.first?.id {
+            return headlineShort ?? headlineLong ?? account.rows.first
+        }
+        return account.rows.first
     }
 }
 
@@ -522,10 +534,7 @@ struct UsageWidgetMediumView: View {
 
     /// The lead shows the kit's headline row; every other account its own first row.
     private func row(for account: GlanceAccount) -> GlanceRow? {
-        if account.id == entry.snapshot.accounts.first?.id {
-            return entry.snapshot.headlineShort ?? entry.snapshot.headlineLong ?? account.rows.first
-        }
-        return account.rows.first
+        entry.snapshot.widgetRow(for: account)
     }
 
     /// Three rows fit at regular sizes; from xLarge upwards two fill the tile, and
@@ -821,10 +830,7 @@ struct UsageWidgetLargeView: View {
     /// The lead shows the kit's headline row; every other account its own first row. Same rule
     /// as the medium tile, and for the same reason — see `WidgetFocus`.
     private func row(for account: GlanceAccount) -> GlanceRow? {
-        if account.id == entry.snapshot.accounts.first?.id {
-            return entry.snapshot.headlineShort ?? entry.snapshot.headlineLong ?? account.rows.first
-        }
-        return account.rows.first
+        entry.snapshot.widgetRow(for: account)
     }
 
     var body: some View {
@@ -923,8 +929,6 @@ struct UsageWidgetEntryView: View {
             UsageWidgetMediumView(entry: entry, transparent: transparent)
         case .accessoryRectangular:
             UsageAccessoryRectangularView(entry: entry)
-        case .accessoryCircular:
-            UsageAccessoryCircularView(entry: entry)
         default:
             UsageWidgetSmallView(entry: entry, transparent: transparent)
         }
