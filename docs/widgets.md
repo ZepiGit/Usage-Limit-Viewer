@@ -34,7 +34,7 @@ Declared at `targetCellWidth="4"`, `targetCellHeight="1"`, resizeable horizontal
 |---|---|
 | **5h limit** | The tightest five-hour window across every account in scope, as remaining percent, with a bar |
 | **Weekly** | The tightest weekly window, with a bar — falling back to the tightest monthly window when a plan has no weekly one |
-| **Resets in** | A countdown to the *earliest* upcoming reset anywhere in scope |
+| **Next reset** | The clock time of the *earliest* reset still ahead for the LEADING account — absolute, never a countdown, because a widget cannot tick; and only a reset still ahead, because a snapshot keeps a passed instant until the next fetch replaces it |
 | **Quota** | One word for the overall worst state: `OK`, `Fair`, `Low`, `Out`, `Stale`, `Error`, coloured by severity |
 
 It deliberately aggregates rather than showing one account. At a single cell of height there is

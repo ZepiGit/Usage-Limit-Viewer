@@ -418,4 +418,33 @@ class WidgetDataBuilderTest {
     }
 
     // endregion
+    @Test
+    fun `a reset that has already passed does not mask the next one`() {
+        // A snapshot keeps a window's reset instant until the next fetch replaces it. Once one
+        // had passed, the minimum was anchored in the past and the compact widget's "Next reset"
+        // tile named a reset that was already over, for as long as the cache stood.
+        val usage = AccountUsage(
+            account = account("a", ProviderId.CODEX),
+            snapshot = UsageSnapshot(
+                accountId = "a", fetchedAt = now, status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow(
+                        id = "5h", label = "5h limit", category = WindowCategory.FIVE_HOUR,
+                        usedPercent = 50.0, periodSeconds = 18_000, resetAt = now - 100,
+                        exhausted = false,
+                    ),
+                    UsageWindow(
+                        id = "wk", label = "Weekly", category = WindowCategory.WEEKLY,
+                        usedPercent = 50.0, periodSeconds = 604_800, resetAt = now + 2_000,
+                        exhausted = false,
+                    ),
+                ),
+            ),
+        )
+
+        val snapshot = WidgetDataBuilder.build(listOf(usage), now, WidgetScope.MOST_CRITICAL, null, null)
+
+        assertEquals(now + 2_000, snapshot.nextResetAt)
+    }
+
 }

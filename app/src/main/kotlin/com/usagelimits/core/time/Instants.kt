@@ -31,11 +31,10 @@ object Instants {
         val normalized = raw.replace(Regex("(\\.\\d{3})\\d+"), "$1")
         runCatching { return OffsetDateTime.parse(normalized).toInstant().toEpochMilli() }
         runCatching { return Instant.parse(normalized).toEpochMilli() }
-        return try {
-            OffsetDateTime.parse("${normalized}Z").toInstant().toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            null
-        }
+        // `runCatching`, like the two attempts above it: a year that parses but does not fit in
+        // epoch milliseconds throws ArithmeticException out of toEpochMilli(), which a catch for
+        // the parse exception alone let escape from a function that promises null.
+        return runCatching { OffsetDateTime.parse("${normalized}Z").toInstant().toEpochMilli() }.getOrNull()
     }
 
     /** Disambiguates epoch seconds from epoch millis by magnitude. */
