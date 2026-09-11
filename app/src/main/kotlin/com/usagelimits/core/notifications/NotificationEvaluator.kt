@@ -186,12 +186,19 @@ object NotificationEvaluator {
             if (!muted) standing += standingFindings(usage, snapshot, settings, nowMs)
         }
 
-        // Filtered here rather than at each `events +=` above. Every event carries the account
-        // it belongs to, so one filter covers the emit sites that exist and the ones a later
+        // Silenced here rather than at each `events +=` above. Every event carries the account
+        // it belongs to, so one pass covers the emit sites that exist and the ones a later
         // change adds — a guard per site only covers the ones someone remembered.
+        //
+        // Silenced by BLANKING the line, not by dropping the event. A mute is a disabled
+        // setting scoped to one account, and it follows the rule every disabled setting here
+        // follows: the key is still claimed, so that switching back on delivers what happens
+        // NEXT rather than a threshold crossed while the user had asked not to hear about it.
+        // Dropping the events left those keys unclaimed; the first sync after unmuting then
+        // found them, with text, and announced a dip from hours or days ago.
         return Outcome(
             newStates.values.toList(),
-            events.filterNot { it.accountId in settings.mutedAccountIds },
+            events.map { if (it.accountId in settings.mutedAccountIds) it.copy(line = "") else it },
             standing,
         )
     }

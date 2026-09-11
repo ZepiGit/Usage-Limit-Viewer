@@ -13,6 +13,8 @@ import androidx.core.content.ContextCompat
 import com.usagelimits.MainActivity
 import com.usagelimits.R
 import com.usagelimits.core.database.AccountUsage
+import com.usagelimits.core.database.DirectTransactionRunner
+import com.usagelimits.core.database.TransactionRunner
 import com.usagelimits.core.database.NotificationDao
 import com.usagelimits.core.database.NotificationEventEntity
 import com.usagelimits.core.database.NotificationStateEntity
@@ -42,52 +44,78 @@ class NotificationPublisher(
     private val settingsStore: SettingsStore,
     private val notificationDao: NotificationDao,
     private val now: () -> Long = System::currentTimeMillis,
+    /**
+     * Serialises the read-evaluate-write below against every other publisher and every delete.
+     *
+     * Pass-through by default, for tests with a fake DAO and nothing to protect it from. The
+     * app wires the Room runner, for two failures that only a transaction closes:
+     *
+     * Two publishers can run at once — the periodic worker and a pull-to-refresh land in the
+     * same window routinely. Each read the state table, evaluated, and wrote back. P1 reads an
+     * account mid-episode and pauses; P2 reads the same state, sees a fresh dip, REUSES the
+     * episode number P1 is about to end, and its warning key collides with one the ledger has
+     * already spent — so the new dip is never announced. P1 then writes its stale state over
+     * P2's, rolling `lastProcessedFetchedAt` backwards. Inside one transaction the second
+     * publisher reads what the first wrote.
+     *
+     * And the account list arrives from a read moments earlier; see `existingAccountIds`.
+     */
+    private val transactions: TransactionRunner = DirectTransactionRunner,
 ) {
 
     suspend fun publishFor(accounts: List<AccountUsage>) {
         val settings = settingsStore.settings.first()
         val nowMs = now()
 
-        val outcome = NotificationEvaluator.evaluate(
-            accounts = accounts,
-            settings = settings,
-            states = notificationDao.allStates().associate {
-                it.accountId to NotificationEvaluator.AccountState(
-                    accountId = it.accountId,
-                    lowQuotaEpisode = it.lowQuotaEpisode,
-                    lowQuotaActive = it.lowQuotaActive,
-                    lastProcessedFetchedAt = it.lastProcessedFetchedAt,
-                    windows = decodeWindows(it.windowsJson),
-                )
-            },
-            nowMs = nowMs,
-        )
+        val (outcome, claimed) = transactions.inTransaction {
+            // Only accounts that still exist, decided INSIDE the transaction, so a delete
+            // cannot slip in between the check and the writes it protects.
+            val live = notificationDao.existingAccountIds().toHashSet()
 
-        // Claim first, and advance state, whether or not anything can be posted. Skipping this
-        // when permission is missing would replay every threshold the account ever crossed the
-        // moment permission was granted.
-        val claimed = outcome.events.filter { event ->
-            notificationDao.claim(
-                NotificationEventEntity(
-                    eventKey = event.key,
-                    accountId = event.accountId,
-                    consumedAt = nowMs,
-                ),
-            ) != -1L
+            val outcome = NotificationEvaluator.evaluate(
+                accounts = accounts.filter { it.account.localId in live },
+                settings = settings,
+                states = notificationDao.allStates().associate {
+                    it.accountId to NotificationEvaluator.AccountState(
+                        accountId = it.accountId,
+                        lowQuotaEpisode = it.lowQuotaEpisode,
+                        lowQuotaActive = it.lowQuotaActive,
+                        lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                        windows = decodeWindows(it.windowsJson),
+                    )
+                },
+                nowMs = nowMs,
+            )
+
+            // Claim first, and advance state, whether or not anything can be posted. Skipping
+            // this when permission is missing would replay every threshold the account ever
+            // crossed the moment permission was granted.
+            val claimed = outcome.events.filter { event ->
+                notificationDao.claim(
+                    NotificationEventEntity(
+                        eventKey = event.key,
+                        accountId = event.accountId,
+                        consumedAt = nowMs,
+                    ),
+                ) != -1L
+            }
+
+            notificationDao.upsertStates(
+                // Carried-over state for an account that no longer exists is dropped here for
+                // the same foreign-key reason, rather than written and rejected.
+                outcome.states.filter { it.accountId in live }.map {
+                    NotificationStateEntity(
+                        accountId = it.accountId,
+                        lowQuotaEpisode = it.lowQuotaEpisode,
+                        lowQuotaActive = it.lowQuotaActive,
+                        lastProcessedFetchedAt = it.lastProcessedFetchedAt,
+                        windowsJson = json.encodeToString(WINDOWS_SERIALIZER, it.windows),
+                    )
+                },
+            )
+            notificationDao.pruneEventsBefore(nowMs - EVENT_RETENTION_MS)
+            outcome to claimed
         }
-
-        notificationDao.upsertStates(
-            outcome.states.map {
-                NotificationStateEntity(
-                    accountId = it.accountId,
-                    lowQuotaEpisode = it.lowQuotaEpisode,
-                    lowQuotaActive = it.lowQuotaActive,
-                    lastProcessedFetchedAt = it.lastProcessedFetchedAt,
-                    windowsJson = json.encodeToString(WINDOWS_SERIALIZER, it.windows),
-                )
-            },
-        )
-        notificationDao.pruneEventsBefore(nowMs - EVENT_RETENTION_MS)
 
         if (!hasPermission()) return
 
@@ -104,8 +132,17 @@ class NotificationPublisher(
         val standingPrefs = context.getSharedPreferences(STANDING_PREFS, Context.MODE_PRIVATE)
         val lastStanding = standingPrefs.getString(STANDING_FINGERPRINT, null)
         val standingNow = fingerprint(outcome.standingFindings)
+        // The fingerprint records what is TRUE, and is updated whether or not anything posts.
+        // It used to be written only after the post decision, so a refresh that found the
+        // condition gone — credits spent, nothing to say — returned early and left the old
+        // fingerprint behind. When the condition came back unchanged it matched that stale
+        // fingerprint, read as "already posted", and was never posted again. Nothing is
+        // cancelled here: a cleared condition takes nothing out of the shade, it only stops
+        // pretending the shade still shows it.
+        if (standingNow != lastStanding) {
+            standingPrefs.edit().putString(STANDING_FINGERPRINT, standingNow).apply()
+        }
         if (!shouldPost(alerts, outcome.standingFindings, lastStanding)) return
-        standingPrefs.edit().putString(STANDING_FINGERPRINT, standingNow).apply()
 
         if (findings.isEmpty()) {
             // Nothing new to say, and NOTHING is taken down. This used to cancel the
