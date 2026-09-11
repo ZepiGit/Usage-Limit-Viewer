@@ -113,7 +113,11 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended)
+    // The CORE icon set, not the extended one. Seven icons are used in the whole app; the
+    // extended artifact carries several thousand and was the largest single dependency in the
+    // debug build — the one a tester installs. The three glyphs core lacks are drawn locally
+    // in `AppIcons.kt` from their Material path data.
+    implementation(libs.compose.material.icons.core)
     implementation(libs.compose.material3.window.size)
     implementation(libs.androidx.window)
     debugImplementation(libs.compose.ui.tooling)
