@@ -240,7 +240,9 @@ public struct CodexClient: SyncProvider, Sendable {
         // Reading the applicable count off whichever source answered meant it existed only on
         // the FALLBACK path — the redeem button lost its gate precisely when the authoritative
         // call succeeded.
-        let embedded = usagePayload["rate_limit_reset_credits"] as? [String: Any]
+        // Both spellings, as the row parser already accepts: the count lookups read only the
+        // snake-case container, so a camel-case summary kept its rows and lost both counts.
+        let embedded = JSONSupport.object(usagePayload, "rate_limit_reset_credits", "rateLimitResetCredits")
 
         return UsageResult(
             windows: windows,
@@ -322,7 +324,7 @@ public struct CodexClient: SyncProvider, Sendable {
             // Cancellation is the caller's decision, not an endpoint fault to absorb.
             throw error
         } catch {
-            let embedded = usagePayload["rate_limit_reset_credits"] as? [String: Any]
+            let embedded = JSONSupport.object(usagePayload, "rate_limit_reset_credits", "rateLimitResetCredits")
             return (
                 rows: CodexUsageParser.parseEmbeddedResetCredits(usagePayload),
                 available: CodexUsageParser.availableCreditCount(embedded)
@@ -351,7 +353,14 @@ public struct ClaudeClient: SyncProvider, Sendable {
     }
 
     public func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
-        let response = try await httpClient.request(
+        // Through `ProviderHTTP.request`, like every other adapter. Calling the client directly
+        // meant a 401 surfaced as the client's own `HTTPError.status` before `ensureSuccess`
+        // could translate it, so this adapter never produced `ProviderError.unauthorised` — and
+        // that is the one error the engine's reactive refresh is triggered by. A Claude
+        // credential that expired therefore read as a generic failure, refreshed nothing, and
+        // failed the same way on every sync after.
+        let response = try await ProviderHTTP.request(
+            httpClient,
             url: "https://api.anthropic.com/api/oauth/usage",
             method: "GET",
             headers: [
@@ -361,9 +370,9 @@ public struct ClaudeClient: SyncProvider, Sendable {
                 // gateway answers 404 as though the routes were not there at all.
                 "anthropic-beta": "oauth-2025-04-20",
             ],
-            body: nil
+            body: nil,
+            endpoint: "claude usage"
         )
-        try ProviderHTTP.ensureSuccess(response, endpoint: "claude usage")
         let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "claude usage")
         return UsageResult(windows: ClaudeUsageParser.parse(payload, now: now()))
     }
@@ -430,18 +439,23 @@ public struct AntigravityClient: SyncProvider, Sendable {
                 )
             } catch let error as CancellationError {
                 throw error
+            } catch ProviderError.unauthorised {
+                // Recorded rather than thrown at once: a stale credential is the usual
+                // cause, but a retired shard also rejects perfectly good tokens, and the
+                // remaining hosts are the cheapest way to tell the two apart.
+                //
+                // Caught HERE, because `ProviderHTTP.request` has already translated the 401
+                // into this error and thrown it — the status check that used to follow the
+                // call was unreachable, so the rejection fell into the generic catch below as
+                // "first failure" and an earlier shard's 503 outranked it. The policy this
+                // adapter documents, prefer a credential rejection over an unrelated shard
+                // failure, was never actually applied.
+                if authRejection == nil { authRejection = .unauthorised }
+                continue
             } catch {
                 // A shard being unreachable or misbehaving reflects on the shard; the next
                 // one may answer perfectly well.
                 if firstFailure == nil { firstFailure = error }
-                continue
-            }
-
-            if response.status == 401 || response.status == 403 {
-                // Recorded rather than thrown at once: a stale credential is the usual
-                // cause, but a retired shard also rejects perfectly good tokens, and the
-                // remaining hosts are the cheapest way to tell the two apart.
-                if authRejection == nil { authRejection = .unauthorised }
                 continue
             }
             guard (200...299).contains(response.status) else {

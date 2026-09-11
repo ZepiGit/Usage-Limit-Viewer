@@ -94,8 +94,15 @@ enum TokenExchange {
         now: Date
     ) async throws -> OAuthCredentials {
         do {
+            // Sent ONCE. Every body through here spends something the server accepts only
+            // once — a rotating refresh token or an authorization code — and it is consumed by
+            // arriving, not by the reply getting back. With the client's default retry budget
+            // a timed-out exchange re-presented the same grant, which the server then refused
+            // as spent, and the account read as signed out over a response that was merely
+            // lost. A single attempt cannot recover that response either; it just stops
+            // turning an ambiguous failure into a definite rejection.
             let response = try await client.request(
-                url: url, method: "POST", headers: headers, body: body)
+                url: url, method: "POST", headers: headers, body: body, retries: 0)
             try rejectFailure(status: response.status, endpoint: endpoint)
             let payload = try ProviderHTTP.decodeObject(response.body, endpoint: endpoint)
             return try credentials(from: payload, endpoint: endpoint, now: now)
@@ -200,14 +207,10 @@ extension AntigravityClient {
             now: now())
 
         // Google never returns a refresh token on a refresh grant; the original stays valid
-        // until it is revoked. The engine's merge would carry it forward anyway, but stating it
-        // here means an adapter used on its own cannot deauthenticate an account after an hour.
-        return OAuthCredentials(
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken ?? stored,
-            idToken: refreshed.idToken ?? credentials.idToken,
-            expiresAt: refreshed.expiresAt,
-            scope: refreshed.scope ?? credentials.scope)
+        // until it is revoked. `merging` carries it forward — and the id token and scope — so
+        // an adapter used on its own cannot deauthenticate an account after an hour. It was a
+        // second copy of that same merge, field for field; one is enough to keep right.
+        return credentials.merging(refreshed: refreshed)
     }
 }
 

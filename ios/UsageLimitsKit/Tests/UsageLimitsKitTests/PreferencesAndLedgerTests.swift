@@ -310,4 +310,57 @@ final class PreferencesAndLedgerTests: XCTestCase {
         XCTAssertEqual(stored.heldResetCredits, 2)
         XCTAssertEqual(stored.spendableResetCredits, 0)
     }
+    // MARK: - Arithmetic on a decoded interval
+
+    /// `2 * minutes * 60` is Int arithmetic and trapped past Int.max / 120. The interval comes
+    /// off a settings file with a floor and no ceiling, so a hand-edited or corrupt file could
+    /// crash every launch. Against the Int version this test aborts the process.
+    func testAHugeSyncIntervalDoesNotOverflowTheStaleThreshold() {
+        XCTAssertEqual(
+            Severity.staleAfter(syncIntervalMinutes: Int.max),
+            TimeInterval(Int.max) * 120)
+    }
+
+    // MARK: - One ledger step
+
+    /// A failed commit must leave the transition retryable.
+    ///
+    /// Split across save-then-claim, a failed first write left the ledger's cache advanced
+    /// (lastProcessedFetchedAt moved) and its file not; the retry then read the same snapshot
+    /// as a replay and skipped its quota edges. The warning was consumed and never returned,
+    /// with no crash and nothing posted.
+    func testAFailedLedgerWriteDoesNotConsumeTheTransition() async throws {
+        // A directory that does not exist yet: the first write fails, and creating it afterwards
+        // is "write access restored".
+        let missing = directory.appendingPathComponent("not-yet")
+        let ledger = NotificationLedger(directory: missing)
+        let now = Date(timeIntervalSince1970: 1_757_000_000)
+        let low = AccountSummary(
+            accountId: "acct", label: "Account acct",
+            snapshot: UsageSnapshot(
+                accountID: "acct", fetchedAt: now, status: .ok,
+                windows: [UsageWindow(
+                    id: "w", label: "5h limit", category: .fiveHour, usedPercent: 85,
+                    periodSeconds: 18_000, resetAt: nil, exhausted: false)]))
+
+        do {
+            _ = try await ledger.evaluateAndClaim(accounts: [low], settings: NotificationSettings(), at: now)
+            XCTFail("the first write must fail: the directory does not exist")
+        } catch {
+            // Expected.
+        }
+
+        try FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        let retried = try await ledger.evaluateAndClaim(
+            accounts: [low], settings: NotificationSettings(), at: now)
+
+        XCTAssertEqual(
+            retried.map(\.line), ["Account acct · 5h limit: less than 20% remaining"],
+            "the transition must still be announced once the write succeeds")
+        // And once more, to prove the claim then holds.
+        let again = try await ledger.evaluateAndClaim(
+            accounts: [low], settings: NotificationSettings(), at: now.addingTimeInterval(1))
+        XCTAssertTrue(again.isEmpty)
+    }
+
 }

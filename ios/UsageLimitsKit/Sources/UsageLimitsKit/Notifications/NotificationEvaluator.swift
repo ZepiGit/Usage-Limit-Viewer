@@ -314,7 +314,12 @@ public enum NotificationEvaluator {
                 guard let id = keys[window.id] else { continue }
                 var windowState = state.windows[id] ?? WindowState()
                 let remaining = window.remainingPercent
-                let exhausted = window.exhausted
+                // The window's own severity, which counts a known 0 % as exhausted whether or
+                // not the provider also set its flag. Reading the flag alone reached only the
+                // warning and critical tiers for a window at 0 %, so a user with just the
+                // exhausted alert switched on heard nothing when a limit ran out. Android reads
+                // the severity, and both must say the same thing about the same payload.
+                let exhausted = window.severity == .exhausted
 
                 // An unknown percentage does not hold a window low: unknown is an absence of
                 // evidence, and the account already reads as error on screen.
@@ -491,16 +496,6 @@ public enum NotificationEvaluator {
         }
     }
 
-    /// Whether the account has climbed back out of its low-quota episode.
-    ///
-    /// An unknown percentage does not block recovery. Treating it as low did, in the Kotlin
-    /// original: one window whose figure the provider stopped reporting vetoed recovery for
-    /// good, so the episode never ended and the account never alerted again. Unknown is an
-    /// absence of evidence, and such an account already reads as an error on screen — adding
-    /// permanent silence on top of that helps nobody.
-    ///
-    /// `allSatisfy` over an empty list is true, which is the same judgement: an account
-    /// reporting no windows is not an account known to be low.
     /// Identities for every window in one snapshot, keyed by the window's own id.
     ///
     /// Category and label together, as on Android, because ids are provider-assigned and a
@@ -527,11 +522,6 @@ public enum NotificationEvaluator {
             keys[window.id] = counts[base] == 1 ? base : "\(base)#\(window.id)"
         }
         return keys
-    }
-
-    private static func hasRecovered(_ windows: [UsageWindow]) -> Bool {
-        guard !windows.contains(where: { $0.exhausted }) else { return false }
-        return windows.allSatisfy { ($0.remainingPercent ?? warningPercent) >= warningPercent }
     }
 
     // MARK: Resets and credits

@@ -194,7 +194,7 @@ public actor UsageLimitsContainer {
     /// same key re-entered lands on the same account.
     static func pastedKeyIdentity(_ key: String) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in Array(key.utf8) {
+        for byte in key.utf8 {
             hash ^= UInt64(byte)
             hash = hash &* 0x0000_0100_0000_01B3
         }
@@ -364,24 +364,18 @@ public actor UsageLimitsContainer {
     /// refresh want the same sync and different notification behaviour, and because a failure to
     /// persist the ledger must not fail the refresh the user is watching.
     public func pendingNotifications() async throws -> [NotificationEvaluator.Event] {
-        let outcome = NotificationEvaluator.evaluate(
-            accounts: await repository.usage().map(AccountSummary.init),
-            settings: await settingsStore.settings().notifications,
-            states: await ledger.states(),
-            now: now())
-
-        // State first. If the claim fails after this, the worst case is an edge announced twice;
-        // if the state were saved last and failed, every episode would restart on the next sync
-        // and every threshold would fire again.
-        try await ledger.save(states: outcome.states)
-
-        // EVERY edge is claimed, including the ones carrying no text. A blank line means the
-        // evaluator reached a threshold the user has switched off, or a weaker tier consumed by
-        // a stronger one — and the claim is what stops it arriving later as a stale alert the
-        // moment that setting is switched back on. Only the ones with something to say come
-        // back, so the caller can post each of them without inspecting anything.
-        let claimed = try await ledger.claim(outcome.events, at: now())
-        return claimed.filter { !$0.line.isEmpty }
+        // One ledger step, not evaluate-then-save-then-claim from here. Split across three
+        // calls, a failed first write left the ledger's cache advanced and its file not, and
+        // the retry read the snapshot as a replay: the transition was consumed and its alert
+        // lost. See `NotificationLedger.evaluateAndClaim` for the ordering that closes it.
+        //
+        // EVERY edge is claimed in there, including the ones carrying no text. A blank line
+        // means the evaluator reached a threshold the user has switched off, or a weaker tier
+        // consumed by a stronger one — and the claim is what stops it arriving later as a
+        // stale alert the moment that setting is switched back on.
+        let accounts = await repository.usage().map(AccountSummary.init)
+        let settings = await settingsStore.settings().notifications
+        return try await ledger.evaluateAndClaim(accounts: accounts, settings: settings, at: now())
     }
 
     public func add(_ account: ProviderAccount) async throws {

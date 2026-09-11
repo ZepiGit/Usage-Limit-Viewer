@@ -54,4 +54,14 @@ final class CountdownTests: XCTestCase {
         XCTAssertFalse(sameDay.isEmpty)
         XCTAssertTrue(nextWeek.count > sameDay.count)
     }
+    /// The boundary itself. `-Double(Int.min) - 1` was meant as Int.max, but 2^63 - 1 is not a
+    /// Double and rounds back up to 2^63, so a clamp to it admitted the one value it existed
+    /// to stop and `Int(_:)` trapped there. Against that version this test aborts the process.
+    func testAnIntervalAtTheIntBoundaryDoesNotTrap() {
+        let epoch = Date(timeIntervalSince1970: 0)
+        let far = Date(timeIntervalSince1970: Double(Int.max))
+        XCTAssertEqual(Countdown.format(until: far, from: epoch), Countdown.format(seconds: Int.max))
+        XCTAssertEqual(Countdown.format(until: epoch, from: far), "now")
+    }
+
 }

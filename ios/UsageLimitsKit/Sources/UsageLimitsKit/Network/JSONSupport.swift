@@ -80,6 +80,9 @@ public enum JSONSupport {
 
     public static func int64(_ source: [String: Any]?, _ names: String...) -> Int64? {
         guard let value = first(source, names) else { return nil }
+        // The exclusion `double` applies and this did not: a JSON `true` is an NSNumber whose
+        // int64Value is 1, so `"reset_after_seconds": true` became a reset one second away.
+        if isBooleanLiteral(value) { return nil }
         if let number = value as? NSNumber { return number.int64Value }
         if let text = value as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
