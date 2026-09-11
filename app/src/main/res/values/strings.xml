@@ -3,4 +3,5 @@
     <string name="app_name">Usage Limits</string>
     <string name="widget_compact_description">Compact quota row: 5h, weekly, next reset and status</string>
     <string name="widget_detailed_description">Per-account quota with usage bars and reset countdowns</string>
+    <string name="widget_minimal_description">A ring per account: usage at a glance, with the reset countdown</string>
 </resources>
