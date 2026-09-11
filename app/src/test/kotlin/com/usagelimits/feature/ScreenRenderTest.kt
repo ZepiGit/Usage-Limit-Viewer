@@ -1,7 +1,10 @@
 package com.usagelimits.feature
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performScrollToNode
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.settings.AppSettings
 import com.usagelimits.core.model.ProviderAccount
@@ -243,12 +246,36 @@ class ScreenRenderTest {
                 onNotifyAuthExpired = {},
                 onNotifyResetApproaching = {},
                 onNotifyCreditExpiring = {},
+                onShowTier = {},
+                onShowRenewal = {},
             )
         }
 
+        // Scrolled to rather than assumed visible. This assertion used to pass because the
+        // notification rows happened to fall inside the viewport; adding a section above them
+        // pushed the row out of it and failed a test about whether the toggle EXISTS. A
+        // LazyColumn only composes what is on screen, so anything below the fold has to be
+        // scrolled to before it can be found.
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasText("Below 20% left", substring = true))
         compose.onAllNodesWithText("Below 20% left", substring = true)
             .fetchSemanticsNodes()
-            .let { assertTrue("the 20% toggle should be on screen", it.isNotEmpty()) }
+            .let { assertTrue("the 20% toggle should be reachable", it.isNotEmpty()) }
+
+        // The two display switches, which decide what the overview shows per account.
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasText("Show subscription tier", substring = true))
+        compose.onAllNodesWithText("Show subscription tier", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the tier switch should be reachable", it.isNotEmpty()) }
+        compose.onAllNodesWithText("Show renewal time", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the renewal switch should be reachable", it.isNotEmpty()) }
+
+        // And the section that used to sit between them and Diagnostics is gone.
+        compose.onAllNodesWithText("Credential storage", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the Security section should be gone", it.isEmpty()) }
     }
 
     @Test

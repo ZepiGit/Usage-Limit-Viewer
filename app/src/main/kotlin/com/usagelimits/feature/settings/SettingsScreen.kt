@@ -45,6 +45,8 @@ fun SettingsScreen(
     onNotifyAuthExpired: (Boolean) -> Unit,
     onNotifyResetApproaching: (Boolean) -> Unit,
     onNotifyCreditExpiring: (Boolean) -> Unit,
+    onShowTier: (Boolean) -> Unit,
+    onShowRenewal: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
@@ -88,6 +90,25 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        item { SectionHeader("Overview") }
+        item {
+            UsageCard {
+                ToggleRow(
+                    title = "Show subscription tier",
+                    subtitle = "Plus, Pro, Max — beside the provider name",
+                    checked = settings.showSubscriptionTier,
+                    onChange = onShowTier,
+                )
+                ToggleRow(
+                    title = "Show renewal time",
+                    subtitle = "When the weekly or monthly allowance starts over, as opposed to " +
+                        "the next reset. Overview only — the widgets stay on one number.",
+                    checked = settings.showRenewalTime,
+                    onChange = onShowRenewal,
+                )
             }
         }
 

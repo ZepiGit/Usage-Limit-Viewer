@@ -35,6 +35,16 @@ data class AppSettings(
      * again on every sync is the app overruling them.
      */
     val accountsManuallyOrdered: Boolean = false,
+    /** Show the plan tier — Plus, Pro, Max — beside the provider name. */
+    val showSubscriptionTier: Boolean = true,
+    /**
+     * Show when the long allowance renews, on the overview only.
+     *
+     * Off by default, and deliberately not in the widgets: the widget's job is the number you
+     * are about to run out of, and a second date competing with the next reset is the kind of
+     * detail that makes a glanceable tile unglanceable.
+     */
+    val showRenewalTime: Boolean = false,
 ) {
     companion object {
         /**
@@ -109,6 +119,10 @@ class SettingsStore(context: Context) {
         it[Keys.ACCOUNTS_MANUAL_ORDER] = ordered
     }
 
+    suspend fun setShowSubscriptionTier(show: Boolean) = edit { it[Keys.SHOW_TIER] = show }
+
+    suspend fun setShowRenewalTime(show: Boolean) = edit { it[Keys.SHOW_RENEWAL] = show }
+
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)
     }
@@ -130,6 +144,8 @@ class SettingsStore(context: Context) {
         resetCreditExpiryLeadMinutes =
             this[Keys.CREDIT_LEAD_MINUTES] ?: AppSettings.DEFAULT_CREDIT_LEAD_MINUTES,
         accountsManuallyOrdered = this[Keys.ACCOUNTS_MANUAL_ORDER] ?: false,
+        showSubscriptionTier = this[Keys.SHOW_TIER] ?: true,
+        showRenewalTime = this[Keys.SHOW_RENEWAL] ?: false,
     )
 
     private object Keys {
@@ -146,5 +162,7 @@ class SettingsStore(context: Context) {
         val NOTIFY_CREDIT_EXPIRING = booleanPreferencesKey("notify_reset_credit_expiring")
         val CREDIT_LEAD_MINUTES = intPreferencesKey("reset_credit_expiry_lead_minutes")
         val ACCOUNTS_MANUAL_ORDER = booleanPreferencesKey("accounts_manually_ordered")
+        val SHOW_TIER = booleanPreferencesKey("show_subscription_tier")
+        val SHOW_RENEWAL = booleanPreferencesKey("show_renewal_time")
     }
 }

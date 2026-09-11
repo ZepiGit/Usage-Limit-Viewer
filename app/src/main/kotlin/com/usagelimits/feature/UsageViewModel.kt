@@ -310,6 +310,14 @@ class UsageViewModel(
         }
     }
 
+    fun setShowSubscriptionTier(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setShowSubscriptionTier(enabled) }
+    }
+
+    fun setShowRenewalTime(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setShowRenewalTime(enabled) }
+    }
+
     fun setNotifyBelow20(enabled: Boolean) {
         viewModelScope.launch { container.settingsStore.setNotifyBelow20Percent(enabled) }
     }

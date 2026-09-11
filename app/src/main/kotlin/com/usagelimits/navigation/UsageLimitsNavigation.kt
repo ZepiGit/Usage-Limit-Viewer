@@ -232,6 +232,8 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         onNotifyAuthExpired = viewModel::setNotifyAuthExpired,
                         onNotifyResetApproaching = viewModel::setNotifyResetApproaching,
                         onNotifyCreditExpiring = viewModel::setNotifyCreditExpiring,
+                        onShowTier = viewModel::setShowSubscriptionTier,
+                        onShowRenewal = viewModel::setShowRenewalTime,
                     )
                 }
 
