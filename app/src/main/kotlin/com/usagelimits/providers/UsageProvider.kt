@@ -57,16 +57,25 @@ sealed interface LoginChallenge {
     /**
      * No flow at all: the user creates a key on the provider's own console and pastes it.
      *
-     * The clumsiest of the three, and for Kimi Code the only honest one. Its device flow is
-     * bound to `kimi-cli`'s client id and the model API gates on an `X-Msh-Platform`
-     * allowlist that answers everything else with `403 access_terminated`, so driving it
-     * would mean impersonating another client past an access control the provider put there
-     * deliberately. See docs/providers-kimi.md.
+     * The clumsiest of the three, and Kimi Code's second way in: its device flow is the
+     * default, but the coding API admits only programs Moonshot has allowlisted by name, and
+     * a key from the user's own console works whether or not this app is on that list yet.
+     * See docs/providers-kimi.md.
      */
     data class ApiKey(
         val consoleUrl: String,
         val hint: String,
     ) : LoginChallenge
+}
+
+/**
+ * A provider that can ALSO be connected with a key the user pastes, beside its OAuth flow.
+ *
+ * Offered as a second button, never instead of the flow: the flow is the one that costs the
+ * user nothing, and the key is for when the flow's account cannot reach the API.
+ */
+interface KeyLoginCapable {
+    fun keyLoginChallenge(): LoginChallenge.ApiKey
 }
 
 /**

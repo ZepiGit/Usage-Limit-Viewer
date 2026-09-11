@@ -1,45 +1,78 @@
 # Kimi Code
 
-The fifth provider, and the only one that does not sign in with OAuth.
+The fifth provider. It signs in with Kimi's RFC 8628 device flow, under this app's own name,
+and takes a key from the user's console as the second way in.
 
-## Why not OAuth
+## The identity question, answered
 
-Kimi Code has an RFC 8628 device-code flow. This app does not use it, and the reason is an
-access control rather than a technical obstacle:
+For a while this was the one provider without OAuth, on the reading that its device flow
+belonged to `kimi-cli` and that driving it meant impersonating that client. Reading the
+programs that actually drive it showed the reading was half right:
 
-- The public client id used by every published integration — `17e5f671-…` — is **kimi-cli's
-  own**. There is no separately registered client id available to third-party clients.
-- `api.kimi.com/coding/v1` additionally gates on an `X-Msh-Platform` header against a
-  server-side allowlist. Values outside it are answered with `403 access_terminated`.
+- The client id — `17e5f671-…` — is **public and shared**. The first-party CLI, CLIProxyAPI
+  (`internal/auth/kimi/kimi.go`), pi and others all present the same one to
+  `auth.kimi.com`. There is no per-program client id, and none is expected.
+- What Moonshot gates on is the **`X-Msh-Platform` header** on `api.kimi.com/coding`, which
+  names the calling program, and its `User-Agent`. The allowlist is by program name, and
+  Moonshot extends it on request: pi ([moonshotai/kimi-code#2185][pi]) and Cline
+  ([moonshotai/kimi-cli#2322][cline]) were added under their own names; CLIProxyAPI sends
+  `X-Msh-Platform: CLIProxyAPI` and is thanked by Moonshot in its README.
+- What Moonshot forbids — in its membership guide and in every one of those threads — is
+  **spoofing**: presenting another program's identity. That is the thing this project's rule
+  against circumventing provider protections also forbids, and it is the thing this app does
+  not do.
 
-So driving that flow from this app would mean presenting another program's client identity and
-platform header in order to pass a check the provider put there deliberately. The open request
-asking Moonshot for a third-party client id — [moonshotai/kimi-code#1795][issue] — describes
-shipping that combination as impersonation, and it has not been granted.
+So the app sends its own name, `X-Msh-Platform: UsageLimits` with a `UsageLimits/<version>`
+user agent, on every request to Kimi — the device authorization, the poll, the refresh and
+the usage read alike — and never `kimi_cli`. That is honest. What it is not yet is
+allowlisted: until Moonshot adds the name, the coding API may answer the usage read with
+`403 access_terminated` for an OAuth token, in which case the app reports "Access denied" and
+offers the key below. Asking for the allowlist entry is an issue on `moonshotai/kimi-code` in
+the shape of [#2185][pi]; the request states the program name, the header values and that it
+reads `/v1/usages` only.
 
-That is squarely inside this project's rule against circumventing a provider's own protection
-mechanisms, so the flow is not used, and will not be until a client id exists that this app is
-entitled to present.
+[pi]: https://github.com/moonshotai/kimi-code/issues/2185
+[cline]: https://github.com/moonshotai/kimi-cli/issues/2322
 
-[issue]: https://github.com/moonshotai/kimi-code/issues/1795
+## Auth flow
 
-### What is used instead
+1. `beginLogin()` POSTs `client_id` as a form to
+   `https://auth.kimi.com/api/oauth/device_authorization`. The response carries `device_code`,
+   `user_code`, `verification_uri` (and usually `verification_uri_complete`, which pre-fills the
+   code), `expires_in` and `interval`.
+2. The user code is shown and the verification page opened; the device code rides along in the
+   challenge, never on screen. Only the half before the separator is displayed
+   (`KimiProvider.displayCode`).
+3. `completeLogin()` polls `https://auth.kimi.com/api/oauth/token` with
+   `grant_type=urn:ietf:params:oauth:grant-type:device_code`, the device code and the client
+   id, at the provider's interval (never below five seconds). Kimi answers a pending poll with
+   **200 and an `error` body** (`authorization_pending`, `slow_down`), as CLIProxyAPI reads it;
+   a failed status is treated as pending too, for a server that follows the RFC's 400. A poll
+   that does not get through keeps the loop going as well. `expired_token` and `access_denied`
+   end it; the deadline bounds it either way.
+4. The token response is `access_token`, `refresh_token`, `token_type`, `expires_in`, `scope`.
+   Refresh is an ordinary `refresh_token` grant against the same endpoint, sent once (see
+   `HttpClient.oneTimeGrant`); a response that omits the refresh token means "keep the old
+   one".
 
-A key the user creates in their own Kimi Code console and pastes into the app. It is stored in
-the Android Keystore and the iOS keychain exactly like every other credential, is never logged
-and never written to Room, and is validated against the usage endpoint before an account row
-is created — a key that cannot read usage is not a connected account, and storing it would
-leave a permanently failing row the user then has to work out how to remove.
+### The key, still
 
-There is nothing to refresh: an API key carries no expiry and no refresh grant. `refresh()`
-returns the credential unchanged rather than throwing, because the sync engine calls it
-whenever it suspects staleness and for this provider that suspicion is never right. A revoked
-key surfaces as a 401 on the usage call, which is the path that already marks an account as
-needing attention.
+A key the user creates in their own Kimi Code console and pastes into the app — offered as a
+button under the device-code screen and beside "try again". It is stored in the Android
+Keystore and the iOS keychain exactly like every other credential, is never logged and never
+written to Room, and is validated against the usage endpoint before an account row is created —
+a key that cannot read usage is not a connected account, and storing it would leave a
+permanently failing row the user then has to work out how to remove.
+
+A key-connected account has nothing to refresh: `refresh()` returns it unchanged rather than
+throwing, because the sync engine calls it whenever it suspects staleness and for a key that
+suspicion is never right. A revoked key surfaces as a 401 on the usage call, which is the path
+that already marks an account as needing attention.
 
 ## Usage endpoint
 
-`GET https://api.kimi.com/coding/v1/usages`, with `Authorization: Bearer <key>`.
+`GET https://api.kimi.com/coding/v1/usages`, with `Authorization: Bearer <token or key>` and
+the app's identity headers.
 
 ### The field-semantics trap
 
@@ -81,11 +114,11 @@ Moonshot / Kimi Open Platform is a different surface: API-key only, and its
 This app is about limits and when they reset, so that surface is out of scope; an account with
 one has nothing for the overview to draw.
 
-## Which account a key belongs to
+## Which account a credential belongs to
 
-A pasted key carries no identity of its own, so the account has to be named from something
-else. Two candidates, and the order between them decides what happens on the day the user
-rotates their key:
+Neither a pasted key nor Kimi's access token carries an identity of its own, so the account has
+to be named from something else. Two candidates, and the order between them decides what
+happens on the day the user rotates their key:
 
 1. **The id Kimi states in its usage response** — `userId`, `user_id`, `accountId`,
    `account_id`, or `user.id` nested. This survives a rotation.
