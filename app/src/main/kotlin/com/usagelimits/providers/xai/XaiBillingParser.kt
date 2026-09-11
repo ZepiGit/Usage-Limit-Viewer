@@ -63,22 +63,42 @@ object XaiBillingParser {
     /**
      * Parses the weekly credit view.
      *
-     * [nowMs] is part of the parser contract the four providers share; xAI states the period
-     * end absolutely, so nothing here currently needs it.
+     * [nowMs] decides whether the reported period is the CURRENT one, which is what makes an
+     * absent percentage readable as zero — see below.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun parseCredits(payload: JsonObject, nowMs: Long): List<UsageWindow> {
-        // No percentage means no credit window at all — better one missing row than a bar
-        // drawn from an assumed zero.
         val config = config(payload)
-        val usedPercent = JsonSupport.double(config, "creditUsagePercent", "credit_usage_percent")
-            ?.takeIf { it.isFinite() }
-            ?: return emptyList()
 
+        // Two spellings of the period: nested `currentPeriod{type,start,end}` in the credit
+        // view, and the flat `usagePeriodType/Start/End` trio the unified-billing view
+        // carries beside its monthly figures.
         val period = JsonSupport.obj(config, "currentPeriod", "current_period")
-        val startMs = Instants.parse(JsonSupport.string(period, "start"))
-        val endMs = Instants.parse(JsonSupport.string(period, "end"))
+        val startMs = Instants.parse(
+            JsonSupport.string(period, "start")
+                ?: JsonSupport.string(config, "usagePeriodStart", "usage_period_start"),
+        )
+        val endMs = Instants.parse(
+            JsonSupport.string(period, "end")
+                ?: JsonSupport.string(config, "usagePeriodEnd", "usage_period_end"),
+        )
         val periodType = JsonSupport.string(period, "type")
+            ?: JsonSupport.string(config, "usagePeriodType", "usage_period_type")
+
+        // An ABSENT percentage is a zero when the period is live, and unknown otherwise.
+        //
+        // xAI's billing message is proto3, and `credit_usage_percent` is an implicit-presence
+        // float there: a value of exactly zero is not written to the wire at all. So the one
+        // week in which the user has spent nothing — the first week, the week after a reset —
+        // arrives with the field missing, and reading that as "no credit window" is how the
+        // weekly row vanished from the app the moment it read 100 % remaining. The provider's
+        // own web client reads the omitted scalar as zero; so does this, but only when the
+        // payload proves it describes the period that contains now. A period in the past, or
+        // none at all, is a payload this parser does not understand, and that stays a missing
+        // row rather than an invented bar.
+        val reported = JsonSupport.double(config, "creditUsagePercent", "credit_usage_percent")
+            ?.takeIf { it.isFinite() }
+        val periodIsLive = startMs != null && endMs != null && nowMs in startMs..endMs
+        val usedPercent = reported ?: if (periodIsLive) 0.0 else return emptyList()
 
         // The measured span takes precedence so a change upstream reclassifies itself instead
         // of mislabelling a fortnight as a week. Without a usable span, the reported type can
@@ -120,9 +140,15 @@ object XaiBillingParser {
      *
      * [nowMs] is unused for the same reason as in [parseCredits].
      */
-    @Suppress("UNUSED_PARAMETER")
     fun parseBilling(payload: JsonObject, nowMs: Long): List<UsageWindow> {
         val config = config(payload)
+
+        // The unified-billing shape of this view carries the weekly figures too —
+        // `creditUsagePercent` with the flat `usagePeriod*` trio — so the weekly row is read
+        // from here as well. It costs nothing when both views answer (merge keeps the credit
+        // view's copy) and keeps the row when the credit view alone stops answering.
+        val weekly = parseCredits(payload, nowMs)
+
         val monthlyLimit = cents(config, "monthlyLimit", "monthly_limit")
         // Every name the production shape carries for spend. Reading `used` alone meant a
         // payload whose spend arrived as `includedUsed` — the pinned production shape — read
@@ -131,14 +157,14 @@ object XaiBillingParser {
         val used = cents(config, "used")
             ?: cents(config, "includedUsed", "included_used")
             ?: cents(config, "totalUsed", "total_used")
-        // Neither figure present means this is not a billing payload we understand.
-        if (monthlyLimit == null && used == null) return emptyList()
+        // Neither figure present means there is no monthly view here to read.
+        if (monthlyLimit == null && used == null) return weekly
 
         val resetAt = Instants.parse(
             JsonSupport.string(config, "billingPeriodEnd", "billing_period_end"),
         )
 
-        val windows = mutableListOf<UsageWindow>()
+        val windows = weekly.toMutableList()
 
         // Spend past the allowance is on-demand spend, so the included bar stops at 100 %.
         // And spend that is ABSENT stays unknown: a limit with no spend figure is a window
