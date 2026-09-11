@@ -186,7 +186,8 @@ public actor UsageHTTPClient {
         method: String = "GET",
         headers: [String: String] = [:],
         body: Data? = nil,
-        retries: Int? = nil
+        retries: Int? = nil,
+        devicePoll: Bool = false
     ) async throws -> HTTPResponse {
         // Validated before anything is built or sent, so a plaintext URL
         // never even reaches the transport.
@@ -211,7 +212,8 @@ public actor UsageHTTPClient {
             switch try await verdict(
                 for: request,
                 attemptIndex: attemptIndex,
-                budget: retries.map { max(0, $0) } ?? maxRetries
+                budget: retries.map { max(0, $0) } ?? maxRetries,
+                devicePoll: devicePoll
             ) {
             case .delivered(let response):
                 return response
@@ -240,7 +242,7 @@ public actor UsageHTTPClient {
     /// never mistake a caller's exit for a flaky socket — and folds every
     /// other failure into the verdict.
     private func verdict(
-        for request: URLRequest, attemptIndex: Int, budget: Int
+        for request: URLRequest, attemptIndex: Int, budget: Int, devicePoll: Bool
     ) async throws -> Verdict {
         let budgetSpent = attemptIndex >= budget
 
@@ -262,7 +264,9 @@ public actor UsageHTTPClient {
             let headerFields = Self.normalisedHeaders(http.allHeaderFields)
             let text = String(decoding: data, as: UTF8.self)
 
-            if (200..<300).contains(status) {
+            // Device grants carry protocol errors as full JSON, including on HTTP 400/403.
+            // Truncation belongs to diagnostics, never to a payload a provider must parse.
+            if (200..<300).contains(status) || (devicePoll && (status == 400 || status == 403)) {
                 return .delivered(HTTPResponse(status: status, body: text, headers: headerFields))
             }
 
