@@ -52,15 +52,15 @@ quota-reading halves of that work.
 
 | Provider | Login | What is read |
 |---|---|---|
-| **OpenAI Codex** (ChatGPT subscription) | OpenAI's device-code flow — you type a short code at `auth.openai.com/codex/device` while the app polls | Five-hour, weekly and (on some plans) monthly windows, code-review limits, and rate-limit reset credits, which can also be spent from the app |
+| **OpenAI Codex** (ChatGPT subscription) | Authorization code + PKCE in the system browser, returning to the Codex CLI's loopback redirect on port 1455; OpenAI's device-code flow steps in only if that port is taken | Five-hour, weekly and (on some plans) monthly windows, code-review limits, and rate-limit reset credits, which can also be spent from the app |
 | **Claude** (Anthropic subscription) | Authorization code + PKCE in the system browser, returning to a loopback redirect on port 54545 | Five-hour window plus the weekly windows Anthropic reports, including per-model ones |
 | **Antigravity** (Google) | Google installed-app authorization code + PKCE, loopback redirect on port 51121 | The already-grouped quota buckets Google returns per model family, five-hour and weekly |
 | **Grok** (xAI) | RFC 8628 device flow, with the endpoints resolved from xAI's OIDC discovery document and validated to be x.ai hosts | Weekly credit usage and the monthly billing window |
 
-All four work on both platforms. The two device flows are the easier fit for a phone — nothing
-has to survive the app being backgrounded and no local port has to be free — while Claude and
-Antigravity pin loopback redirect URIs in their client registrations, so for those two the app
-binds the exact port they expect and answers one request on it. That is what RFC 8252 §7.3
+All four work on both platforms. Grok's device flow is the easier fit for a phone — nothing
+has to survive the app being backgrounded and no local port has to be free — while Codex, Claude
+and Antigravity pin loopback redirect URIs in their client registrations, so for those three the
+app binds the exact port they expect and answers one request on it. That is what RFC 8252 §7.3
 describes for a native app that cannot register a scheme, and it works on iOS because the sign-in
 is presented by `ASWebAuthenticationSession`, which runs in process: the app stays foregrounded
 and the socket stays alive. `docs/security.md` explains what the listener refuses and why.

@@ -17,10 +17,24 @@ public enum ProviderEndpoints {
     public enum Codex {
         public static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-        // Device authorization — the flow both platforms use. No redirect URI has to be
-        // registered and no loopback listener has to run. The provider generates the PKCE pair
-        // and returns it with the code, which means PKCE here is not the client-binding
-        // guarantee it normally is; that caveat is recorded in the research doc.
+        /// Authorization code + PKCE with a loopback redirect — the flow the Codex CLI itself
+        /// runs, and the default on both platforms. The client registration pins this exact
+        /// redirect, so the app listens on this port just as it does for Claude and
+        /// Antigravity. The extra parameters are the ones the first-party client sends; the
+        /// authorize page shapes what it shows by them.
+        public static let authorizeURL = "https://auth.openai.com/oauth/authorize"
+        public static let redirectURI = "http://localhost:1455/auth/callback"
+        public static let authorizeScope = "openid profile email offline_access"
+        public static let authorizeExtraParameters = [
+            "id_token_add_organizations": "true",
+            "codex_cli_simplified_flow": "true",
+            "originator": "codex_cli_rs",
+        ]
+
+        // Device authorization — the fallback when the redirect port is taken. No redirect URI
+        // has to be registered and no loopback listener has to run. The provider generates the
+        // PKCE pair and returns it with the code, which means PKCE here is not the
+        // client-binding guarantee it normally is; that caveat is recorded in the research doc.
         public static let deviceUserCodeURL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
         public static let deviceTokenURL = "https://auth.openai.com/api/accounts/deviceauth/token"
         public static let deviceVerificationURL = "https://auth.openai.com/codex/device"
