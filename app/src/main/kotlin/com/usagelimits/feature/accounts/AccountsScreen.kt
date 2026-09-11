@@ -1,5 +1,7 @@
 package com.usagelimits.feature.accounts
 
+import com.usagelimits.ui.theme.LocalMotionEnabled
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -128,7 +130,9 @@ fun AccountsScreen(
         }
 
         items(visible, key = { it.account.localId }) { usage ->
-            AccountCard(usage, nowMs, state.staleAfterMs) {
+            AccountCard(usage, nowMs, state.staleAfterMs,
+                modifier = if (LocalMotionEnabled.current) Modifier.animateItem() else Modifier,
+            ) {
                 onAccountClick(usage.account.localId)
             }
         }

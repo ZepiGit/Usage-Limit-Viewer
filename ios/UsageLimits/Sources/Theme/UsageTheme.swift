@@ -124,6 +124,7 @@ struct UsageCard<Content: View>: View {
 /// and the corner radius all have to match the Android rendering exactly, and the system style
 /// gives up control of all three.
 struct UsageBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let remainingPercent: Double?
     let severity: Severity
     var height: CGFloat = 8
@@ -137,6 +138,8 @@ struct UsageBar: View {
                     // An unknown percentage draws nothing rather than a full or empty bar:
                     // either would state a fact the provider did not report.
                     .frame(width: geometry.size.width * fraction)
+                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: remainingPercent)
+                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: severity)
             }
         }
         .frame(height: height)
@@ -145,5 +148,47 @@ struct UsageBar: View {
     private var fraction: CGFloat {
         guard let remaining = remainingPercent else { return 0 }
         return CGFloat(min(max(remaining, 0), 100) / 100)
+    }
+}
+
+/// Matches the five text glyphs used by Android's provider badges.
+struct ProviderBadge: View {
+    let provider: ProviderID
+
+    private var symbol: String {
+        switch provider {
+        case .codex: return "⬡"
+        case .claude: return "✳"
+        case .antigravity: return "◆"
+        case .xai: return "✕"
+        case .kimi: return "☾"
+        }
+    }
+
+    private var tint: Color {
+        switch provider {
+        case .codex: return UsageColors.teal
+        case .claude: return UsageColors.terracotta
+        case .antigravity: return UsageColors.green
+        case .xai: return UsageColors.textPrimary
+        case .kimi: return Color(hex: 0x7C86D9)
+        }
+    }
+
+    var body: some View {
+        Text(symbol)
+            .font(.title2)
+            .foregroundStyle(tint)
+            .frame(width: 40, height: 40)
+            .background(UsageColors.surfaceElevated)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .accessibilityHidden(true)
+    }
+}
+
+/// Keeps quota rows legible in wide iPad and resizable windows while filling narrow panes.
+extension View {
+    func readableWidth() -> some View {
+        frame(maxWidth: 760).frame(maxWidth: .infinity)
     }
 }

@@ -5,6 +5,7 @@ import UsageLimitsKit
 /// anything at a provider.
 struct AccountsScreen: View {
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var store: UsageStore
     @State private var isAdding = false
 
@@ -22,7 +23,9 @@ struct AccountsScreen: View {
                     Button { isAdding = true } label: { AddAccountCard() }
                         .buttonStyle(.plain)
                 }
+                .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: store.accounts.map { $0.account.id })
                 .padding(16)
+                .readableWidth()
             }
             .background(UsageColors.background)
             .navigationTitle("Accounts")
@@ -50,6 +53,7 @@ private struct AccountSummaryCard: View {
     var body: some View {
         UsageCard {
             HStack {
+                ProviderBadge(provider: usage.account.provider)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(usage.account.label)
                         .font(.headline)
