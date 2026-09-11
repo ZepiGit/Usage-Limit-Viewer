@@ -64,6 +64,7 @@ public actor UsageLimitsContainer {
         self.logins = [
             .codex: CodexDeviceLogin(httpClient: http, now: now),
             .xai: XaiDeviceLogin(httpClient: http, now: now),
+            .kimi: KimiDeviceLogin(httpClient: http, now: now),
         ]
 
         self.engine = SyncEngine(
@@ -139,9 +140,9 @@ public actor UsageLimitsContainer {
         return try await store(profile: profile, credentials: credentials, provider: provider)
     }
 
-    /// Completes the one sign-in that has no flow: a key the user pasted.
+    /// Completes the sign-in that has no flow: a key the user pasted.
     ///
-    /// Kimi Code only. The key is proved against the usage endpoint BEFORE an account row
+    /// Kimi Code only, beside its device flow. The key is proved against the usage endpoint BEFORE an account row
     /// exists — a key that cannot read usage is not a connected account, and storing it would
     /// leave a permanently failing row the user then has to work out how to remove.
     ///

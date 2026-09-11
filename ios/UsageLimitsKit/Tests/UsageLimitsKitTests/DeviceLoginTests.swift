@@ -62,7 +62,86 @@ final class DeviceLoginTests: XCTestCase {
         XCTAssertEqual(DeviceLoginSupport.style(for: .xai), .deviceCode)
         XCTAssertEqual(DeviceLoginSupport.style(for: .claude), .loopbackRedirect)
         XCTAssertEqual(DeviceLoginSupport.style(for: .antigravity), .loopbackRedirect)
+        XCTAssertEqual(DeviceLoginSupport.style(for: .kimi), .deviceCode)
+        XCTAssertTrue(DeviceLoginSupport.acceptsPastedKey(.kimi))
+        XCTAssertFalse(DeviceLoginSupport.acceptsPastedKey(.codex))
         XCTAssertEqual(DeviceLoginSupport.supported, ProviderID.allCases)
+    }
+
+    // MARK: - Kimi
+
+    private static let kimiDevice = #"""
+    {"device_code":"dev-1","user_code":"KIMI-ABCD","verification_uri":"https://auth.kimi.com/device",
+     "verification_uri_complete":"https://auth.kimi.com/device?code=KIMI-ABCD","expires_in":900,"interval":5}
+    """#
+
+    func testKimiAsksUnderThisAppsOwnNameNeverTheCLIs() async throws {
+        // The identity is the whole point: Moonshot allowlists programs by name and forbids
+        // presenting another program's, so every request carries this app's and never kimi_cli.
+        let (http, transport) = client([(200, Self.kimiDevice)])
+
+        let challenge = try await KimiDeviceLogin(httpClient: http, now: { [now] in now }).begin()
+
+        XCTAssertEqual(challenge.userCode, "KIMI-ABCD")
+        XCTAssertEqual(challenge.verificationURIComplete, "https://auth.kimi.com/device?code=KIMI-ABCD")
+        XCTAssertEqual(challenge.pollInterval, 5)
+        XCTAssertEqual(challenge.continuation["device_code"], "dev-1")
+        let sent = await transport.requests
+        let request = try XCTUnwrap(sent.first)
+        XCTAssertEqual(request.url?.absoluteString, ProviderEndpoints.Kimi.deviceCodeURL)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Msh-Platform"), "UsageLimits")
+        XCTAssertTrue(request.value(forHTTPHeaderField: "User-Agent")?.hasPrefix("UsageLimits/") == true)
+        XCTAssertFalse(request.value(forHTTPHeaderField: "User-Agent")?.contains("KimiCLI") == true)
+        let body = String(data: try XCTUnwrap(request.httpBody), encoding: .utf8) ?? ""
+        XCTAssertEqual(body, "client_id=\(ProviderEndpoints.Kimi.clientID)")
+    }
+
+    func testKimiKeepsWaitingWhilePendingAndExchangesTheApproval() async throws {
+        let (http, transport) = client([
+            (200, #"{"error": "authorization_pending"}"#),
+            (400, #"{"error": "authorization_pending"}"#),
+            (200, #"{"access_token": "acc", "refresh_token": "ref", "expires_in": 3600}"#),
+        ])
+        let challenge = DeviceLoginChallenge(
+            userCode: "KIMI-ABCD", verificationURI: "https://auth.kimi.com/device",
+            expiresAt: now.addingTimeInterval(600), pollInterval: 0,
+            continuation: ["device_code": "dev-1"])
+
+        let credentials = try await KimiDeviceLogin(httpClient: http, now: { [now] in now })
+            .complete(challenge)
+
+        XCTAssertEqual(credentials.accessToken, "acc")
+        XCTAssertEqual(credentials.refreshToken, "ref")
+        let sent = await transport.requests
+        XCTAssertEqual(sent.count, 3)
+        let body = String(data: try XCTUnwrap(sent.first?.httpBody), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("device_code=dev-1"))
+        XCTAssertTrue(body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
+        XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "X-Msh-Platform"), "UsageLimits")
+    }
+
+    func testKimiRefreshesAnOAuthAccountAndLeavesAKeyAlone() async throws {
+        let (http, transport) = client([
+            (200, #"{"access_token": "acc2", "expires_in": 3600}"#),
+        ])
+        let subject = KimiClient(httpClient: http)
+
+        let refreshed = try await subject.refresh(credentials: OAuthCredentials(
+            accessToken: "old", refreshToken: "ref-1", idToken: nil, expiresAt: now))
+        XCTAssertEqual(refreshed.accessToken, "acc2")
+        XCTAssertEqual(refreshed.refreshToken, "ref-1", "an omitted refresh token means keep the old one")
+        let sent = await transport.requests
+        let request = try XCTUnwrap(sent.first)
+        XCTAssertEqual(request.url?.absoluteString, ProviderEndpoints.Kimi.tokenURL)
+        let body = String(data: try XCTUnwrap(request.httpBody), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("grant_type=refresh_token"))
+        XCTAssertTrue(body.contains("refresh_token=ref-1"))
+
+        let key = OAuthCredentials(accessToken: "sk-synthetic", refreshToken: nil, idToken: nil, expiresAt: nil)
+        let unchanged = try await subject.refresh(credentials: key)
+        XCTAssertEqual(unchanged.accessToken, "sk-synthetic")
+        let afterKey = await transport.requests
+        XCTAssertEqual(afterKey.count, 1, "no request for a key")
     }
 
     // MARK: - JWT claims
