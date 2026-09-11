@@ -305,7 +305,12 @@ That purpose is intact: this value opens nothing on its own. The wording is what
 and the breach is recorded here rather than quietly reasoned away. Revisit it if Google ever
 reclassifies this client as confidential — at which point *(d)* above becomes the only option.
 
-### 2. Codex device flow: the PKCE pair is generated server-side
+### 2. Codex device flow (the fallback): the PKCE pair is generated server-side
+
+Codex signs in through the browser by default — authorization code + PKCE with a verifier this
+app generates, on the CLI's registered loopback redirect (`:1455/auth/callback`), the same
+shape as Claude and Antigravity — and the device flow below runs only when that port is taken.
+Everything in this section is about that fallback.
 
 In OpenAI's device flow, the *device token* endpoint returns the authorization code together
 with the `code_verifier` and `code_challenge` — the app exchanges a PKCE pair it did not
@@ -319,22 +324,23 @@ ever travels over the app's own TLS connection to `auth.openai.com`, and the cod
 the device authorization the user approved — but it should not be described as client binding,
 because it is not.
 
-Rejected alternative: the desktop authorization-code flow with a client-generated verifier and
-a loopback redirect to `http://localhost:1455/auth/callback`. Rejected for the platform, not
-the cryptography: on Android the app is backgrounded the instant a browser opens and may be
-killed, the port must be free, and a user who finishes the login in a browser on another
-device sends the code to *that* machine's localhost, where nothing is listening. The device
-flow has none of those failure modes. `docs/providers-codex.md` has the full comparison.
+The browser flow was at first rejected for the platform rather than the cryptography — a
+backgrounded process, a port that must be free, a login finished on another device — and
+those concerns turned out to be the ones the loopback listener already carries for the other
+two providers. It is now the default precisely because its PKCE is the real thing; this
+fallback is kept for the port conflict only. `docs/providers-codex.md` has both flows.
 
 Residual risk: an attacker who could observe OpenAI's response to the device-token call would
 hold everything needed to redeem the code. That requires breaking TLS to `auth.openai.com`, at
 which point the access token itself is equally exposed — so the marginal risk over any other
 flow is small.
 
-### 3. Fixed loopback ports (54545 for Claude, 51121 for Antigravity)
+### 3. Fixed loopback ports (54545 for Claude, 51121 for Antigravity, 1455 for Codex)
 
-Both providers pin their redirect URIs in client registration, so the app cannot choose an
-ephemeral port; it must bind exactly what the provider will redirect to.
+All three providers pin their redirect URIs in client registration, so the app cannot choose
+an ephemeral port; it must bind exactly what the provider will redirect to. Codex is the one
+with a way out: when `1455` is taken, `beginLogin` falls back to the device flow instead of
+failing.
 
 Two consequences. First, availability: if another process holds the port, login fails.
 `LoopbackServer.start()` is called from `beginLogin`, so the port is bound *before* the

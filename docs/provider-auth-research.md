@@ -48,9 +48,21 @@ A device flow has none of these. The app holds no listener, keeps no port, and
 polls an HTTPS endpoint it initiates. If the app is killed, the login simply fails
 cleanly rather than hanging on a socket that will never be written to.
 
-**Decision: Codex and xAI use the device flow.** For Codex this is a deliberate
-divergence from the reference implementation's default, which uses
+**Decision, as first made: Codex and xAI use the device flow.** For Codex this
+was a deliberate divergence from the reference implementation's default, which uses
 `http://localhost:1455/auth/callback`.
+
+**Revised for Codex.** The three liabilities above are real, but they are the same
+three that Claude and Antigravity have always lived with, and `LoopbackServer` has
+answered each of them in practice: the port is bound before the browser opens so a
+conflict is known up front, the listener polls with a short timeout so an abandoned
+sign-in never strands the port, and the process has survived the browser round-trip
+on every device it has been tried on. What the device flow cost, meanwhile, was the
+one thing a user notices on every sign-in: a code to read off this app and type
+into the browser. So Codex now runs the reference client's browser flow by default,
+on the CLI's own registered redirect, and falls back to the device flow only when
+port 1455 is taken. xAI stays on the device flow: its client registers no loopback
+redirect, and the device flow is its native one.
 
 ### Where a redirect is unavoidable
 
@@ -60,7 +72,8 @@ Android scheme cannot be substituted — the authorization server would reject i
 
 Both therefore use `LoopbackServer`, which binds `127.0.0.1` only, serves exactly
 one request, and closes in a `finally` block. Both validate `state` with a
-constant-time comparison before the code is exchanged, and both use PKCE.
+constant-time comparison before the code is exchanged, and both use PKCE. Codex's
+browser flow is the same code path on `:1455/auth/callback`.
 
 Neither uses a WebView. The user authenticates in the real browser via Custom
 Tabs, where the address bar is visible and this app is never in a position to

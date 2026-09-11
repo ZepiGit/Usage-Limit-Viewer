@@ -284,9 +284,19 @@ struct AddAccountSheet: View {
                     // The listener is bound INSIDE `authorize`, before the browser opens: a
                     // provider that redirects promptly would otherwise find nothing listening.
                     let challenge = try await container.beginLoopbackLogin(provider: provider)
-                    let code = try await loopback.authorize(challenge)
-                    _ = try await container.completeLoopbackLogin(
-                        code: code, challenge: challenge)
+                    do {
+                        let code = try await loopback.authorize(challenge)
+                        _ = try await container.completeLoopbackLogin(
+                            code: code, challenge: challenge)
+                    } catch LoopbackListener.ListenError.portUnavailable where provider == .codex {
+                        // The CLI's port is taken, and Codex alone has a second way in: its
+                        // device flow needs no port at all, at the price of a code to carry
+                        // into the browser — the step the browser flow exists to remove.
+                        let fallback = try await container.beginLogin(provider: provider)
+                        stage = .waiting(provider, fallback)
+                        _ = try await container.completeLogin(
+                            provider: provider, challenge: fallback)
+                    }
                 }
 
                 // Straight into a refresh: an account that appears with no numbers looks like it

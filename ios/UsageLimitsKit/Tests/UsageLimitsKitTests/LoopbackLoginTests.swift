@@ -5,7 +5,7 @@ import XCTest
 import FoundationNetworking
 #endif
 
-/// Signing in to the two providers that redirect to loopback.
+/// Signing in to the providers that redirect to loopback.
 ///
 /// The request this builds is the one the user's browser is sent to, so the parts that matter
 /// are which endpoint, which redirect, and whether the parameters that decide long-term access
@@ -52,10 +52,15 @@ final class LoopbackLoginTests: XCTestCase {
         let antigravity = try XCTUnwrap(LoopbackLogin.redirect(for: .antigravity))
         XCTAssertEqual(antigravity.port, 51121)
         XCTAssertEqual(antigravity.path, "/oauth-callback")
+
+        // The Codex CLI's own registration, port and path alike.
+        let codex = try XCTUnwrap(LoopbackLogin.redirect(for: .codex))
+        XCTAssertEqual(codex.host, "localhost")
+        XCTAssertEqual(codex.port, 1455)
+        XCTAssertEqual(codex.path, "/auth/callback")
     }
 
-    func testTheDeviceCodeProvidersHaveNoLoopbackRedirect() {
-        XCTAssertNil(LoopbackLogin.redirect(for: .codex))
+    func testTheDeviceCodeProviderHasNoLoopbackRedirect() {
         XCTAssertNil(LoopbackLogin.redirect(for: .xai))
     }
 
@@ -82,6 +87,25 @@ final class LoopbackLoginTests: XCTestCase {
 
         XCTAssertTrue(url.contains("access_type=offline"))
         XCTAssertTrue(url.contains("prompt=consent"))
+    }
+
+    func testCodexSendsWhatItsOwnCLISends() throws {
+        // The registration is the CLI's, so the request has to be the CLI's: its redirect,
+        // its scope, and the three parameters the authorize page shapes its response by.
+        let (subject, _) = login(.codex)
+
+        let challenge = try subject.begin()
+
+        let url = challenge.url.absoluteString
+        XCTAssertTrue(url.hasPrefix(ProviderEndpoints.Codex.authorizeURL))
+        XCTAssertTrue(url.contains("client_id=\(ProviderEndpoints.Codex.clientID)"))
+        XCTAssertTrue(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"))
+        XCTAssertTrue(url.contains("scope=openid%20profile%20email%20offline_access"))
+        XCTAssertTrue(url.contains("code_challenge_method=S256"))
+        XCTAssertTrue(url.contains("id_token_add_organizations=true"))
+        XCTAssertTrue(url.contains("codex_cli_simplified_flow=true"))
+        XCTAssertTrue(url.contains("originator=codex_cli_rs"))
+        XCTAssertEqual(challenge.port, 1455)
     }
 
     func testTwoAttemptsNeverShareAVerifierOrAState() throws {
@@ -135,14 +159,38 @@ final class LoopbackLoginTests: XCTestCase {
         XCTAssertTrue(body.contains("code_verifier=\(challenge.verifier)"))
     }
 
+    func testCodexExchangesOnTheLoopbackRedirectItWasIssuedAgainst() async throws {
+        // The token endpoint checks that the exchange names the redirect the code was issued
+        // for. The browser flow's is the loopback one; the device flow's — which the fallback
+        // still uses — is the device callback. Mixing them up fails every sign-in opaquely.
+        let (subject, transport) = login(
+            .codex,
+            replies: [(200, #"{"access_token":"acc","refresh_token":"ref","id_token":"i","expires_in":3600}"#)])
+        let challenge = try subject.begin()
+
+        let credentials = try await subject.exchange(code: "the-code", challenge: challenge)
+
+        XCTAssertEqual(credentials.accessToken, "acc")
+        let sent = await transport.requests
+        let request = try XCTUnwrap(sent.first)
+        XCTAssertEqual(request.url?.absoluteString, ProviderEndpoints.Codex.tokenURL)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), ProviderEndpoints.Codex.userAgent)
+        let body = String(data: try XCTUnwrap(request.httpBody), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("grant_type=authorization_code"))
+        XCTAssertTrue(body.contains("code=the-code"))
+        XCTAssertTrue(body.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"))
+        XCTAssertFalse(body.contains("deviceauth"))
+        XCTAssertTrue(body.contains("code_verifier=\(challenge.verifier)"))
+    }
+
     func testADeviceCodeProviderRefusesTheRedirectFlow() async throws {
-        let (subject, _) = login(.codex)
+        let (subject, _) = login(.xai)
         let (claude, _) = login(.claude)
         let challenge = try claude.begin()
 
         do {
             _ = try await subject.exchange(code: "x", challenge: challenge)
-            XCTFail("Codex does not sign in by redirect")
+            XCTFail("xAI does not sign in by redirect")
         } catch let error as DeviceLoginError {
             guard case .unsupportedOnThisPlatform = error else {
                 return XCTFail("expected unsupportedOnThisPlatform, got \(error)")

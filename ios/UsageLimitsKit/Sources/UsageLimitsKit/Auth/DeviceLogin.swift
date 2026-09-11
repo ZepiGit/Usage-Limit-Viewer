@@ -490,8 +490,10 @@ public enum DeviceLoginSupport {
 
     public static func style(for provider: ProviderID) -> LoginStyle {
         switch provider {
-        case .codex, .xai: return .deviceCode
-        case .claude, .antigravity: return .loopbackRedirect
+        case .xai: return .deviceCode
+        // Codex runs the CLI's own browser flow on its registered redirect; the device flow
+        // is kept as the fallback the app switches to when that port is taken.
+        case .codex, .claude, .antigravity: return .loopbackRedirect
         case .kimi: return .pastedKey
         }
     }
