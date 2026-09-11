@@ -194,11 +194,35 @@ public enum ProviderEndpoints {
 
     /// Kimi Code.
     ///
-    /// No OAuth here, deliberately — see docs/providers-kimi.md. The user brings a key from
-    /// their own console because the device flow's client id belongs to `kimi-cli` and the
-    /// model API gates on an `X-Msh-Platform` allowlist.
+    /// OAuth, under this app's OWN name. Kimi's device flow uses one public client id for every
+    /// program that drives it, and what `api.kimi.com/coding` gates on is the `X-Msh-Platform`
+    /// header naming the calling program. Moonshot allowlists third-party programs on request
+    /// and forbids exactly one thing: presenting another program's identity. So this app says
+    /// who it is, never `kimi_cli`. Until its name is allowlisted the coding API may answer
+    /// `403 access_terminated`, and a key from the user's own console stays the other way in.
+    /// See docs/providers-kimi.md.
     public enum Kimi {
+        /// The public client id every Kimi Code device-flow client presents.
+        public static let clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+        public static let deviceCodeURL = "https://auth.kimi.com/api/oauth/device_authorization"
+        public static let tokenURL = "https://auth.kimi.com/api/oauth/token"
+        public static let deviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+
         public static let usageEndpoint = "https://api.kimi.com/coding/v1/usages"
         public static let consoleURL = "https://www.kimi.com/code"
+
+        /// This app's own name, sent wherever Kimi asks which program is calling.
+        public static let platform = "UsageLimits"
+
+        /// Who is calling, truthfully. The version is the app's own, read from its bundle.
+        public static var identityHeaders: [String: String] {
+            let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "0"
+            return [
+                "User-Agent": "\(platform)/\(version) (iOS)",
+                "X-Msh-Platform": platform,
+                "X-Msh-Version": version,
+            ]
+        }
     }
 }

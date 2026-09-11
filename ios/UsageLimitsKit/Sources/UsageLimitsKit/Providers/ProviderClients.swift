@@ -621,13 +621,10 @@ public struct XaiClient: SyncProvider, Sendable {
 }
 
 
-/// Kimi Code, authenticated with a key the user pasted.
-///
-/// The only one of the five that does not sign in with OAuth, and deliberately so: Kimi Code's
-/// device flow is bound to `kimi-cli`'s client id and `api.kimi.com` gates on an
-/// `X-Msh-Platform` allowlist that answers anything else with `403 access_terminated`. Driving
-/// it would mean presenting another program's identity to pass a check the provider put there
-/// on purpose. See docs/providers-kimi.md.
+/// Kimi Code, reached with either an OAuth token from `KimiDeviceLogin` or a key the user
+/// pasted. Every request names this app as the caller — `api.kimi.com/coding` admits programs
+/// by name, and presenting another program's is the one thing Moonshot forbids. See
+/// docs/providers-kimi.md.
 public struct KimiClient: SyncProvider, Sendable {
     public let providerID = "kimi"
 
@@ -641,13 +638,15 @@ public struct KimiClient: SyncProvider, Sendable {
         credentials: OAuthCredentials,
         attributes: [String: String]
     ) async throws -> UsageResult {
+        var headers = [
+            "Authorization": "Bearer \(credentials.accessToken)",
+            "Accept": "application/json",
+        ]
+        headers.merge(ProviderEndpoints.Kimi.identityHeaders) { current, _ in current }
         let response = try await ProviderHTTP.request(
             httpClient,
             url: ProviderEndpoints.Kimi.usageEndpoint,
-            headers: [
-                "Authorization": "Bearer \(credentials.accessToken)",
-                "Accept": "application/json",
-            ],
+            headers: headers,
             endpoint: "kimi usages")
         let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "kimi usages")
         return UsageResult(
@@ -668,13 +667,36 @@ public struct KimiClient: SyncProvider, Sendable {
         return nil
     }
 
-    /// Nothing to refresh: an API key carries no expiry and no refresh grant.
+    /// Refreshes an OAuth-connected account; hands a key-connected one back unchanged.
     ///
-    /// Returned unchanged rather than thrown, because the engine calls this whenever it
-    /// suspects staleness and for this provider that suspicion is never right. A revoked key
-    /// surfaces as a 401 on the usage call, which is the path that already marks an account as
-    /// needing attention.
+    /// A key carries no expiry and no refresh grant, and the engine calls this whenever it
+    /// suspects staleness — for a key that suspicion is never right, and a revoked key surfaces
+    /// as a 401 on the usage call, which already marks the account as needing attention.
     public func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
-        credentials
+        guard let refreshToken = credentials.refreshToken, !refreshToken.isEmpty else {
+            return credentials
+        }
+        var headers = [
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        ]
+        headers.merge(ProviderEndpoints.Kimi.identityHeaders) { current, _ in current }
+        let refreshed = try await TokenExchange.post(
+            httpClient,
+            url: ProviderEndpoints.Kimi.tokenURL,
+            headers: headers,
+            body: TokenExchange.formBody([
+                "grant_type": "refresh_token",
+                "client_id": ProviderEndpoints.Kimi.clientID,
+                "refresh_token": refreshToken,
+            ]),
+            endpoint: "kimi token",
+            now: Date())
+        // A refresh response may omit the refresh token, meaning "keep using the old one".
+        return OAuthCredentials(
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken ?? refreshToken,
+            idToken: refreshed.idToken,
+            expiresAt: refreshed.expiresAt)
     }
 }
