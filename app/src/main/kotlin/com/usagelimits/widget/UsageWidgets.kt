@@ -122,6 +122,43 @@ private fun percentText(row: WidgetRow): String = percentLabel(row.remainingPerc
  * Deliberately shows aggregate headline numbers rather than one account, because at this size
  * there is room for a glance, not a list.
  */
+/**
+ * The refresh control both list widgets carry: a touch target around a small chip.
+ *
+ * One composable rather than the two identical subtrees it replaced, so the action, colours and
+ * alignment cannot drift apart. The sizes differ on purpose — the compact widget has no room
+ * for a 48dp target beside four tiles, the detailed one has — so they are the parameters.
+ */
+@androidx.compose.runtime.Composable
+private fun RefreshChip(
+    touchSize: androidx.compose.ui.unit.Dp,
+    chipSize: androidx.compose.ui.unit.Dp,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+) {
+    Box(
+        modifier = GlanceModifier
+            .size(touchSize)
+            .clickable(actionRunCallback<RefreshWidgetAction>()),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = GlanceModifier
+                .size(chipSize)
+                .cornerRadius(chipSize / 2)
+                .background(W.Card),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "↻",
+                style = TextStyle(
+                    color = androidx.glance.unit.ColorProvider(W.TextPrimary),
+                    fontSize = fontSize,
+                ),
+            )
+        }
+    }
+}
+
 class CompactUsageWidget : GlanceAppWidget() {
 
     // Responsive rather than Exact: the launcher picks the nearest declared size, so the
@@ -196,28 +233,7 @@ class CompactUsageWidget : GlanceAppWidget() {
                     //
                     // No weight: the four tiles share the width and this takes what it needs,
                     // rather than a fifth of the row for one glyph.
-                    Box(
-                        modifier = GlanceModifier
-                            .size(32.dp)
-                            .clickable(actionRunCallback<RefreshWidgetAction>()),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            modifier = GlanceModifier
-                                .size(24.dp)
-                                .cornerRadius(12.dp)
-                                .background(W.Card),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "↻",
-                                style = TextStyle(
-                                    color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                                    fontSize = 13.sp,
-                                ),
-                            )
-                        }
-                    }
+                    RefreshChip(touchSize = 32.dp, chipSize = 24.dp, fontSize = 13.sp)
                 }
             }
         }
@@ -373,28 +389,7 @@ class DetailedUsageWidget : GlanceAppWidget() {
             // inside stays 26dp, so the control is reachable on a home screen without the
             // header reading as a button bar. Its transparent margin also supplies the gap to
             // the freshness label, which is why no spacer precedes it.
-            Box(
-                modifier = GlanceModifier
-                    .size(48.dp)
-                    .clickable(actionRunCallback<RefreshWidgetAction>()),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = GlanceModifier
-                        .size(26.dp)
-                        .cornerRadius(13.dp)
-                        .background(W.Card),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "↻",
-                        style = TextStyle(
-                            color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                            fontSize = 14.sp,
-                        ),
-                    )
-                }
-            }
+            RefreshChip(touchSize = 48.dp, chipSize = 26.dp, fontSize = 14.sp)
         }
     }
 
@@ -560,11 +555,18 @@ class MinimalUsageWidget : GlanceAppWidget() {
                                             ),
                                         )
                                         Text(
+                                            // Absolute, like the other two widgets. A widget
+                                            // cannot tick: a relative countdown is frozen at the
+                                            // moment Glance last drew it and goes wrong in the one
+                                            // direction that matters — "in 20m" long after the
+                                            // reset has passed. A clock time was true when it was
+                                            // written and stays true.
                                             text = ringRow(account)?.resetAt
                                                 ?.let {
-                                                    Countdown.format(
-                                                        it - System.currentTimeMillis(),
-                                                    )
+                                                    Countdown.absoluteResetLabel(
+                                                        it,
+                                                        System.currentTimeMillis(),
+                                                    )?.removePrefix("Resets ")
                                                 }
                                                 ?: "—",
                                             maxLines = 1,
@@ -599,7 +601,15 @@ class MinimalUsageWidget : GlanceAppWidget() {
     @androidx.compose.runtime.Composable
     private fun Ring(account: WidgetAccount) {
         val row = ringRow(account)
-        val accent = W.accent(row?.severity ?: account.severity)
+        // The row's colour only while the account itself is fine. A row's severity comes from
+        // its percentage and knows nothing about age, so a stale or failed account with a
+        // retained 80 % row drew a green ring — and the ring is the whole tile, with nothing
+        // beside it to say the number is a day old. The other two widgets apply this rule
+        // through their status word; the ring has only its colour.
+        val accent = when (account.severity) {
+            Severity.STALE, Severity.ERROR -> W.accent(account.severity)
+            else -> W.accent(row?.severity ?: account.severity)
+        }
         Image(
             provider = ImageProvider(
                 UsageRing.draw(

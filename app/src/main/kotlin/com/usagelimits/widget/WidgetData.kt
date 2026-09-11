@@ -112,7 +112,11 @@ object WidgetDataBuilder {
             // headline state with an unrelated account's clock: "0 % left · resets in 12m",
             // where the twelve minutes belonged to a healthy account's five-hour window. And
             // because healthy five-hour windows reset constantly, that was the common case.
-            nextResetAt = lead?.rows?.mapNotNull { it.resetAt }?.minOrNull(),
+            // And one still AHEAD. A snapshot keeps a window's reset instant until the next fetch
+            // replaces it, so once one had passed the minimum was anchored in the past and the
+            // compact widget's tile named a reset that was already over. The overview's view
+            // model drops passed instants for the same reason.
+            nextResetAt = lead?.rows?.mapNotNull { it.resetAt }?.filter { it > nowMs }?.minOrNull(),
             // Deliberately NOT the leading account's severity. This answers "is anything wrong
             // anywhere", which is a different question from "what should I look at first" —
             // and it is the only thing that still surfaces a broken account once the ordering

@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -124,7 +125,10 @@ private fun WidgetConfigScreen(
     // Chosen BEFORE the scope, because picking a scope is what commits the whole
     // configuration and closes this screen. A switch below the list the user never reaches
     // would be a setting that exists and cannot be set.
-    var transparent by remember { mutableStateOf(false) }
+    // Saveable: a rotation recreates this activity, and a plain `remember` handed the user back
+    // an unticked box — and then persisted transparent=false for the widget they had just
+    // asked to be transparent.
+    var transparent by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
