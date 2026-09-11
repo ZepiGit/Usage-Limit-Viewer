@@ -192,6 +192,36 @@ public struct ForEach<Data: RandomAccessCollection, Content>: View {
     public init(_ data: Data, id: KeyPath<Data.Element, some Hashable>,
                 @ViewBuilder content: @escaping (Data.Element) -> Content) {}
     public var body: some View { ShimLeaf() }
+
+    /// Reordering. Declared on `ForEach` itself rather than on `View`, exactly as SwiftUI does
+    /// — a list reorders its own rows, and accepting it anywhere would let a typo compile here
+    /// and fail on the macOS runner, which is the one thing this shim exists to prevent.
+    public func onMove(perform: @escaping (IndexSet, Int) -> Void) -> Self { self }
+    public func onDelete(perform: ((IndexSet) -> Void)?) -> Self { self }
+}
+
+/// Editing state for a `List`. Values, not a flag, because SwiftUI has three.
+public enum EditMode {
+    case inactive, active, transient
+    public var isEditing: Bool { self != .inactive }
+}
+
+public struct EdgeInsets {
+    public init(top: CGFloat = 0, leading: CGFloat = 0,
+                bottom: CGFloat = 0, trailing: CGFloat = 0) {}
+}
+
+/// Runs the body. The animation is what the real one adds, and a shim that swallowed the body
+/// would let a state change that only happens inside one go unchecked.
+@discardableResult
+public func withAnimation<Result>(_ animation: Any? = nil,
+                                  _ body: () throws -> Result) rethrows -> Result {
+    try body()
+}
+
+public extension RangeReplaceableCollection where Self: MutableCollection, Index == Int {
+    /// SwiftUI's own helper, which is what an `onMove` handler is expected to call.
+    mutating func move(fromOffsets source: IndexSet, toOffset destination: Int) {}
 }
 
 public enum DynamicTypeSize: Comparable {
@@ -447,6 +477,10 @@ public struct EnvironmentValues {
     public var colorScheme: ColorScheme = .dark
     public var scenePhase: ScenePhase = .active
     public var widgetFamily: WidgetFamilyPlaceholder = .systemSmall
+    /// A BINDING, as in the real SwiftUI, not a value: rows have to be able to write it back
+    /// (a swipe-to-delete ends editing), and a shim that took a plain value would accept
+    /// `.environment(\.editMode, editMode)` — which does not compile against the SDK.
+    public var editMode: Binding<EditMode>? = nil
 }
 
 public enum ColorScheme { case light, dark }
