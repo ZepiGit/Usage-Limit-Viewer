@@ -381,9 +381,14 @@ public actor UsageLimitsContainer {
 
     /// Stores the order the user dragged the accounts into, and reports the list as it now reads.
     ///
-    /// Republishes the widget snapshot, because the home screen tiles pick the accounts they
-    /// show from this order: a rearrangement the app honoured and the widget did not would put
-    /// two different answers to "which accounts matter most" on one device.
+    /// Republishes the widget snapshot, for a narrower reason than it might look.
+    ///
+    /// The tiles rank by urgency, not by this order, so a drag does not reorder a widget — and
+    /// should not: the home screen's job is what is closest to running out. But that ranking is
+    /// a STABLE sort in five-point bands, so accounts the ranking cannot separate keep the order
+    /// they arrived in, which is now the user's. Republishing is what carries that tiebreak
+    /// across; without it the tile keeps the previous tiebreak until something else happens to
+    /// rewrite the file.
     @discardableResult
     public func reorder(ids: [String]) async throws -> [AccountUsage] {
         try await repository.reorder(ids: ids)
