@@ -379,6 +379,19 @@ public actor UsageLimitsContainer {
         await publishCurrent(await repository.usage())
     }
 
+    /// Stores the order the user dragged the accounts into, and reports the list as it now reads.
+    ///
+    /// Republishes the widget snapshot, because the home screen tiles pick the accounts they
+    /// show from this order: a rearrangement the app honoured and the widget did not would put
+    /// two different answers to "which accounts matter most" on one device.
+    @discardableResult
+    public func reorder(ids: [String]) async throws -> [AccountUsage] {
+        try await repository.reorder(ids: ids)
+        let usage = await repository.usage()
+        await publishCurrent(usage)
+        return usage
+    }
+
     /// Forgets an account and the credentials behind it.
     ///
     /// The credential is deleted first. If that fails the account stays visible, which is

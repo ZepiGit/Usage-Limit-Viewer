@@ -10,26 +10,88 @@ struct OverviewScreen: View {
 
     @EnvironmentObject private var store: UsageStore
 
+    /// Whether the list is in reordering mode.
+    ///
+    /// Owned here rather than taken from the environment, because leaving the screen should end
+    /// it: an edit mode that persists across tabs leaves a user back on a list whose rows do not
+    /// respond to a tap, with no memory of having asked for that.
+    @State private var editMode: EditMode = .inactive
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+            List {
+                Section {
                     SummaryCard(snapshot: store.glance, now: store.now)
+                        .plainRow()
+                        // Never draggable: it is the headline, not one of the accounts, and a
+                        // list that lets it be dropped between two cards makes the whole gesture
+                        // read as broken.
+                        .moveDisabled(true)
+                }
 
+                Section {
                     if store.accounts.isEmpty {
-                        EmptyStateCard()
+                        EmptyStateCard().plainRow()
                     } else {
-                        ForEach(store.glance.accounts) { account in
-                            AccountCard(account: account, now: store.now)
+                        ForEach(store.orderedAccounts) { account in
+                            AccountCard(
+                                account: account,
+                                now: store.now,
+                                tier: store.settings.showSubscriptionTier
+                                    ? store.tierLabel(accountID: account.id) : nil,
+                                renewal: store.settings.showRenewalTime
+                                    ? store.renewalLabel(accountID: account.id, now: store.now)
+                                    : nil)
+                                .plainRow()
+                        }
+                        .onMove(perform: move)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.editMode, $editMode)
+            .scrollContentBackground(.hidden)
+            .background(UsageColors.background)
+            .navigationTitle("Overview")
+            .toolbar {
+                if store.accounts.count > 1 {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(editMode.isEditing ? "Done" : "Reorder") {
+                            withAnimation { editMode = editMode.isEditing ? .inactive : .active }
                         }
                     }
                 }
-                .padding(16)
             }
-            .background(UsageColors.background)
-            .navigationTitle("Overview")
-            .refreshable { await store.refresh() }
+            // Suspended while reordering: a pull that starts on a row being dragged is a refresh
+            // the user did not ask for, and it would replace the list under their finger.
+            .refreshable { if !editMode.isEditing { await store.refresh() } }
         }
+    }
+
+    /// Hands the store the WHOLE new order rather than the pair that swapped.
+    ///
+    /// The repository renumbers every row it is given, so sending the complete list is what
+    /// makes a partially-applied write impossible — and the list is short enough that there is
+    /// nothing to save by sending less.
+    private func move(from offsets: IndexSet, to destination: Int) {
+        var ids = store.orderedAccounts.map(\.id)
+        ids.move(fromOffsets: offsets, toOffset: destination)
+        Task { await store.reorderAccounts(ids: ids) }
+    }
+}
+
+private extension View {
+    /// A row that looks like the card it contains rather than like a table row.
+    ///
+    /// The overview was a `ScrollView` of cards until reordering arrived. `List` is what gives
+    /// the drag its native feel — the lift, the gap, the haptic — and none of that is worth
+    /// reimplementing on a drag gesture; stripping the row chrome is what keeps the design the
+    /// ScrollView had.
+    func plainRow() -> some View {
+        self
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 }
 
@@ -96,6 +158,11 @@ private struct AccountCard: View {
 
     let account: GlanceAccount
     let now: Date
+    /// The plan the provider reports — Plus, Pro, Max — or nil when it is switched off or the
+    /// provider never said.
+    let tier: String?
+    /// When the long allowance comes back, when the user has asked to see it.
+    let renewal: String?
 
     var body: some View {
         UsageCard {
@@ -108,13 +175,30 @@ private struct AccountCard: View {
                     .accessibilityLabel(SeverityPalette.label(account.severity))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(account.title)
-                        .font(.headline)
-                        .foregroundStyle(UsageColors.textPrimary)
+                    HStack(spacing: 6) {
+                        Text(account.title)
+                            .font(.headline)
+                            .foregroundStyle(UsageColors.textPrimary)
+                        if let tier {
+                            Text(tier)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(UsageColors.textSecondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(UsageColors.surfaceElevated)
+                                .clipShape(Capsule())
+                        }
+                    }
                     if let subtitle = account.subtitle {
                         Text(subtitle)
                             .font(.footnote)
                             .foregroundStyle(UsageColors.textSecondary)
+                    }
+                    if let renewal {
+                        Text(renewal)
+                            .font(.caption)
+                            .foregroundStyle(UsageColors.textTertiary)
+                            .lineLimit(1)
                     }
                 }
 

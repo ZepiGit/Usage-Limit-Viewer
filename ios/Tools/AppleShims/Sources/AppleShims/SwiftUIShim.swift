@@ -108,6 +108,11 @@ extension View {
     public func navigationTitle(_ value: Any) -> Self { self }
     public func listRowBackground(_ value: Any?) -> Self { self }
     public func listRowSeparator(_ value: Visibility) -> Self { self }
+    public func listRowInsets(_ value: EdgeInsets?) -> Self { self }
+    public func moveDisabled(_ value: Bool) -> Self { self }
+    public func deleteDisabled(_ value: Bool) -> Self { self }
+    public func environment<T>(_ keyPath: WritableKeyPath<EnvironmentValues, T>,
+                               _ value: T) -> Self { self }
     public func listStyle(_ value: ListStyleShim) -> Self { self }
     public func scrollContentBackground(_ value: Visibility) -> Self { self }
     public func toolbar(@ViewBuilder content: () -> any View) -> Self { self }
