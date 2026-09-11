@@ -60,11 +60,17 @@ import com.usagelimits.ui.theme.UsageColors
 
 /** Short symbol standing in for a provider mark. */
 fun providerSymbol(provider: ProviderId): String = when (provider) {
-    ProviderId.CODEX -> "◇"
+    // Five silhouettes that cannot be mistaken for each other at badge size, which is the only
+    // size these are ever drawn at. The previous set had a hollow diamond, a six-pointed star
+    // and a four-pointed star: three variations on "small pointy thing", and on a row of cards
+    // the eye could not tell the second from the third without reading the name underneath.
+    //
+    // Each is also the closest single character to the provider's own mark rather than an
+    // arbitrary assignment — an asterisk for Anthropic, an X for xAI, a moon for Moonshot.
+    ProviderId.CODEX -> "⬡"
     ProviderId.CLAUDE -> "✳"
-    ProviderId.ANTIGRAVITY -> "✦"
+    ProviderId.ANTIGRAVITY -> "◆"
     ProviderId.XAI -> "✕"
-    // Moonshot's product, and a moon is the one mark nobody mistakes for another provider's.
     ProviderId.KIMI -> "☾"
 }
 
