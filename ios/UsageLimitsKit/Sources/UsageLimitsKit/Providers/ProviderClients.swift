@@ -31,18 +31,33 @@ public struct UsageResult: Sendable {
     /// The plan name the provider reported, if it reports one.
     public let plan: String?
 
+    /// The provider's own id for the account this response describes, when the response states
+    /// one.
+    ///
+    /// Only a key-authenticated sign-in needs it, and only at the moment the account is filed.
+    /// A key carries no identity of its own, so without this the account can only be named
+    /// after a digest of the key — and rotating the key in the provider's console then mints a
+    /// SECOND account for the same subscription, leaving the first behind holding a key that
+    /// no longer works. The provider's id survives a rotation; the digest does not.
+    ///
+    /// Nil from every provider that signs in by OAuth, where the identity comes from the token
+    /// exchange and this would be a second answer to a settled question.
+    public let accountIdentity: String?
+
     public init(
         windows: [UsageWindow] = [],
         resetCredits: [ResetCredit] = [],
         resetCreditCount: Int? = nil,
         applicableResetCreditCount: Int? = nil,
-        plan: String? = nil
+        plan: String? = nil,
+        accountIdentity: String? = nil
     ) {
         self.windows = windows
         self.resetCredits = resetCredits
         self.resetCreditCount = resetCreditCount
         self.applicableResetCreditCount = applicableResetCreditCount
         self.plan = plan
+        self.accountIdentity = accountIdentity
     }
 }
 
@@ -618,7 +633,22 @@ public struct KimiClient: SyncProvider, Sendable {
             ],
             endpoint: "kimi usages")
         let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "kimi usages")
-        return UsageResult(windows: KimiUsageParser.parse(payload))
+        return UsageResult(
+            windows: KimiUsageParser.parse(payload),
+            accountIdentity: Self.identity(in: payload))
+    }
+
+    /// The account id Kimi states in its usage response, or nil if it states none.
+    ///
+    /// Read from the same spellings the Android provider reads, so the same payload names the
+    /// same account on both platforms.
+    static func identity(in payload: [String: Any]) -> String? {
+        let direct = JSONSupport.string(payload, "userId", "user_id", "accountId", "account_id")
+        if let direct, !direct.isEmpty { return direct }
+        let nested = JSONSupport.string(
+            JSONSupport.object(payload, "user"), "id", "userId", "user_id")
+        if let nested, !nested.isEmpty { return nested }
+        return nil
     }
 
     /// Nothing to refresh: an API key carries no expiry and no refresh grant.
