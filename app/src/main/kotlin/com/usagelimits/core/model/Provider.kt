@@ -10,7 +10,8 @@ enum class ProviderId(val id: String, val displayName: String) {
     CODEX("codex", "OpenAI Codex"),
     CLAUDE("claude", "Claude"),
     ANTIGRAVITY("antigravity", "Antigravity"),
-    XAI("xai", "Grok");
+    XAI("xai", "Grok"),
+    KIMI("kimi", "Kimi");
 
     companion object {
         fun fromId(value: String?): ProviderId? = entries.firstOrNull { it.id == value }
@@ -49,6 +50,44 @@ data class ProviderAccount(
         get() = displayName?.takeIf { it.isNotBlank() }
             ?: maskedEmail
             ?: externalAccountId.take(12)
+}
+
+/**
+ * A provider's raw plan string, as a subscriber would recognise it.
+ *
+ * Providers disagree about case. Anthropic hands back `default_claude_max_5x`; OpenAI hands
+ * back a bare `plus`. Until this existed the Codex path passed its value straight through, so
+ * an account read "OpenAI Codex plus" while the Claude beside it read "Claude Max 5×".
+ *
+ * Read structurally rather than from a table of known tiers, for the reason Claude's tier
+ * parsing already gives: vendors add tiers, and a table renders a new one as no plan at all.
+ * An unrecognised tier still yields something readable.
+ *
+ * `Char.uppercase()` is the full Unicode mapping rather than the single-character one — 'ß'
+ * has no single-char uppercase, so `replaceFirstChar` leaves it alone where the Swift twin
+ * produces "SS". Matching Swift is what keeps the two apps showing the same string.
+ */
+fun planLabel(raw: String?): String? {
+    val parts = raw?.trim()?.lowercase()
+        // '_' and ' ' only, which is what the Kotlin this replaced split on and what the
+        // Swift twin still splits on. Adding '-' would have been a guess about tier ids nobody
+        // issues, and a guess that made the two apps disagree.
+        ?.split('_', ' ')
+        ?.filter { it.isNotBlank() }
+        ?: return null
+    if (parts.isEmpty()) return null
+
+    // A trailing `5x` is a multiplier on the tier, not a word in its name — but only when
+    // there is a name for it to multiply. `claude_20x` strips to a bare `20x`, which is the
+    // tier's whole name, and reading it as a multiplier of nothing produced a null plan where
+    // the Swift twin produces "20x". `ClaudeLabelParityTest` pins that case.
+    val multiplier = parts.last()
+        .takeIf { parts.size > 1 && Regex("^\\d+x$").matches(it) }
+        ?.dropLast(1)
+    val words = if (multiplier == null) parts else parts.dropLast(1)
+
+    val name = words.joinToString(" ") { part -> part.first().uppercase() + part.drop(1) }
+    return if (multiplier == null) name else "$name $multiplier×"
 }
 
 internal fun maskEmail(email: String): String {

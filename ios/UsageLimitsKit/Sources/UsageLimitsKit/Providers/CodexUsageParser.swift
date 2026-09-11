@@ -130,7 +130,7 @@ public enum CodexUsageParser: Sendable {
     }
 
     public static func parsePlan(_ payload: [String: Any]) -> String? {
-        JSONSupport.string(payload, "plan_type", "planType")
+        planLabel(JSONSupport.string(payload, "plan_type", "planType"))
     }
 
     private static func windowsFor(
@@ -249,9 +249,17 @@ public enum CodexUsageParser: Sendable {
             epoch: JSONSupport.int64(window, "reset_at", "resetAt")
         )
 
+        // Through the same bounds Kotlin applies in `Instants.fromOffsetSeconds`, which this
+        // had no equivalent of: a negative offset produced a reset already in the PAST, and
+        // because an account's next reset is a minimum over its windows, that one bogus value
+        // dragged the whole account's clock backwards on every screen and both widgets. An
+        // absurdly large one did the reverse and won the same minimum.
         let resetAt = absoluteReset ?? JSONSupport.int64(
             window, "reset_after_seconds", "resetAfterSeconds"
-        ).map { now.addingTimeInterval(TimeInterval($0)) }
+        ).flatMap { offset -> Date? in
+            guard offset >= 0, offset <= JSONSupport.secondsBound else { return nil }
+            return now.addingTimeInterval(TimeInterval(offset))
+        }
 
         return UsageWindow(
             id: id,

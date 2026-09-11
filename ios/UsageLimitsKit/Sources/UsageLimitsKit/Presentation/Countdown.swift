@@ -16,7 +16,20 @@ public enum Countdown {
     /// A sub-minute remainder rounds UP to `1m` rather than down to `0m`: zero reads as "it has
     /// reset", which is the one thing that is not yet true.
     public static func format(until date: Date, from now: Date) -> String {
-        format(seconds: Int(date.timeIntervalSince(now)))
+        // Clamped, not converted. `Int(_: Double)` TRAPS outside Int's range, and this is
+        // called on raw parser output from four screens and the widget — so a provider
+        // reporting an absurd reset instant crashed the process rather than printing an absurd
+        // countdown. Kotlin's `toInt()` saturates, which is also why only this side could.
+        let interval = date.timeIntervalSince(now)
+        guard interval.isFinite else { return "now" }
+        // Compared, not clamped to a computed upper bound. The previous bound was
+        // `-Double(Int.min) - 1`, meant as Int.max — but 2^63 - 1 is not representable as a
+        // Double and rounds back UP to 2^63, which is out of range, so the clamp admitted the
+        // one value it existed to stop and `Int(clamped)` trapped on it. `Double(Int.max)` is
+        // that same 2^63, so `>=` catches the boundary.
+        if interval >= Double(Int.max) { return format(seconds: Int.max) }
+        if interval <= Double(Int.min) { return format(seconds: Int.min) }
+        return format(seconds: Int(interval))
     }
 
     public static func format(seconds: Int) -> String {

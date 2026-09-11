@@ -99,7 +99,7 @@ class AntigravityProvider(
 
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.Redirect) { "Antigravity uses the redirect flow" }
 
@@ -149,7 +149,9 @@ class AntigravityProvider(
      * never left this device. The Antigravity quota scopes are bound to this specific client
      * id, so registering a fresh Android client would simply not be able to reach them.
      */
-    private suspend fun exchangeCode(code: String, codeVerifier: String): OAuthCredentials {
+    // Internal so the one-time-grant rule on this exchange can be tested directly; the only
+    // other route in is a complete device or loopback login, which no unit test can drive.
+    internal suspend fun exchangeCode(code: String, codeVerifier: String): OAuthCredentials {
         val response = http.request(
             url = Antigravity.TOKEN_ENDPOINT,
             method = "POST",
@@ -164,6 +166,12 @@ class AntigravityProvider(
                     "code_verifier" to codeVerifier,
                 ),
             ),
+            // An authorization code is spent by ARRIVING at the endpoint, exactly like a
+            // rotating refresh grant — and the refresh path already says so. This one did
+            // not, so a 502 from something in front of the token endpoint had the client
+            // re-present the code, which the server then refused as consumed, and a sign-in
+            // that had in fact succeeded reported a failure.
+            oneTimeGrant = true,
         )
         return toCredentials(JsonSupport.parseObject(response.body))
     }
@@ -362,7 +370,7 @@ class AntigravityProvider(
             accessToken = accessToken,
             refreshToken = JsonSupport.string(payload, "refresh_token", "refreshToken"),
             idToken = JsonSupport.string(payload, "id_token", "idToken"),
-            expiresAt = expiresIn?.let { nowMs() + it * 1000 },
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs()),
         )
     }
 

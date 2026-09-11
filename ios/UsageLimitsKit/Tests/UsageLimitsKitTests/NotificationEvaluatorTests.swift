@@ -505,6 +505,118 @@ final class NotificationEvaluatorTests: XCTestCase {
         XCTAssertEqual(spoken, 1, "an unchanged account must be warned once, not once per sync")
     }
 
+    // MARK: - Muting one account
+
+    /// A muted account says NOTHING — not a quota tier, not a credit deadline, not a standing
+    /// finding.
+    ///
+    /// Asserted as "no events at all" rather than "no event mentioning low", because the keys
+    /// spell the tier as `warning`/`critical` and a search for the word the user reads passes
+    /// against an implementation that mutes nothing. That exact vacuous assertion is what the
+    /// Android test started as.
+    func testAMutedAccountRaisesNothingAtAll() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let credit = ResetCredit(
+            id: "c1", grantedAt: now.addingTimeInterval(-1_000),
+            expiresAt: now.addingTimeInterval(3_600), status: "available")
+        let summary = account(remaining: 5, exhausted: false, credits: [credit])
+
+        let loud = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+        XCTAssertFalse(loud.events.isEmpty, "precondition: this account has something to say")
+        XCTAssertFalse(loud.standingFindings.isEmpty, "precondition: and a standing fact too")
+
+        let silent = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: muted, states: [:], now: now)
+
+        // Both halves matter. The events must still exist so the ledger can claim their keys —
+        // that is what stops the threshold being announced the day the mute is lifted — and
+        // every one must be blank so the shade stays quiet now. "No events" would pass an
+        // implementation that drops them, which is the replay-on-unmute bug.
+        XCTAssertFalse(silent.events.isEmpty, "the keys are still offered for claiming")
+        XCTAssertTrue(
+            silent.events.allSatisfy { $0.line.isEmpty },
+            "muted, but with text: \(silent.events.filter { !$0.line.isEmpty }.map(\.key))")
+        XCTAssertTrue(silent.standingFindings.isEmpty, "muted: \(silent.standingFindings)")
+    }
+
+    /// A failed sign-in is a standing fact, and the one most tempting to exempt from a mute.
+    /// It is not exempt: the user asked this account not to speak.
+    func testAMutedAccountDoesNotReportItsExpiredSignIn() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "credentials expired")
+
+        XCTAssertEqual(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: settings, states: [:], now: now
+            ).standingFindings,
+            ["Account acct needs to be reconnected"],
+            "precondition")
+
+        XCTAssertTrue(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: muted, states: [:], now: now
+            ).standingFindings.isEmpty)
+    }
+
+    func testMutingOneAccountLeavesItsNeighbourAlone() {
+        var muted = settings
+        muted.mutedAccountIDs = ["quiet"]
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [account("quiet", remaining: 5), account("loud", remaining: 5)],
+            settings: muted,
+            states: [:],
+            now: now)
+
+        let spoken = outcome.events.filter { !$0.line.isEmpty }
+        XCTAssertTrue(
+            spoken.allSatisfy { $0.accountId == "loud" },
+            "\(spoken.map(\.accountId))")
+        XCTAssertFalse(spoken.isEmpty, "the unmuted account must still be heard")
+        XCTAssertTrue(
+            outcome.events.contains { $0.accountId == "quiet" },
+            "the silenced one still has its keys claimed")
+    }
+
+    /// Unmuting resumes; it does not replay — and it does not restate either.
+    ///
+    /// A mute is a disabled setting scoped to one account, and it follows the rule every
+    /// disabled setting here follows: the keys are claimed, blank, while it is off. So the
+    /// thresholds crossed during the mute are spent, and lifting it announces only what
+    /// happens NEXT. The first version of this test expected the current tier to be restated
+    /// once on unmute; that was the "drop the events" implementation describing itself, and
+    /// it contradicted the rule the rest of the evaluator is built on.
+    func testUnmutingDoesNotAnnounceAThresholdCrossedWhileMuted() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let publisher = Publisher()
+
+        XCTAssertEqual(publisher.sync([account(remaining: 15)], muted, now), [])
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 5, fetchedAt: now.addingTimeInterval(60))],
+                muted, now.addingTimeInterval(60)),
+            [])
+
+        // Unmuted, still at 5 %, newer snapshot: both tiers were claimed while silent.
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 5, fetchedAt: now.addingTimeInterval(120))],
+                settings, now.addingTimeInterval(120)),
+            [])
+
+        // A NEW edge after unmuting is still heard — silence is not permanent.
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 0, fetchedAt: now.addingTimeInterval(180), exhausted: true)],
+                settings, now.addingTimeInterval(180)),
+            ["Account acct · 5h limit exhausted"])
+    }
+
     func testStateForAnAccountMissingFromThisSyncIsCarriedThrough() {
         // The outcome is built from a map that must be SEEDED with everything handed in.
         // Starting it empty reads more naturally — the outcome is its values, and seeding
@@ -527,4 +639,83 @@ final class NotificationEvaluatorTests: XCTestCase {
             outcome.states.contains { $0.accountId == "acct" },
             "the absent account's state must survive: \(outcome.states.map(\.accountId))")
     }
+    // MARK: - The message the evaluator has to recognise
+
+    /// The producer and the matcher have to agree, and nothing else was making them.
+    ///
+    /// The evaluator asked `errorMessage.lowercased().contains("expired")`. Nothing on this
+    /// platform ever said "expired" — a rejected credential produced "This account needs
+    /// signing in again." — so the predicate was false for every account that had one and
+    /// `notifyOnAuthExpired` never fired. The user whose sign-in had lapsed was simply not
+    /// told, while their numbers quietly stopped moving.
+    ///
+    /// The old tests fed hand-written strings the real producer never emits, so they passed
+    /// against a notification that could not fire. This one asks the producer.
+    func testTheMessageAFailedSignInProducesIsTheOneTheEvaluatorLooksFor() {
+        let produced = (ProviderError.unauthorised as any LocalizedError).errorDescription
+
+        XCTAssertNotNil(produced)
+        XCTAssertTrue(
+            NotificationEvaluator.meansSignInExpired(produced),
+            "the evaluator must recognise what the provider layer actually emits, not a "
+                + "sentence only a test ever writes: \(produced ?? "nil")")
+    }
+
+    /// End to end through the evaluator, with the real message rather than an invented one.
+    func testARejectedCredentialIsReportedUsingTheRealMessage() {
+        let produced = (ProviderError.unauthorised as any LocalizedError).errorDescription
+        let summary = account(remaining: nil, failed: true, errorMessage: produced)
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+
+        XCTAssertEqual(outcome.standingFindings, ["Account acct needs to be reconnected"])
+    }
+
+    /// A snapshot cached by an earlier build holds the old wording and outlives the upgrade, so
+    /// the account it belongs to must not go quiet until the next successful sync replaces it.
+    func testASnapshotFromAnEarlierBuildIsStillRecognised() {
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "This account needs signing in again.")
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+
+        XCTAssertEqual(outcome.standingFindings, ["Account acct needs to be reconnected"])
+    }
+
+    /// And an unrelated failure still says nothing about signing in.
+    func testAnOrdinaryFailureIsNotReportedAsAnExpiredSignIn() {
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "No usage could be read (timeout).")
+
+        XCTAssertTrue(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: settings, states: [:], now: now
+            ).standingFindings.isEmpty)
+    }
+
+    // MARK: - Zero is exhausted
+
+    /// A known 0 % is exhausted whether or not the provider also set its flag.
+    ///
+    /// The evaluator read the flag alone, so a window at 0 % without it reached only the warning
+    /// and critical tiers — and a user with just the exhausted alert switched on heard nothing
+    /// when a limit ran out. Android reads the window's severity, which counts 0 % as
+    /// exhausted; the two must say the same thing about the same payload.
+    func testZeroRemainingIsExhaustedWithoutTheProviderFlag() {
+        var onlyExhausted = settings
+        onlyExhausted.notifyBelow20Percent = false
+        onlyExhausted.notifyBelow10Percent = false
+        onlyExhausted.notifyOnExhausted = true
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [account(remaining: 0, exhausted: false)],
+            settings: onlyExhausted, states: [:], now: now)
+
+        XCTAssertEqual(
+            outcome.events.filter { !$0.line.isEmpty }.map(\.line),
+            ["Account acct · 5h limit exhausted"])
+    }
+
 }

@@ -110,6 +110,22 @@ enum DeviceLoginTiming {
     static let minimumPollInterval: TimeInterval = 5
     /// Used when a provider states no expiry of its own.
     static let defaultLifetime: TimeInterval = 15 * 60
+
+    /// Sleeps for a provider-supplied interval without trusting it.
+    ///
+    /// `UInt64(seconds * 1_000_000_000)` TRAPS once the product leaves UInt64's range, and an
+    /// `"interval": 20000000000` in a device response is enough — the floor below the interval
+    /// was the only check, and a floor says nothing about a ceiling. A crash mid sign-in is
+    /// the worst answer available here; a malformed-response error is one the flow already
+    /// knows how to show.
+    static func sleep(seconds: TimeInterval) async throws {
+        guard seconds.isFinite, seconds >= 0,
+              let nanos = UInt64(exactly: (seconds * 1_000_000_000).rounded(.towardZero))
+        else {
+            throw DeviceLoginError.malformedResponse("invalid poll interval")
+        }
+        try await Task.sleep(nanoseconds: nanos)
+    }
 }
 
 // MARK: - Codex
@@ -206,7 +222,7 @@ public struct CodexDeviceLogin: DeviceLoginProvider {
                 return try await exchange(code: code, verifier: verifier)
             }
 
-            try await Task.sleep(nanoseconds: UInt64(challenge.pollInterval * 1_000_000_000))
+            try await DeviceLoginTiming.sleep(seconds: challenge.pollInterval)
         }
         throw DeviceLoginError.expired
     }
@@ -257,7 +273,7 @@ public struct CodexDeviceLogin: DeviceLoginProvider {
             externalAccountID: accountID,
             email: JWTClaims.string(claims, "email"),
             displayName: nil,
-            plan: JWTClaims.string(auth, "chatgpt_plan_type"),
+            plan: planLabel(JWTClaims.string(auth, "chatgpt_plan_type")),
             attributes: attributes)
     }
 }
@@ -347,6 +363,12 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
             "client_id": ProviderEndpoints.Xai.clientID,
         ])
 
+        // The interval OUTLIVES a slow_down. RFC 8628 §3.5 says the client "MUST increase its
+        // polling interval by 5 seconds for all subsequent requests"; sleeping an extra five
+        // seconds once and then resuming at the original rate polled faster than the server
+        // had just asked, which is how a device flow earns a ban rather than an answer.
+        var interval = challenge.pollInterval
+
         while now() < challenge.expiresAt {
             try Task.checkCancellation()
 
@@ -375,9 +397,8 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
                 case "authorization_pending":
                     break
                 case "slow_down":
-                    // The five seconds RFC 8628 §3.5 specifies. Polling faster than a server
-                    // allows earns a ban rather than an answer.
-                    try await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                    // The five seconds RFC 8628 §3.5 specifies, added to every poll from here on.
+                    interval += 5
                 case "expired_token":
                     throw DeviceLoginError.expired
                 case "access_denied":
@@ -387,7 +408,7 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
                 }
             }
 
-            try await Task.sleep(nanoseconds: UInt64(challenge.pollInterval * 1_000_000_000))
+            try await DeviceLoginTiming.sleep(seconds: interval)
         }
         throw DeviceLoginError.expired
     }
@@ -456,6 +477,13 @@ public enum LoginStyle: Sendable, Equatable {
 
     /// The provider redirects to a loopback address this app listens on.
     case loopbackRedirect
+
+    /// No flow at all: the user creates a key on the provider's console and pastes it.
+    ///
+    /// Kimi Code only. Its device flow is bound to `kimi-cli`'s client id and `api.kimi.com`
+    /// gates on an `X-Msh-Platform` allowlist, so driving it would mean impersonating another
+    /// client past an access control. See docs/providers-kimi.md.
+    case pastedKey
 }
 
 public enum DeviceLoginSupport {
@@ -464,6 +492,7 @@ public enum DeviceLoginSupport {
         switch provider {
         case .codex, .xai: return .deviceCode
         case .claude, .antigravity: return .loopbackRedirect
+        case .kimi: return .pastedKey
         }
     }
 

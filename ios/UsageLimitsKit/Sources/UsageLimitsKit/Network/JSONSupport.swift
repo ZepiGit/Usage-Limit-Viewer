@@ -15,6 +15,11 @@ public enum JSONSupport {
     /// Epoch values above this are already milliseconds. Roughly the year 2286.
     private static let secondsUpperBound: Int64 = 10_000_000_000
 
+    /// The same figure, for callers that need to bound a DURATION rather than classify a
+    /// stamp — about three centuries, which no quota window has. Kotlin bounds its offsets
+    /// with the identical constant in `Instants`.
+    public static var secondsBound: Int64 { secondsUpperBound }
+
     private static func first(_ source: [String: Any]?, _ names: [String]) -> Any? {
         guard let source else { return nil }
         for name in names {
@@ -75,11 +80,25 @@ public enum JSONSupport {
 
     public static func int64(_ source: [String: Any]?, _ names: String...) -> Int64? {
         guard let value = first(source, names) else { return nil }
+        // The exclusion `double` applies and this did not: a JSON `true` is an NSNumber whose
+        // int64Value is 1, so `"reset_after_seconds": true` became a reset one second away.
+        if isBooleanLiteral(value) { return nil }
         if let number = value as? NSNumber { return number.int64Value }
         if let text = value as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if let exact = Int64(trimmed) { return exact }
-            if let approx = Double(trimmed), approx.isFinite { return Int64(approx) }
+            // Range-checked as well as finiteness-checked, and the range check is the one that
+            // matters here: `Int64(_: Double)` TRAPS on a value outside Int64, where Kotlin's
+            // `toLong()` merely saturates. "1e30" is finite, so the old guard let it through —
+            // and a trap inside the widget extension is a blank tile with no diagnostic.
+            //
+            // The upper comparison is strict: `Double(Int64.max)` rounds UP to 2^63, which is
+            // itself out of range, so `<=` would trap on exactly the boundary it was meant to
+            // stop.
+            if let approx = Double(trimmed), approx.isFinite,
+               approx >= Double(Int64.min), approx < -Double(Int64.min) {
+                return Int64(approx)
+            }
         }
         return nil
     }
@@ -126,7 +145,13 @@ public enum JSONSupport {
             return nil
         }
         if let epoch = Int64(raw) { return date(epoch: epoch) }
-        if let epoch = Double(raw), epoch.isFinite { return date(epoch: Int64(epoch)) }
+        // Range-checked like `int64`, which was hardened for this and left this line behind.
+        // `Int64(1e30)` traps — finite is not the same as representable — and the parsers
+        // accept numeric strings by design, so a payload can reach here with one.
+        if let epoch = Double(raw), epoch.isFinite,
+           epoch >= Double(Int64.min), epoch < -Double(Int64.min) {
+            return date(epoch: Int64(epoch))
+        }
         // Sub-millisecond precision is trimmed to three digits before parsing, as the Kotlin
         // twin does: providers overrun it (xAI sends six), and the formatter is stricter than
         // java.time about what it will take.

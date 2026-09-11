@@ -19,6 +19,15 @@ final class AppLaunchUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Swipes until the element materialises, or gives up rather than swiping for ever.
+    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        for _ in 0..<6 {
+            if element.exists { return true }
+            app.swipeUp()
+        }
+        return element.waitForExistence(timeout: 2)
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         // Read by the app to skip the notification-permission prompt, which is a system alert
@@ -61,9 +70,30 @@ final class AppLaunchUITests: XCTestCase {
         }
     }
 
+    func testTheSettingsScreenOffersTheDisplaySwitches() {
+        // Two preferences that decide what the overview prints, and the only part of this
+        // feature a simulator can check: the drag handle needs two accounts to appear and the
+        // widget gallery is out of an XCUITest's reach, but a switch that failed to build is
+        // visible here.
+        let app = launch()
+
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+
+        for label in ["Show subscription tier", "Show renewal time"] {
+            // Scrolled to rather than merely waited for. A Form is a lazy list, so a row below
+            // the fold is absent from the hierarchy rather than present and off-screen — and
+            // the Display section sits under six notification switches, which is below the fold
+            // on the phone this runs on.
+            XCTAssertTrue(scrollTo(app.switches[label], in: app), "\(label) should be offered")
+        }
+    }
+
     func testTheAddAccountSheetOffersEveryProvider() {
-        // All four can be signed into: two by device code, two by a loopback redirect the app
-        // receives itself. The sheet must open and offer each of them rather than dead-end.
+        // All five can be signed into: two by device code, two by a loopback redirect the app
+        // receives itself, and one with a key the user pastes. The sheet must open and offer
+        // each of them rather than dead-end.
         let app = launch()
 
         let accounts = app.buttons["Accounts"]
@@ -78,7 +108,7 @@ final class AppLaunchUITests: XCTestCase {
             app.navigationBars["Add account"].waitForExistence(timeout: 10),
             "the add-account sheet should open")
 
-        for provider in ["OpenAI Codex", "Claude", "Antigravity", "Grok"] {
+        for provider in ["OpenAI Codex", "Claude", "Antigravity", "Grok", "Kimi"] {
             XCTAssertTrue(
                 app.staticTexts[provider].waitForExistence(timeout: 5),
                 "\(provider) should be offered")

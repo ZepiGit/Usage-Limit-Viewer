@@ -492,10 +492,28 @@ public actor SyncEngine {
                     // `superseded` tracks what the STORE actually holds, not what this call
                     // started from. Across two failed writes those differ, and recording the
                     // wrong one is what made the override go stale.
-                    let stored = try? await self.credentials.load(reference: reference)
-                    self.unsaved[reference] = stored.map {
-                        (superseded: $0, renewed: credentials)
-                    } ?? nil
+                    //
+                    // And guarded the same way as the write above, for the same race: a login
+                    // that completed while these attempts were failing has put a NEW pair in
+                    // the store. Installing this rotation over it as "renewed" made
+                    // `currentCredentials` hand back a pair derived from the session the user
+                    // had just replaced, and a later rotation then treated that override as
+                    // authoritative and overwrote the fresh login for good.
+                    guard let stored = try? await self.credentials.load(reference: reference) else {
+                        self.unsaved[reference] = nil
+                        return
+                    }
+                    let effective: OAuthCredentials
+                    if let pending = self.unsaved[reference], pending.superseded == stored {
+                        effective = pending.renewed
+                    } else {
+                        effective = stored
+                    }
+                    guard effective == expected else {
+                        self.unsaved[reference] = nil
+                        return
+                    }
+                    self.unsaved[reference] = (superseded: stored, renewed: credentials)
                     return
                 }
                 // A short, fixed pause. The plausible causes are momentary; a long backoff would

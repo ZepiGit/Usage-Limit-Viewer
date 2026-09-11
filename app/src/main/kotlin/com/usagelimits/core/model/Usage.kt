@@ -131,9 +131,16 @@ data class UsageSnapshot(
     val spendableResetCredits: Int
         get() = spendableResetCreditsAt(System.currentTimeMillis())
 
-    /** The window closest to running out — what the summary card leads with. */
+    /**
+     * The window closest to running out — what the summary card leads with.
+     *
+     * An explicitly exhausted window outranks everything, whatever its percentage says. Ranked
+     * by percentage alone, a window the provider flagged exhausted but gave no figure for sorted
+     * LAST — unknown reads as "infinitely much left" — and the summary led with a 10 %-remaining
+     * neighbour while the real emergency sat below it.
+     */
     val mostCritical: UsageWindow?
-        get() = windows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
+        get() = windows.minByOrNull { if (it.exhausted) -1.0 else it.remainingPercent ?: Double.MAX_VALUE }
 
     /** The next rollover across all windows, used by the Resets screen and the widgets. */
     val nextReset: Long?

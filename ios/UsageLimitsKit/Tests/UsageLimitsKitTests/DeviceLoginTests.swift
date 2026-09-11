@@ -201,7 +201,7 @@ final class DeviceLoginTests: XCTestCase {
             .profile(OAuthCredentials(accessToken: "a", idToken: jwt))
 
         XCTAssertEqual(profile.externalAccountID, "acct-789")
-        XCTAssertEqual(profile.plan, "plus")
+        XCTAssertEqual(profile.plan, "Plus")
         XCTAssertEqual(profile.attributes["chatgpt_account_id"], "acct-789")
     }
 
@@ -316,4 +316,22 @@ final class DeviceLoginTests: XCTestCase {
         let sent = await transport.requests
         XCTAssertTrue(sent.isEmpty, "nothing should have been sent")
     }
+    // MARK: - A poll interval the provider chose
+
+    /// `UInt64(seconds * 1e9)` traps once the product leaves UInt64. The floor under the
+    /// interval was the only check, and a floor says nothing about a ceiling. Against the
+    /// unguarded version this test aborts the process rather than failing.
+    func testAnAbsurdPollIntervalIsAnErrorNotATrap() async {
+        for seconds in [20_000_000_000.0, -1.0, .infinity, .nan] {
+            do {
+                try await DeviceLoginTiming.sleep(seconds: seconds)
+                XCTFail("\(seconds) must be refused")
+            } catch DeviceLoginError.malformedResponse {
+                // Expected.
+            } catch {
+                XCTFail("wrong error for \(seconds): \(error)")
+            }
+        }
+    }
+
 }

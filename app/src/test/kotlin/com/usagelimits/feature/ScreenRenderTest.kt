@@ -1,7 +1,10 @@
 package com.usagelimits.feature
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performScrollToNode
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.settings.AppSettings
 import com.usagelimits.core.model.ProviderAccount
@@ -10,12 +13,18 @@ import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.model.WindowCategory
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.usagelimits.feature.accounts.AccountDetailScreen
+import com.usagelimits.feature.accounts.AddAccountScreen
+import com.usagelimits.feature.accounts.AddAccountState
 import com.usagelimits.feature.accounts.AccountsScreen
 import com.usagelimits.feature.overview.OverviewScreen
 import com.usagelimits.feature.resets.ResetsScreen
 import com.usagelimits.feature.settings.SettingsScreen
 import com.usagelimits.ui.theme.UsageLimitsTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -107,6 +116,7 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onAccountClick = {},
                 onAddAccount = {},
+                onReorder = {},
             )
         }
 
@@ -129,6 +139,7 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onAccountClick = {},
                 onAddAccount = {},
+                onReorder = {},
             )
         }
 
@@ -145,6 +156,7 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onAccountClick = {},
                 onAddAccount = {},
+                onReorder = {},
             )
         }
 
@@ -160,6 +172,7 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onAccountClick = {},
                 onAddAccount = {},
+                onReorder = {},
             )
         }
 
@@ -179,6 +192,7 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onAccountClick = {},
                 onAddAccount = {},
+                onReorder = {},
             )
         }
 
@@ -232,12 +246,36 @@ class ScreenRenderTest {
                 onNotifyAuthExpired = {},
                 onNotifyResetApproaching = {},
                 onNotifyCreditExpiring = {},
+                onShowTier = {},
+                onShowRenewal = {},
             )
         }
 
+        // Scrolled to rather than assumed visible. This assertion used to pass because the
+        // notification rows happened to fall inside the viewport; adding a section above them
+        // pushed the row out of it and failed a test about whether the toggle EXISTS. A
+        // LazyColumn only composes what is on screen, so anything below the fold has to be
+        // scrolled to before it can be found.
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasText("Below 20% left", substring = true))
         compose.onAllNodesWithText("Below 20% left", substring = true)
             .fetchSemanticsNodes()
-            .let { assertTrue("the 20% toggle should be on screen", it.isNotEmpty()) }
+            .let { assertTrue("the 20% toggle should be reachable", it.isNotEmpty()) }
+
+        // The two display switches, which decide what the overview shows per account.
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasText("Show subscription tier", substring = true))
+        compose.onAllNodesWithText("Show subscription tier", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the tier switch should be reachable", it.isNotEmpty()) }
+        compose.onAllNodesWithText("Show renewal time", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the renewal switch should be reachable", it.isNotEmpty()) }
+
+        // And the section that used to sit between them and Diagnostics is gone.
+        compose.onAllNodesWithText("Credential storage", substring = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("the Security section should be gone", it.isEmpty()) }
     }
 
     @Test
@@ -253,6 +291,8 @@ class ScreenRenderTest {
                 onRefresh = { refreshed = true },
                 onConsumeResetCredit = {},
                 onRemove = {},
+                notificationsEnabled = true,
+                onNotificationsChange = {},
             )
         }
 
@@ -272,9 +312,56 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onConsumeResetCredit = {},
                 onRemove = {},
+                notificationsEnabled = true,
+                onNotificationsChange = {},
             )
         }
 
         compose.waitForIdle()
+    }
+
+    /**
+     * Signing in with a device code means carrying the code from this screen to a browser on the
+     * same phone. Reading eight characters off the screen and typing them into another app is
+     * where that flow was breaking down, so the code goes to the clipboard on its own, and the
+     * card offers to do it again by hand.
+     *
+     * Both halves are asserted because both can fail on their own: the automatic copy is a
+     * `LaunchedEffect` that a refactor can drop without breaking the layout, and the buttons are
+     * the fallback for a browser that never opened.
+     */
+    @Test
+    fun `the device code is copied for you and can be copied again`() {
+        render {
+            AddAccountScreen(
+                state = AddAccountState.AwaitingDeviceCode(
+                    provider = ProviderId.CODEX,
+                    userCode = "WDJB-MJHT",
+                    verificationUri = "https://auth.openai.com/device",
+                ),
+                providers = listOf(ProviderId.CODEX),
+                onStart = {},
+                onCancel = {},
+                onDone = {},
+                onSubmitApiKey = {},
+            )
+        }
+
+        val clipboard = ApplicationProvider.getApplicationContext<Context>()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals(
+            "the code should be on the clipboard without anyone pressing anything",
+            "WDJB-MJHT",
+            clipboard.primaryClip?.getItemAt(0)?.text?.toString(),
+        )
+
+        assertTrue(
+            "the code should still be copyable by hand",
+            compose.onAllNodesWithText("Copy code").fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertTrue(
+            "and the sign-in page reopenable, for when the browser never came up",
+            compose.onAllNodesWithText("Open page").fetchSemanticsNodes().isNotEmpty(),
+        )
     }
 }

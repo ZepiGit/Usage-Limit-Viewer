@@ -15,6 +15,33 @@ public actor AccountRepository {
     private struct Stored: Codable, Sendable {
         var account: ProviderAccount
         var snapshot: UsageSnapshot?
+
+        /// Where the user dragged this account, or nil if they never have.
+        ///
+        /// Stored beside the account rather than on it, because it is a fact about this list
+        /// and not about the account: the widget decodes `ProviderAccount` and has no business
+        /// being handed a field it cannot act on. Nil rather than 0 so an account added after a
+        /// reorder joins the end of the list instead of tying for the front.
+        var sortOrder: Int?
+
+        private enum CodingKeys: String, CodingKey { case account, snapshot, sortOrder }
+
+        init(account: ProviderAccount, snapshot: UsageSnapshot?, sortOrder: Int? = nil) {
+            self.account = account
+            self.snapshot = snapshot
+            self.sortOrder = sortOrder
+        }
+
+        /// Lenient on the new key, for the reason spelled out on `load`: a register written
+        /// before manual ordering existed has no `sortOrder`, and the synthesised decoder would
+        /// reject the whole file — which this type treats as a register it must not overwrite,
+        /// stranding every account the user had connected.
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            account = try c.decode(ProviderAccount.self, forKey: .account)
+            snapshot = try c.decodeIfPresent(UsageSnapshot.self, forKey: .snapshot)
+            sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        }
     }
 
     private let fileURL: URL
@@ -89,11 +116,18 @@ public actor AccountRepository {
         return ordered().map { AccountUsage(account: $0.account, snapshot: $0.snapshot) }
     }
 
-    /// Oldest first, so the list a user sees does not reshuffle because a dictionary rehashed.
+    /// The user's own order where they have one, oldest first everywhere else.
+    ///
+    /// Accounts never dragged sort after every dragged one and keep their age order, so adding
+    /// an account to a hand-arranged list appends it rather than dropping it into the middle.
+    /// The id is the final tiebreak so the list a user sees cannot reshuffle because a
+    /// dictionary rehashed.
     private func ordered() -> [Stored] {
-        records.values.sorted {
-            ($0.account.createdAt, $0.account.id) < ($1.account.createdAt, $1.account.id)
-        }
+        records.values.sorted { Self.sortKey($0) < Self.sortKey($1) }
+    }
+
+    private static func sortKey(_ stored: Stored) -> (Int, Date, String) {
+        (stored.sortOrder ?? Int.max, stored.account.createdAt, stored.account.id)
     }
 
     // MARK: - Writing
@@ -104,7 +138,12 @@ public actor AccountRepository {
         // updates its tokens, not its quota, and blanking the numbers would make a successful
         // sign-in look like a regression.
         var updated = records
-        updated[account.id] = Stored(account: account, snapshot: records[account.id]?.snapshot)
+        // The snapshot AND the place in the list survive a re-save: re-authenticating an
+        // account changes its tokens, not where the user put it.
+        updated[account.id] = Stored(
+            account: account,
+            snapshot: records[account.id]?.snapshot,
+            sortOrder: records[account.id]?.sortOrder)
         try persist(updated)
     }
 
@@ -166,6 +205,26 @@ public actor AccountRepository {
         try persist(updated)
     }
 
+    /// Writes the order the user dragged the accounts into.
+    ///
+    /// The whole list is renumbered rather than two entries swapped, because a partial write
+    /// leaves an order that is neither the old one nor the new one — and the list is short
+    /// enough that renumbering it costs nothing.
+    ///
+    /// Ids this caller does not know about are left alone: an account added on another screen
+    /// while the overview was open keeps whatever place it had rather than being renumbered to
+    /// the front. Same rule as the Android repository.
+    public func reorder(ids: [String]) throws {
+        try requireLoaded()
+        var updated = records
+        for (index, id) in ids.enumerated() {
+            guard var stored = updated[id] else { continue }
+            stored.sortOrder = index
+            updated[id] = stored
+        }
+        try persist(updated)
+    }
+
     // MARK: - Persistence
 
     /// Writes a candidate state, and only then makes it the state readers see.
@@ -183,9 +242,7 @@ public actor AccountRepository {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
 
-        let ordered = updated.values.sorted {
-            ($0.account.createdAt, $0.account.id) < ($1.account.createdAt, $1.account.id)
-        }
+        let ordered = updated.values.sorted { Self.sortKey($0) < Self.sortKey($1) }
 
         // Atomic, because the widget process can be reading the same container while this
         // writes. A half-written file decodes to nothing, and a list that empties itself

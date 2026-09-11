@@ -1,6 +1,7 @@
 package com.usagelimits.feature
 
 import com.usagelimits.core.database.AccountUsage
+import com.usagelimits.core.settings.AppSettings
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
@@ -117,4 +118,53 @@ class OverviewOrderingTest {
         // "—" on the card, not "now" for ever.
         assertNull(state.nextResetAt(now))
     }
+
+    /**
+     * The order the user dragged the cards into beats the urgency ranking — but only once they
+     * have actually dragged one.
+     *
+     * Two orders live on this screen, and getting the precedence wrong is invisible in either
+     * direction: re-ranking a hand-made arrangement on the next sync looks like the drag was
+     * forgotten, and honouring an all-zero `sortOrder` on a fresh install looks like the
+     * urgency ranking was never built.
+     */
+    @Test
+    fun `urgency ranks the list until someone arranges it by hand`() {
+        // Deliberately handed over in the WRONG urgency order, as the repository would after a
+        // reorder: it returns rows by sortOrder.
+        val healthy = usageWith("healthy", 10.0)
+        val exhausted = usageWith("exhausted", 100.0)
+        val accounts = listOf(healthy, exhausted)
+
+        val ranked = UsageUiState(accounts = accounts, settings = AppSettings())
+        assertEquals(
+            "with no manual order, the exhausted account comes first",
+            listOf("exhausted", "healthy"),
+            ranked.orderedAccounts(now).map { it.account.localId },
+        )
+
+        val arranged = UsageUiState(
+            accounts = accounts,
+            settings = AppSettings(accountsManuallyOrdered = true),
+        )
+        assertEquals(
+            "once arranged by hand, the stored order stands and nothing re-ranks it",
+            listOf("healthy", "exhausted"),
+            arranged.orderedAccounts(now).map { it.account.localId },
+        )
+    }
+
+    private fun usageWith(id: String, usedPercent: Double) = AccountUsage(
+        account(id),
+        UsageSnapshot(
+            accountId = id, fetchedAt = now, status = SnapshotStatus.OK,
+            windows = listOf(
+                UsageWindow(
+                    id = "$id-w", label = "5h limit", category = WindowCategory.FIVE_HOUR,
+                    usedPercent = usedPercent, periodSeconds = 18_000,
+                    resetAt = now + 3_600_000, exhausted = usedPercent >= 100.0,
+                ),
+            ),
+        ),
+    )
 }

@@ -137,10 +137,12 @@ class XaiProvider(
                 "verification_uri_complete",
                 "verificationUriComplete",
             )?.let { validateEndpoint(it, "verification_uri_complete") },
-            expiresAt = nowMs() + expiresIn * 1000,
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs())
+                ?: (nowMs() + DEFAULT_EXPIRES_SECONDS * 1000),
             // The provider's interval is honoured but never allowed below the floor, so a
             // bad or missing value cannot turn the poll into a hot loop.
-            pollIntervalMs = maxOf(interval, MIN_POLL_SECONDS) * 1000,
+            pollIntervalMs = JsonSupport.secondsToMillis(maxOf(interval, MIN_POLL_SECONDS))
+                ?: MIN_POLL_SECONDS * 1000,
         )
     }
 
@@ -155,7 +157,7 @@ class XaiProvider(
      */
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.DeviceCode) { "xAI uses the device flow" }
         val (_, deviceCode, packedEndpoint) = splitChallenge(challenge.userCode)
@@ -375,7 +377,7 @@ class XaiProvider(
             accessToken = accessToken,
             refreshToken = JsonSupport.string(payload, "refresh_token", "refreshToken"),
             idToken = JsonSupport.string(payload, "id_token", "idToken"),
-            expiresAt = expiresIn?.let { nowMs() + it * 1000 },
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs()),
             // Pinned here so a refresh never depends on discovery being reachable.
             tokenEndpoint = tokenEndpoint,
         )

@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -231,5 +233,50 @@ fun SectionHeader(
             color = UsageColors.TextPrimary,
         )
         trailing?.invoke()
+    }
+}
+
+/**
+ * A labelled switch.
+ *
+ * Shared rather than duplicated: the settings screen and one account's detail screen both need
+ * exactly this row, and a second copy is how two switches end up looking slightly different.
+ */
+@Composable
+fun ToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = UsageColors.TextPrimary,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = UsageColors.TextSecondary,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = UsageColors.Background,
+                checkedTrackColor = UsageColors.Terracotta,
+                uncheckedThumbColor = UsageColors.TextTertiary,
+                uncheckedTrackColor = UsageColors.SurfaceMuted,
+            ),
+        )
     }
 }

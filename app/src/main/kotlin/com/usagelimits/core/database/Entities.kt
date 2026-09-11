@@ -88,6 +88,21 @@ data class WidgetConfigEntity(
     val accountId: String?,
     val provider: String?,
     val updatedAt: Long,
+    /**
+     * Draw the widget without its own background, letting the wallpaper through.
+     *
+     * Per placed widget rather than per app: one on a busy wallpaper wants the panel, the one
+     * tucked beside the clock does not.
+     *
+     * The default is declared HERE as well as in the migration. SQLite needs one to add a NOT
+     * NULL column to a table with rows in it, and Room compares the resulting schema against
+     * the one it expects — a column the migration defaults and the entity does not is a
+     * mismatch that only surfaces on a real upgrade, on a real device, with existing widgets.
+     * `windowsJson` in `notification_state` already does this; this field did not, until the
+     * exported schema was read back and compared with the ALTER statement.
+     */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val transparent: Boolean = false,
 )
 
 /**

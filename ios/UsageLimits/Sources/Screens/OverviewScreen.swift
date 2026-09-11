@@ -10,26 +10,99 @@ struct OverviewScreen: View {
 
     @EnvironmentObject private var store: UsageStore
 
+    /// Whether the list is in reordering mode.
+    ///
+    /// Owned here rather than taken from the environment, because leaving the screen should end
+    /// it: an edit mode that persists across tabs leaves a user back on a list whose rows do not
+    /// respond to a tap, with no memory of having asked for that.
+    @State private var editMode: EditMode = .inactive
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+            List {
+                Section {
                     SummaryCard(snapshot: store.glance, now: store.now)
+                        .plainRow()
+                        // Never draggable: it is the headline, not one of the accounts, and a
+                        // list that lets it be dropped between two cards makes the whole gesture
+                        // read as broken.
+                        .moveDisabled(true)
+                }
 
+                Section {
                     if store.accounts.isEmpty {
-                        EmptyStateCard()
+                        EmptyStateCard().plainRow()
                     } else {
-                        ForEach(store.glance.accounts) { account in
-                            AccountCard(account: account, now: store.now)
+                        ForEach(store.orderedAccounts) { account in
+                            AccountCard(
+                                account: account,
+                                now: store.now,
+                                tier: store.settings.showSubscriptionTier
+                                    ? store.tierLabel(accountID: account.id) : nil,
+                                renewal: store.settings.showRenewalTime
+                                    ? store.renewalLabel(accountID: account.id, now: store.now)
+                                    : nil)
+                                .plainRow()
+                        }
+                        .onMove(perform: move)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.editMode, $editMode)
+            .scrollContentBackground(.hidden)
+            .background(UsageColors.background)
+            .navigationTitle("Overview")
+            .toolbar {
+                // `|| editMode.isEditing` is the half that matters. Gated on the count alone,
+                // the button — and with it the only way OUT of reorder mode — vanished the
+                // moment a second account was disconnected on another tab: a TabView child is
+                // not torn down on a switch, so `editMode` came back still `.active`, the last
+                // card stayed in drag mode, and pull-to-refresh was suppressed with no control
+                // left to turn any of it off. Killing the app was the only exit.
+                if store.accounts.count > 1 || editMode.isEditing {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(editMode.isEditing ? "Done" : "Reorder") {
+                            withAnimation { editMode = editMode.isEditing ? .inactive : .active }
                         }
                     }
                 }
-                .padding(16)
             }
-            .background(UsageColors.background)
-            .navigationTitle("Overview")
-            .refreshable { await store.refresh() }
+            // And ended outright once there is nothing left to reorder, so the mode cannot
+            // outlive its purpose even while the button is on screen.
+            .onChange(of: store.accounts.count) { count in
+                if count < 2 { editMode = .inactive }
+            }
+            // Suspended while reordering: a pull that starts on a row being dragged is a refresh
+            // the user did not ask for, and it would replace the list under their finger.
+            .refreshable { if !editMode.isEditing { await store.refresh() } }
         }
+    }
+
+    /// Hands the store the WHOLE new order rather than the pair that swapped.
+    ///
+    /// The repository renumbers every row it is given, so sending the complete list is what
+    /// makes a partially-applied write impossible — and the list is short enough that there is
+    /// nothing to save by sending less.
+    private func move(from offsets: IndexSet, to destination: Int) {
+        var ids = store.orderedAccounts.map(\.id)
+        ids.move(fromOffsets: offsets, toOffset: destination)
+        Task { await store.reorderAccounts(ids: ids) }
+    }
+}
+
+private extension View {
+    /// A row that looks like the card it contains rather than like a table row.
+    ///
+    /// The overview was a `ScrollView` of cards until reordering arrived. `List` is what gives
+    /// the drag its native feel — the lift, the gap, the haptic — and none of that is worth
+    /// reimplementing on a drag gesture; stripping the row chrome is what keeps the design the
+    /// ScrollView had.
+    func plainRow() -> some View {
+        self
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 }
 
@@ -42,7 +115,7 @@ private struct SummaryCard: View {
     var body: some View {
         UsageCard {
             HStack(alignment: .firstTextBaseline) {
-                Text(SeverityPalette.label(snapshot.overallSeverity))
+                Text(healthyLabel)
                     .font(.system(size: 30, weight: .bold))
                     .foregroundStyle(SeverityPalette.text(snapshot.overallSeverity))
                 Spacer()
@@ -54,18 +127,24 @@ private struct SummaryCard: View {
             Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(UsageColors.textSecondary)
-
-            if snapshot.headlineShort != nil || snapshot.headlineLong != nil {
-                Divider().overlay(UsageColors.outline).padding(.vertical, 4)
-            }
-
-            if let short = snapshot.headlineShort {
-                WindowRow(row: short, now: now)
-            }
-            if let long = snapshot.headlineLong {
-                WindowRow(row: long, now: now)
-            }
         }
+    }
+
+    /// Healthy over total, coloured by the fleet's worst severity.
+    ///
+    /// This card used to lead with the severity WORD — "Exhausted" — printed in the colour that
+    /// already said so, and then repeat the two tightest windows underneath. Both went: the
+    /// account cards below carry every window with its own bar, so the summary was restating the
+    /// first card. What is left is the pair of numbers that cannot be read off anything else,
+    /// how many accounts are fine and when the next limit rolls over.
+    ///
+    /// Counted through `severity(at:staleAfter:)` rather than the stored value, so an account
+    /// whose numbers went stale while this screen was open stops counting as healthy.
+    private var healthyLabel: String {
+        let healthy = snapshot.accounts.filter {
+            $0.severity(at: now, staleAfter: snapshot.staleAfter) == .healthy
+        }.count
+        return "\(healthy)/\(snapshot.accountCount)"
     }
 
     private var subtitle: String {
@@ -90,6 +169,11 @@ private struct AccountCard: View {
 
     let account: GlanceAccount
     let now: Date
+    /// The plan the provider reports — Plus, Pro, Max — or nil when it is switched off or the
+    /// provider never said.
+    let tier: String?
+    /// When the long allowance comes back, when the user has asked to see it.
+    let renewal: String?
 
     var body: some View {
         UsageCard {
@@ -102,13 +186,30 @@ private struct AccountCard: View {
                     .accessibilityLabel(SeverityPalette.label(account.severity))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(account.title)
-                        .font(.headline)
-                        .foregroundStyle(UsageColors.textPrimary)
+                    HStack(spacing: 6) {
+                        Text(account.title)
+                            .font(.headline)
+                            .foregroundStyle(UsageColors.textPrimary)
+                        if let tier {
+                            Text(tier)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(UsageColors.textSecondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(UsageColors.surfaceElevated)
+                                .clipShape(Capsule())
+                        }
+                    }
                     if let subtitle = account.subtitle {
                         Text(subtitle)
                             .font(.footnote)
                             .foregroundStyle(UsageColors.textSecondary)
+                    }
+                    if let renewal {
+                        Text(renewal)
+                            .font(.caption)
+                            .foregroundStyle(UsageColors.textTertiary)
+                            .lineLimit(1)
                     }
                 }
 

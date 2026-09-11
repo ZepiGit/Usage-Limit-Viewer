@@ -29,7 +29,11 @@ final class UsageStore: ObservableObject {
                 // The stored value can differ from the one written — the sync interval is
                 // floored at what the platform will honour — so the screen is corrected to
                 // what will actually happen rather than left showing what was asked for.
-                if let stored = try? await container.save(settings: value) {
+                // Applied only if no NEWER edit has landed meanwhile. Two toggles in quick
+                // succession are two saves in flight; the first's acknowledgement arriving
+                // second used to reinstall its older value over the second toggle — and the next
+                // edit then copied that reverted value forward, so the loss became permanent.
+                if let stored = try? await container.save(settings: value), self?.settings == value {
                     self?.applyLoaded(stored)
                 }
                 BackgroundRefresh.schedule(after: value.syncIntervalMinutes)
@@ -39,6 +43,12 @@ final class UsageStore: ObservableObject {
 
     /// Suppresses the save that would otherwise fire when the stored settings are read back in.
     private var isLoadingSettings = false
+
+    /// Dismisses whatever `lastError` is currently reporting.
+    ///
+    /// Needed because the alert that shows it has to be able to close: a binding derived from a
+    /// non-nil check needs somewhere to write `false` back to.
+    func clearError() { lastError = nil }
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
 
@@ -79,8 +89,87 @@ final class UsageStore: ObservableObject {
             accounts, now: now, scope: .mostCritical, staleAfter: settings.staleAfter)
     }
 
-    /// One account, reduced for the notification evaluator.
-    var summaries: [AccountSummary] { accounts.map(AccountSummary.init) }
+    /// The accounts in the order the overview should show them.
+    ///
+    /// Two orders, and which one applies is a choice the user has already made. Until anyone
+    /// drags a card the list is worst-first, which is what the app is for. Once someone has
+    /// arranged their accounts by hand that order wins and nothing re-ranks it — the repository
+    /// already returns them arranged, so the manual case is the list exactly as it arrived.
+    ///
+    /// Built separately from `glance` rather than reordering that, because the summary card's
+    /// headline and next reset come from whichever account LEADS the urgency ranking, and a
+    /// user dragging a healthy account to the top must not thereby change what the headline
+    /// reports about the fleet.
+    var orderedAccounts: [GlanceAccount] {
+        guard settings.accountsManuallyOrdered else { return glance.accounts }
+        return GlanceModel.build(
+            accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter).accounts
+    }
+
+    /// Persists the order the user dragged the cards into.
+    ///
+    /// Latches `accountsManuallyOrdered` at the same time: writing the order without the flag
+    /// would store an arrangement the overview then ignores, which reads as the drag having done
+    /// nothing. The flag is set FIRST so the list renders in the new order even if the write
+    /// fails — and a failed write says so rather than silently reverting on the next launch.
+    func reorderAccounts(ids: [String]) async {
+        guard let container else { return }
+        settings.accountsManuallyOrdered = true
+        do {
+            accounts = try await container.reorder(ids: ids)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Whether this account is allowed to notify.
+    ///
+    /// Phrased positively — the switch on screen reads "Notifications", not "Muted" — while the
+    /// stored set names the muted ones, so that an account added later is not silent by default.
+    func notificationsEnabled(accountID: String) -> Bool {
+        !settings.notifications.mutedAccountIDs.contains(accountID)
+    }
+
+    func setNotifications(enabled: Bool, accountID: String) {
+        // Assigning the whole struct, because `settings`' `didSet` is what saves: mutating the
+        // nested set through a binding rewrites the whole value anyway, and doing it explicitly
+        // keeps the one save path visible.
+        var updated = settings
+        if enabled {
+            updated.notifications.mutedAccountIDs.remove(accountID)
+        } else {
+            updated.notifications.mutedAccountIDs.insert(accountID)
+        }
+        settings = updated
+    }
+
+    /// The plan tier for one account, as a label, or nil when the provider never stated one.
+    ///
+    /// Named `tierLabel` rather than `planLabel` so the call to the kit's free `planLabel(_:)`
+    /// inside it cannot be misread as recursion.
+    func tierLabel(accountID: String) -> String? {
+        accounts.first { $0.account.id == accountID }.flatMap { planLabel($0.account.plan) }
+    }
+
+    /// When this account's LONGEST allowance comes back, when that is not simply the next reset.
+    ///
+    /// Suppressed when it coincides with the soonest reset, which the card already shows: two
+    /// lines stating the same instant in different words is noise, and the one the user acts on
+    /// is the sooner one. Same rule as Android.
+    func renewalLabel(accountID: String, now: Date) -> String? {
+        guard let usage = accounts.first(where: { $0.account.id == accountID }) else { return nil }
+        let windows = usage.snapshot?.windows ?? []
+        guard windows.count >= 2 else { return nil }
+        // A provider that does not state a window's duration sorts BELOW every window that
+        // does, rather than being taken for the longest.
+        guard let longest = windows.max(by: { ($0.periodSeconds ?? -1) < ($1.periodSeconds ?? -1) })
+        else { return nil }
+        guard let renewsAt = longest.resetAt, renewsAt > now else { return nil }
+        let soonest = windows.compactMap(\.resetAt).filter { $0 > now }.min()
+        guard renewsAt != soonest else { return nil }
+        return "\(longest.label) renews \(Countdown.format(until: renewsAt, from: now))"
+    }
 
     /// Every window that has a reset time, soonest first — the Resets screen.
     var upcomingResets: [(account: ProviderAccount, window: UsageWindow)] {

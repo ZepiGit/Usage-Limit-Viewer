@@ -83,6 +83,10 @@ class RefreshAfterRemovalTest {
         override suspend fun upsert(account: AccountEntity) = Unit
         override suspend fun deleteById(localId: String) = Unit
         override suspend fun markSynced(localId: String, timestamp: Long) = Unit
+        // Ordering plays no part in what these tests exercise; the reorder path has its own
+        // double that actually records.
+        override suspend fun setSortOrder(localId: String, order: Int) = Unit
+        override suspend fun nextSortOrder(): Int = 0
     }
 
     private class EmptySnapshotDao : UsageSnapshotDao {

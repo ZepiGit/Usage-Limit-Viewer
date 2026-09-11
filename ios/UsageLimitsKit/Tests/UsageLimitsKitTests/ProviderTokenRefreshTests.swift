@@ -166,8 +166,17 @@ final class ProviderTokenRefreshTests: XCTestCase {
     func testARejectionSaysWhatTheUserCanDo() {
         // The engine renders the error onto the account card. Without a description a user is
         // told "unauthorised", which names an HTTP status rather than the remedy.
+        //
+        // Asserted against the CONSTANT rather than a literal copy of the sentence. This test
+        // held its own spelling while the notification evaluator matched on a different one,
+        // so it passed for months over a "reconnect this account" notification that could
+        // never fire. A literal here is what let the two ends disagree unnoticed.
         XCTAssertEqual(
-            ProviderError.unauthorised.errorDescription, "This account needs signing in again.")
+            ProviderError.unauthorised.errorDescription,
+            NotificationEvaluator.signInExpiredMessage)
+        XCTAssertFalse(
+            NotificationEvaluator.signInExpiredMessage.isEmpty,
+            "a user told nothing is a user told 'unauthorised'")
     }
 
     // MARK: - What each provider sends
@@ -325,4 +334,22 @@ final class ProviderTokenRefreshTests: XCTestCase {
         // literal `+` would decode back as a space — a different token.
         XCTAssertEqual(encoded, "client_id=x&refresh_token=a%26b%3Dc+d%2Be")
     }
+    // MARK: - A grant is presented once
+
+    /// Every body through the exchange spends something the server accepts only once, and it is
+    /// consumed by ARRIVING. With the client's default retry budget a failed exchange
+    /// re-presented the same grant, which the server then refused as spent — so a merely lost
+    /// response became a definite sign-out.
+    func testAnExchangeIsSentExactlyOnceWhateverTheRetryBudget() async {
+        let transport = Transport([(503, ""), (503, ""), (503, "")])
+        let http = UsageHTTPClient(transport: transport, maxRetries: 2, now: { [now] in now })
+
+        _ = try? await CodexClient(httpClient: http)
+            .refresh(credentials: OAuthCredentials(
+                accessToken: "synthetic-access", refreshToken: "synthetic-refresh"))
+
+        let attempts = await transport.requests.count
+        XCTAssertEqual(attempts, 1, "a one-time grant must never be re-sent")
+    }
+
 }

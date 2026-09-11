@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -28,6 +26,7 @@ import com.usagelimits.core.model.Severity
 import com.usagelimits.core.settings.AppSettings
 import com.usagelimits.feature.UsageUiState
 import com.usagelimits.ui.components.SectionHeader
+import com.usagelimits.ui.components.ToggleRow
 import com.usagelimits.ui.components.UsageCard
 import com.usagelimits.ui.theme.UsageColors
 
@@ -45,6 +44,8 @@ fun SettingsScreen(
     onNotifyAuthExpired: (Boolean) -> Unit,
     onNotifyResetApproaching: (Boolean) -> Unit,
     onNotifyCreditExpiring: (Boolean) -> Unit,
+    onShowTier: (Boolean) -> Unit,
+    onShowRenewal: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
@@ -88,6 +89,25 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        item { SectionHeader("Overview") }
+        item {
+            UsageCard {
+                ToggleRow(
+                    title = "Show subscription tier",
+                    subtitle = "Plus, Pro, Max — beside the provider name",
+                    checked = settings.showSubscriptionTier,
+                    onChange = onShowTier,
+                )
+                ToggleRow(
+                    title = "Show renewal time",
+                    subtitle = "When the weekly or monthly allowance starts over, as opposed to " +
+                        "the next reset. Overview only — the widgets stay on one number.",
+                    checked = settings.showRenewalTime,
+                    onChange = onShowRenewal,
+                )
             }
         }
 
@@ -160,16 +180,6 @@ fun SettingsScreen(
             }
         }
 
-        item { SectionHeader("Security") }
-        item {
-            UsageCard {
-                InfoRow("Credential storage", "AES-GCM key held in the Android Keystore")
-                InfoRow("Cloud backup", "Disabled — credentials never leave the device")
-                InfoRow("Widget data", "Reads the local usage cache only, never tokens")
-                InfoRow("Network", "HTTPS enforced for every provider request")
-            }
-        }
-
         item { SectionHeader("Diagnostics") }
         item {
             UsageCard {
@@ -207,44 +217,6 @@ private fun IntervalChip(minutes: Int, selected: Boolean, onClick: () -> Unit) {
     )
 }
 
-@Composable
-private fun ToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = UsageColors.TextPrimary,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = UsageColors.TextSecondary,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = UsageColors.Background,
-                checkedTrackColor = UsageColors.Terracotta,
-                uncheckedThumbColor = UsageColors.TextTertiary,
-                uncheckedTrackColor = UsageColors.SurfaceMuted,
-            ),
-        )
-    }
-}
 
 @Composable
 private fun ThresholdRow(label: String, range: String, color: androidx.compose.ui.graphics.Color) {

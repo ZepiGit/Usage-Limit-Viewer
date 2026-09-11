@@ -11,7 +11,19 @@ Compose-like description into `RemoteViews` that the launcher renders in its own
 widgets and their receivers), `WidgetData.kt` (the reducer and its data types) and
 `WidgetUpdater.kt` (the bridge to the cache, plus the refresh action).
 
-## The two sizes
+## The three Android sizes
+
+### Minimal — one ring, nothing else (`MinimalUsageWidget`)
+
+Declared at `targetCellWidth="1"`, `targetCellHeight="1"`. A single ring whose arc is what is
+LEFT of the leading account's tightest window, with the percentage, the window's label and its
+reset inside. It exists because a bar has to be as wide as the tile to be legible, so a tile of
+bars is a tile of little else — where a ring carries the same number in a square, and four of
+them fit where one detailed widget does.
+
+`UsageRing.fractionFor` returns a FULL ring for an unknown percentage rather than an empty one,
+and the label then reads "—": an empty ring is what "exhausted" looks like, and drawing it for
+"the provider did not say" would announce a limit nobody reported.
 
 ### Compact — one row, four tiles (`CompactUsageWidget`)
 
@@ -22,7 +34,7 @@ Declared at `targetCellWidth="4"`, `targetCellHeight="1"`, resizeable horizontal
 |---|---|
 | **5h limit** | The tightest five-hour window across every account in scope, as remaining percent, with a bar |
 | **Weekly** | The tightest weekly window, with a bar — falling back to the tightest monthly window when a plan has no weekly one |
-| **Resets in** | A countdown to the *earliest* upcoming reset anywhere in scope |
+| **Next reset** | The clock time of the *earliest* reset still ahead for the LEADING account — absolute, never a countdown, because a widget cannot tick; and only a reset still ahead, because a snapshot keeps a passed instant until the next fetch replaces it |
 | **Quota** | One word for the overall worst state: `OK`, `Fair`, `Low`, `Out`, `Stale`, `Error`, coloured by severity |
 
 It deliberately aggregates rather than showing one account. At a single cell of height there is
@@ -49,7 +61,7 @@ the same provider and plan are indistinguishable in the widget. Drawing the subt
 is present is a two-line fix and should happen; it is listed here rather than quietly left in
 the code.
 
-Both widgets use `SizeMode.Responsive` with three declared sizes (250/320/420dp wide) rather
+All three widgets use `SizeMode.Responsive` with three declared sizes (250/320/420dp wide) rather
 than `SizeMode.Exact`. Launcher grid cells differ enormously between a phone, a tablet and an
 unfolded foldable; with `Responsive`, the launcher picks the nearest size the widget was
 actually designed for instead of re-measuring one layout into a shape it never anticipated.
@@ -69,8 +81,12 @@ possibilities:
 whole distinction, and it matters because the detailed widget shows the first three.
 
 The choice is persisted per widget in the Room table `widget_configs`, keyed by the
-framework's `appWidgetId` and holding only `scope`, `accountId`, `provider` and `updatedAt` —
-ids and enum names, nothing else. `WidgetUpdater.loadSnapshot` resolves the `GlanceId` to an
+framework's `appWidgetId` and holding only `scope`, `accountId`, `provider`, `transparent` and
+`updatedAt` — ids, a flag and enum names, nothing else. `transparent` drops the card background
+so the wallpaper shows through, and arrived in `MIGRATION_5_6` with a column default matching
+the entity's `@ColumnInfo(defaultValue = "0")`: Room compares the declared schema against the
+one it finds, and a default stated in the ALTER but not on the entity fails validation at
+launch. `WidgetUpdater.loadSnapshot` resolves the `GlanceId` to an
 `appWidgetId`, reads the row, and passes the result to `WidgetDataBuilder.build`. Both the
 scope name and the enum names are part of the on-disk contract, which is why `WidgetScope`
 carries a "do not rename casually" note; `WidgetScope.fromName` maps anything unrecognised —
@@ -232,3 +248,60 @@ The reducer is size-agnostic, so a new size is mostly declaration:
 
 Nothing else needs to change: the configuration table is keyed by `appWidgetId` and is
 class-agnostic, and `loadSnapshot` works for any `GlanceId`.
+
+## The iOS widgets
+
+WidgetKit is a different set of constraints from Glance, and two of them decide the shape of
+everything below.
+
+**A widget cannot scroll and cannot tick.** There is no `LazyColumn` on a home screen: a tile
+renders a fixed view at dates the system picks. So the Android answer to "show me eight
+accounts" — a scrolling 1×4 — has no iOS twin, and the equivalent is a taller tile. And nothing
+may be phrased relative to "now": every time the tiles show is absolute ("Resets 14:05", "As of
+12:40"), because a countdown frozen at the last render goes wrong in the one direction that
+matters — the limit can have reset while the tile still insists "in 20m".
+
+**A widget extension is a separate process, and this one holds no credentials.** It reads the
+JSON snapshot the app writes into the App Group container and nothing else. That is why the
+refresh control is a link into the app rather than a fetch, and why it is not an iOS 17
+`Button(intent:)` that reloads the timeline: reloading the timeline redraws the same cached
+numbers, which looks like a refresh that changed nothing.
+
+Three entries appear in the gallery, all fed by one `UsageProvider` and one snapshot:
+
+| Entry | Families | What it shows |
+|---|---|---|
+| **Usage Limits** | small, medium, large, `accessoryRectangular` | The kit's ranking: one account small, three medium, up to eight large |
+| **Usage Limits (Clear)** | small, medium, large | The same, with the wallpaper showing through |
+| **Usage Ring** | small, `accessoryCircular` | One account as a ring, with its limit and reset inside |
+
+### Why transparency is a second entry rather than a switch
+
+Android puts a "transparent background" checkbox in its configuration activity. iOS has no
+equivalent that this app can reach: a per-tile option requires a *configurable* widget, which
+means `AppIntentConfiguration` and iOS 17, where the app's deployment target is iOS 16. A
+second gallery entry costs the user one extra row when placing a tile and works on every
+version the app runs on; a checkbox would work for part of the installed base and be invisible
+to the rest.
+
+The same reasoning applies to per-widget account selection, which Android offers through
+`WidgetConfigActivity`. On iOS the large tile shows every account instead, and the ring shows
+the one the kit ranks first — the selection a user placing a small tile almost always wants.
+
+On iOS 17 "transparent" means an explicitly CLEAR container background, not the absence of one:
+a widget that declares no `containerBackground` is rejected from the Home Screen outright.
+`widgetBackground(_:)` takes an optional colour and passes `Color.clear` for nil, so both
+generations of chrome are handled in one place.
+
+### The scheme the links needed
+
+`widgetURL(DeepLink.glance)` had shipped against `usagelimits://`, a scheme no bundle claimed —
+so the system could not route it and tapping a tile did nothing at all. The scheme is now
+declared in the app's `CFBundleURLTypes` and answered in `onOpenURL`: `//glance` selects the
+Overview tab, `//refresh` selects it and fetches. An unrecognised URL is ignored rather than
+treated as a refresh, because a link this build does not know is a link from a later one.
+
+The refresh glyph is a `Link` rather than the tile-wide `widgetURL`, so one glyph opens the app
+on a refresh while the rest of the tile opens the overview. The system honours `Link` on medium
+and large only — which is why the small tile has no such button rather than a decorative one
+that does nothing.

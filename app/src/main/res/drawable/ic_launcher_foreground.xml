@@ -1,7 +1,35 @@
+<!--
+  A quota ring, three-quarters spent.
+
+  This replaced three bars of a chart, which said "analytics" — true of a hundred apps and
+  not of this one. What this app answers is how much is left and when it comes back, and a
+  ring with a gap in it says that without a word, at the size a launcher actually draws.
+
+  It is also the mark the app now uses elsewhere: the minimal widget is a grid of exactly
+  this shape, one per account.
+
+  Geometry: r=28 about (54,54), which keeps the whole ring inside the 66dp safe zone of a
+  108dp adaptive icon — anything beyond that is the launcher's to crop, and a ring cropped
+  on one side reads as a mistake rather than a shape.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#D97757" android:pathData="M34,64h8v18h-8z" />
-    <path android:fillColor="#D97757" android:pathData="M50,44h8v38h-8z" />
-    <path android:fillColor="#D97757" android:pathData="M66,54h8v28h-8z" />
+
+    <!-- The whole allowance. -->
+    <path
+        android:strokeColor="#3A3936"
+        android:strokeWidth="11"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M54,26 a28,28 0 1,0 0,56 a28,28 0 1,0 0,-56" />
+
+    <!-- What is still there: 72 %, drawn clockwise from twelve o'clock, the way the widget
+         draws it and the way a clock face is read. -->
+    <path
+        android:strokeColor="#D97757"
+        android:strokeWidth="11"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M54,26 A28,28 0 1,1 26.5,59.25" />
 </vector>

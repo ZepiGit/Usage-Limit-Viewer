@@ -14,7 +14,6 @@ enum UsageColors {
     static let background = Color(hex: 0x0F0F0E)
     static let surface = Color(hex: 0x1A1918)
     static let surfaceElevated = Color(hex: 0x242322)
-    static let surfaceMuted = Color(hex: 0x2E2D2B)
     static let outline = Color(hex: 0x3A3936)
 
     static let textPrimary = Color(hex: 0xF0EEE6)
@@ -22,7 +21,6 @@ enum UsageColors {
     static let textTertiary = Color(hex: 0x8A887F)
 
     static let terracotta = Color(hex: 0xD97757)
-    static let terracottaMuted = Color(hex: 0xB35F42)
 
     static let teal = Color(hex: 0x4FBFA8)
     static let green = Color(hex: 0x6FBF73)
@@ -91,8 +89,6 @@ enum SeverityPalette {
 
 /// Corner radii. Large throughout — the reference design's most distinctive trait.
 enum UsageRadius {
-    static let small: CGFloat = 12
-    static let medium: CGFloat = 18
     static let large: CGFloat = 24
 }
 

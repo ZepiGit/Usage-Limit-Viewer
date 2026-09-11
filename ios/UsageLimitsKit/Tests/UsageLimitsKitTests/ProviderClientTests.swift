@@ -76,7 +76,7 @@ final class ProviderClientTests: XCTestCase {
 
         XCTAssertEqual(result.resetCreditCount, 2)
         XCTAssertEqual(result.applicableResetCreditCount, 0)
-        XCTAssertEqual(result.plan, "plus")
+        XCTAssertEqual(result.plan, "Plus")
     }
 
     func testCodexClassifiesAWeeklyWindowInThePrimarySlot() async throws {
@@ -254,4 +254,58 @@ final class ProviderClientTests: XCTestCase {
             XCTAssertFalse("\(error)".contains("synthetic-access"))
         }
     }
+    // MARK: - Errors that have to reach the engine in its own terms
+
+    /// Claude called the client directly, so a 401 surfaced as `HTTPError.status` before the
+    /// translation step ran and the adapter never produced `ProviderError.unauthorised` — the
+    /// one error the engine's reactive refresh is triggered by. An expired Claude credential
+    /// read as a generic failure, refreshed nothing, and failed the same way every sync after.
+    func testClaudeReportsARejectedCredentialAsUnauthorised() async {
+        let (http, _) = client([(401, #"{"error":"unauthorized"}"#)])
+
+        do {
+            _ = try await ClaudeClient(httpClient: http)
+                .fetchUsage(credentials: credentials, attributes: [:])
+            XCTFail("a 401 must be an error")
+        } catch ProviderError.unauthorised {
+            // Expected.
+        } catch {
+            XCTFail("a 401 must be reported as unauthorised, not \(error)")
+        }
+    }
+
+    /// The documented policy — prefer a credential rejection over an unrelated shard failure —
+    /// was never applied: `ProviderHTTP.request` throws the 401 as `unauthorised`, and the
+    /// status check meant to catch it ran only on responses that came back. The generic catch
+    /// filed it as "first failure" behind an earlier shard's 503.
+    func testAntigravityPrefersARejectionOverAnEarlierShardFailure() async {
+        let (http, _) = client([(503, ""), (401, ""), (200, "")])
+
+        do {
+            _ = try await AntigravityClient(httpClient: http)
+                .fetchUsage(credentials: credentials, attributes: ["project_id": "p"])
+            XCTFail("no shard answered with windows")
+        } catch ProviderError.unauthorised {
+            // Expected.
+        } catch {
+            XCTFail("the rejection must outrank the 503, not \(error)")
+        }
+    }
+
+    /// The row parser accepted both spellings of the credits container; the two count lookups
+    /// read only the snake-case one, so a camel-case summary kept its rows and lost both counts.
+    func testCodexReadsCreditCountsFromACamelCaseSummary() async throws {
+        let camel = #"""
+            {"rateLimitResetCredits": {"availableCount": 4, "applicableAvailableCount": 2,
+              "credits": []},
+             "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000}}}
+            """#
+        let (http, _) = client([(200, camel), (500, "")])
+
+        let result = try await CodexClient(httpClient: http)
+            .fetchUsage(credentials: credentials, attributes: [:])
+
+        XCTAssertEqual([result.resetCreditCount, result.applicableResetCreditCount], [4, 2])
+    }
+
 }

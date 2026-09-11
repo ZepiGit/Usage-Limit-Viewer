@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.People
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +50,7 @@ import com.usagelimits.feature.settings.SettingsScreen
 import com.usagelimits.ui.ConstrainedContent
 import com.usagelimits.ui.NavigationLayout
 import com.usagelimits.ui.theme.UsageColors
+import com.usagelimits.ui.AppIcons
 
 /**
  * How often relative times refresh.
@@ -80,8 +79,8 @@ private data class TabItem(
 
 private val TABS = listOf(
     TabItem(Destination.Overview, "Overview", Icons.Default.Home),
-    TabItem(Destination.Accounts, "Accounts", Icons.Default.People),
-    TabItem(Destination.Resets, "Resets", Icons.Default.Schedule),
+    TabItem(Destination.Accounts, "Accounts", AppIcons.People),
+    TabItem(Destination.Resets, "Resets", AppIcons.Schedule),
     TabItem(Destination.Settings, "Settings", Icons.Default.Settings),
 )
 
@@ -204,6 +203,7 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         onRefresh = viewModel::refresh,
                         onAccountClick = { navController.navigate(Destination.AccountDetail.of(it)) },
                         onAddAccount = { navController.navigate(Destination.AddAccount.route) },
+                        onReorder = viewModel::reorderAccounts,
                     )
                 }
 
@@ -231,6 +231,8 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         onNotifyAuthExpired = viewModel::setNotifyAuthExpired,
                         onNotifyResetApproaching = viewModel::setNotifyResetApproaching,
                         onNotifyCreditExpiring = viewModel::setNotifyCreditExpiring,
+                        onShowTier = viewModel::setShowSubscriptionTier,
+                        onShowRenewal = viewModel::setShowRenewalTime,
                     )
                 }
 
@@ -244,6 +246,7 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         state = addState,
                         providers = addViewModel.availableProviders(),
                         onStart = { addViewModel.startLogin(context, it) },
+                        onSubmitApiKey = addViewModel::submitApiKey,
                         onCancel = {
                             addViewModel.cancel()
                             navController.popBackStack()
@@ -273,6 +276,11 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         onRemove = {
                             accountId?.let(viewModel::removeAccount)
                             navController.popBackStack()
+                        },
+                        notificationsEnabled =
+                            accountId !in state.settings.mutedAccountIds,
+                        onNotificationsChange = { enabled ->
+                            accountId?.let { viewModel.setAccountNotifications(it, enabled) }
                         },
                     )
                 }

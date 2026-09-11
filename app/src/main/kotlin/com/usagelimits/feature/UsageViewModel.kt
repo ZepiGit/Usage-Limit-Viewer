@@ -61,6 +61,27 @@ data class UsageUiState(
      */
     val staleAfterMs: Long get() = Severity.staleAfterMs(settings.syncIntervalMinutes)
 
+    /**
+     * The accounts in the order this screen should show them.
+     *
+     * Two orders, and which one applies is a choice the user has already made. Until anyone
+     * drags a card, the list is ranked most-urgent-first — that ranking is what the app is for,
+     * and it uses `urgency` rather than `Severity`'s declaration order, which put stale and
+     * never-fetched cards above exhausted ones.
+     *
+     * Once someone has arranged their accounts by hand, that order wins and nothing re-ranks
+     * it. The repository already returns rows `ORDER BY sortOrder`, so the manual case is the
+     * list exactly as it arrived.
+     */
+    fun orderedAccounts(nowMs: Long): List<AccountUsage> =
+        if (settings.accountsManuallyOrdered) {
+            accounts
+        } else {
+            accounts.sortedBy {
+                it.snapshot?.severityAt(nowMs, staleAfterMs)?.urgency ?: Int.MAX_VALUE
+            }
+        }
+
     fun healthyCountAt(nowMs: Long): Int =
         accounts.count { it.snapshot?.severityAt(nowMs, staleAfterMs) == Severity.HEALTHY }
 
@@ -156,6 +177,20 @@ class UsageViewModel(
 
     /** Account id whose reset credit is currently being spent, for a per-card spinner. */
     val resetCreditInFlight: StateFlow<String?> = _resetCreditInFlight.asStateFlow()
+
+    /**
+     * Persists the order the user dragged the cards into.
+     *
+     * Latches `accountsManuallyOrdered` at the same time, in the same coroutine: writing the
+     * order without the flag would store an arrangement the overview then ignores, which reads
+     * as the drag having done nothing.
+     */
+    fun reorderAccounts(idsInOrder: List<String>) {
+        viewModelScope.launch {
+            container.repository.reorderAccounts(idsInOrder)
+            container.settingsStore.setAccountsManuallyOrdered(true)
+        }
+    }
 
     fun refresh() {
         if (refreshing.value) return
@@ -273,6 +308,21 @@ class UsageViewModel(
             // after the app's own screen had turned it green.
             WidgetUpdater.refreshAll(appContext)
         }
+    }
+
+    /** Silences one account, or lets it speak again. */
+    fun setAccountNotifications(accountId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            container.settingsStore.setAccountNotifications(accountId, enabled)
+        }
+    }
+
+    fun setShowSubscriptionTier(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setShowSubscriptionTier(enabled) }
+    }
+
+    fun setShowRenewalTime(enabled: Boolean) {
+        viewModelScope.launch { container.settingsStore.setShowRenewalTime(enabled) }
     }
 
     fun setNotifyBelow20(enabled: Boolean) {

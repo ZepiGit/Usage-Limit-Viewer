@@ -2,6 +2,7 @@ package com.usagelimits.core.oauth
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
@@ -151,4 +152,45 @@ class LoopbackServerNoiseTest {
 
         assertTrue("the sign-in survived the flood", response.code == "survived")
     }
+    @Test
+    fun `a peer that trickles one byte at a time cannot hold the sign-in open`() = runBlocking {
+        // Each carriage return arrives inside the per-read timeout and adds nothing to the
+        // line, so neither the read timeout nor the byte cap ever tripped: such a connection
+        // held the accept loop for as long as it liked, past the sign-in's own deadline, and the
+        // genuine redirect queued behind it was never read. A TOTAL deadline on the request line
+        // drops it after READ_TIMEOUT_MS and the real callback lands.
+        val port = freePort()
+        val server = LoopbackServer(port)
+        server.start()
+
+        val waiting = async(Dispatchers.IO) { server.awaitRedirect(timeoutMs = 30_000) }
+        val keepTrickling = java.util.concurrent.atomic.AtomicBoolean(true)
+        val trickler = launch(Dispatchers.IO) {
+            runCatching {
+                Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                    val out = socket.getOutputStream()
+                    while (keepTrickling.get()) {
+                        out.write('\r'.code)
+                        out.flush()
+                        Thread.sleep(400)
+                    }
+                }
+            }
+        }
+
+        val started = System.nanoTime()
+        withContext(Dispatchers.IO) {
+            Thread.sleep(500)
+            send(port, "GET /callback?code=survived&state=the-state HTTP/1.1")
+        }
+        val response = waiting.await()
+        keepTrickling.set(false)
+        trickler.cancel()
+        server.close()
+
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertTrue("the sign-in survived the trickle", response.code == "survived")
+        assertTrue("answered in ${elapsedMs}ms, not at the 30s deadline", elapsedMs < 15_000)
+    }
+
 }
