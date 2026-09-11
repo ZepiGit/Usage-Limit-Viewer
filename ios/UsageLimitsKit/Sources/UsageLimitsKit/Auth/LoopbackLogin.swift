@@ -188,7 +188,7 @@ public struct LoopbackLogin: Sendable {
                 endpoint: "google token",
                 now: now())
 
-        case .codex, .xai:
+        case .codex, .xai, .kimi:
             throw DeviceLoginError.unsupportedOnThisPlatform(
                 "This provider signs in with a device code, not a redirect.")
         }
@@ -256,7 +256,7 @@ public struct LoopbackLogin: Sendable {
                 plan: tier,
                 attributes: ["project_id": projectID])
 
-        case .codex, .xai:
+        case .codex, .xai, .kimi:
             throw DeviceLoginError.unsupportedOnThisPlatform(
                 "This provider signs in with a device code, not a redirect.")
         }
@@ -334,7 +334,7 @@ public struct LoopbackLogin: Sendable {
         switch provider {
         case .claude: return Redirect(ProviderEndpoints.Claude.redirectURI)
         case .antigravity: return Redirect(ProviderEndpoints.Antigravity.redirectURI)
-        case .codex, .xai: return nil
+        case .codex, .xai, .kimi: return nil
         }
     }
 
@@ -342,7 +342,7 @@ public struct LoopbackLogin: Sendable {
         switch provider {
         case .claude: return ProviderEndpoints.Claude.authorizeURL
         case .antigravity: return ProviderEndpoints.Antigravity.authEndpoint
-        case .codex, .xai: return ""
+        case .codex, .xai, .kimi: return ""
         }
     }
 
@@ -350,7 +350,7 @@ public struct LoopbackLogin: Sendable {
         switch provider {
         case .claude: return ProviderEndpoints.Claude.clientID
         case .antigravity: return ProviderEndpoints.Antigravity.clientID
-        case .codex, .xai: return ""
+        case .codex, .xai, .kimi: return ""
         }
     }
 
@@ -358,7 +358,7 @@ public struct LoopbackLogin: Sendable {
         switch provider {
         case .claude: return ProviderEndpoints.Claude.scope
         case .antigravity: return ProviderEndpoints.Antigravity.scopes.joined(separator: " ")
-        case .codex, .xai: return ""
+        case .codex, .xai, .kimi: return ""
         }
     }
 

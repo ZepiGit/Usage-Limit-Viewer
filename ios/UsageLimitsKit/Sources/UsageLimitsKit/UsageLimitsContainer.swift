@@ -20,6 +20,9 @@ public actor UsageLimitsContainer {
     private let engine: SyncEngine
     private let http: UsageHTTPClient
     private let logins: [ProviderID: any DeviceLoginProvider]
+    /// Kept rather than handed only to the engine: the pasted-key sign-in proves a key by
+    /// calling the provider's own usage endpoint before any account exists.
+    private let providers: [String: any SyncProvider]
     private let settingsStore: SettingsStore
     private let ledger: NotificationLedger
     private let containerDirectory: URL
@@ -54,7 +57,9 @@ public actor UsageLimitsContainer {
             ProviderID.claude.rawValue: ClaudeClient(httpClient: http),
             ProviderID.antigravity.rawValue: AntigravityClient(httpClient: http),
             ProviderID.xai.rawValue: XaiClient(httpClient: http),
+            ProviderID.kimi.rawValue: KimiClient(httpClient: http),
         ]
+        self.providers = providers
 
         self.logins = [
             .codex: CodexDeviceLogin(httpClient: http, now: now),
@@ -132,6 +137,58 @@ public actor UsageLimitsContainer {
         let credentials = try await login.complete(challenge)
         let profile = try await login.profile(credentials)
         return try await store(profile: profile, credentials: credentials, provider: provider)
+    }
+
+    /// Completes the one sign-in that has no flow: a key the user pasted.
+    ///
+    /// Kimi Code only. The key is proved against the usage endpoint BEFORE an account row
+    /// exists — a key that cannot read usage is not a connected account, and storing it would
+    /// leave a permanently failing row the user then has to work out how to remove.
+    ///
+    /// Identity is whatever the response names, and otherwise a truncated digest of the key:
+    /// one way, never the key itself, and stable, so pasting the same key again updates that
+    /// account instead of adding a second one beside it.
+    public func completePastedKeyLogin(
+        provider: ProviderID,
+        key: String
+    ) async throws -> ProviderAccount {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DeviceLoginError.unsupportedOnThisPlatform("No key was entered.")
+        }
+        guard let client = providers[provider.rawValue] else {
+            throw DeviceLoginError.unsupportedOnThisPlatform(
+                "This provider cannot be signed into here.")
+        }
+
+        let credentials = OAuthCredentials(
+            accessToken: trimmed,
+            refreshToken: nil,
+            idToken: nil,
+            expiresAt: nil)
+
+        // Throws if the key is not usable, which is the whole point of doing it here.
+        _ = try await client.fetchUsage(credentials: credentials, attributes: [:])
+
+        let profile = ProviderProfile(
+            externalAccountID: Self.pastedKeyIdentity(trimmed),
+            email: nil,
+            displayName: nil,
+            plan: nil)
+        return try await store(profile: profile, credentials: credentials, provider: provider)
+    }
+
+    /// A stable, one-way identity for a pasted key.
+    ///
+    /// Not the key, and not reversible into it. It only has to be stable and unique so that the
+    /// same key re-entered lands on the same account.
+    static func pastedKeyIdentity(_ key: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Array(key.utf8) {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01B3
+        }
+        return "key-" + String(hash, radix: 16)
     }
 
     /// Saves the credentials and the account they belong to.

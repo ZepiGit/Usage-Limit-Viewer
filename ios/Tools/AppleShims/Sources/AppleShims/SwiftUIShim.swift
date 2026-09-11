@@ -149,6 +149,11 @@ extension View {
     public func id<T: Hashable>(_ value: T) -> Self { self }
     public func tag<T: Hashable>(_ value: T) -> Self { self }
     public func labelsHidden() -> Self { self }
+    public func textFieldStyle(_ value: TextFieldStyleShim) -> Self { self }
+    public func autocorrectionDisabled(_ disabled: Bool = true) -> Self { self }
+    public func textInputAutocapitalization(
+        _ value: TextInputAutocapitalizationShim?
+    ) -> Self { self }
     public func pickerStyle(_ value: PickerStyleShim) -> Self { self }
     public func containerBackground<S: ShapeStyle>(_ style: S, for container: Any) -> Self { self }
     public func containerBackground(for container: ContainerBackgroundPlacement,

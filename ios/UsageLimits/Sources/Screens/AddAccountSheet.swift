@@ -24,6 +24,8 @@ struct AddAccountSheet: View {
         case choosing
         case starting(ProviderID)
         case waiting(ProviderID, DeviceLoginChallenge)
+        /// No flow to drive: the user has to fetch a key and paste it.
+        case awaitingKey(ProviderID)
         case failed(ProviderID, String)
     }
 
@@ -31,6 +33,7 @@ struct AddAccountSheet: View {
     @State private var login: Task<Void, Never>?
     @State private var loopback = LoopbackSignIn()
     @State private var copied = false
+    @State private var pastedKey = ""
 
     var body: some View {
         NavigationStack {
@@ -43,6 +46,8 @@ struct AddAccountSheet: View {
                         starting(provider)
                     case .waiting(let provider, let challenge):
                         waiting(provider, challenge)
+                    case .awaitingKey(let provider):
+                        awaitingKey(provider)
                     case .failed(let provider, let message):
                         failure(provider, message)
                     }
@@ -78,9 +83,7 @@ struct AddAccountSheet: View {
                     // Named before the tap, not after: a user should know what the button is
                     // about to do with their account before it does it. The two flows feel
                     // different enough that saying which one is coming is worth a line.
-                    Text(DeviceLoginSupport.style(for: provider) == .deviceCode
-                         ? "Shows a code to approve in your browser."
-                         : "Opens the provider's sign-in page.")
+                    Text(signInHint(for: provider))
                         .font(.footnote)
                         .foregroundStyle(UsageColors.textSecondary)
                 }
@@ -163,6 +166,42 @@ struct AddAccountSheet: View {
         }
     }
 
+    /// The one sign-in with nothing to drive.
+    ///
+    /// Kimi Code's device flow is bound to `kimi-cli`'s client id and its API gates on an
+    /// `X-Msh-Platform` allowlist, so this app does not present one. The user brings a key
+    /// from their own console instead. See docs/providers-kimi.md.
+    private func awaitingKey(_ provider: ProviderID) -> some View {
+        UsageCard {
+            Text("Paste your \(provider.displayName) key")
+                .font(.headline)
+                .foregroundStyle(UsageColors.textPrimary)
+
+            Text("Create a key in your \(provider.displayName) console and paste it here. "
+                 + "It is stored on this device only, in the keychain with every other account.")
+                .font(.footnote)
+                .foregroundStyle(UsageColors.textSecondary)
+
+            TextField("API key", text: $pastedKey)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            HStack(spacing: 10) {
+                Button("Connect") { submitKey(provider) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(UsageColors.terracotta)
+                    .disabled(pastedKey.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button("Open console") {
+                    if let url = URL(string: ProviderEndpoints.Kimi.consoleURL) { openURL(url) }
+                }
+                .buttonStyle(.bordered)
+                .tint(UsageColors.terracotta)
+            }
+        }
+    }
+
     private func failure(_ provider: ProviderID, _ message: String) -> some View {
         UsageCard {
             Text("Could not add \(provider.displayName)")
@@ -185,6 +224,38 @@ struct AddAccountSheet: View {
 
     // MARK: - Driving the flow
 
+    /// Three styles now, so a binary check would call the pasted-key row a browser sign-in.
+    private func signInHint(for provider: ProviderID) -> String {
+        switch DeviceLoginSupport.style(for: provider) {
+        case .deviceCode: return "Shows a code to approve in your browser."
+        case .loopbackRedirect: return "Opens the provider's sign-in page."
+        case .pastedKey: return "Needs a key from the provider's console."
+        }
+    }
+
+    private func submitKey(_ provider: ProviderID) {
+        let key = pastedKey
+        login?.cancel()
+        stage = .starting(provider)
+
+        login = Task {
+            guard let container = UsageStore.sharedContainer else {
+                stage = .failed(provider, "This build cannot reach its shared storage.")
+                return
+            }
+            do {
+                _ = try await container.completePastedKeyLogin(provider: provider, key: key)
+                await store.load()
+                await store.refresh()
+                dismiss()
+            } catch is CancellationError {
+                // The sheet was closed.
+            } catch {
+                stage = .failed(provider, error.localizedDescription)
+            }
+        }
+    }
+
     private func start(_ provider: ProviderID) {
         login?.cancel()
         stage = .starting(provider)
@@ -202,6 +273,12 @@ struct AddAccountSheet: View {
                     // Blocks until the user approves, the code expires, or the provider refuses.
                     _ = try await container.completeLogin(
                         provider: provider, challenge: challenge)
+
+                case .pastedKey:
+                    // Parks here. The key arrives through `submitKey`, which runs its own
+                    // task, so this one simply ends rather than holding the sheet open.
+                    stage = .awaitingKey(provider)
+                    return
 
                 case .loopbackRedirect:
                     // The listener is bound INSIDE `authorize`, before the browser opens: a

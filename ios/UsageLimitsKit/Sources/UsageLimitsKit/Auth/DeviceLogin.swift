@@ -456,6 +456,13 @@ public enum LoginStyle: Sendable, Equatable {
 
     /// The provider redirects to a loopback address this app listens on.
     case loopbackRedirect
+
+    /// No flow at all: the user creates a key on the provider's console and pastes it.
+    ///
+    /// Kimi Code only. Its device flow is bound to `kimi-cli`'s client id and `api.kimi.com`
+    /// gates on an `X-Msh-Platform` allowlist, so driving it would mean impersonating another
+    /// client past an access control. See docs/providers-kimi.md.
+    case pastedKey
 }
 
 public enum DeviceLoginSupport {
@@ -464,6 +471,7 @@ public enum DeviceLoginSupport {
         switch provider {
         case .codex, .xai: return .deviceCode
         case .claude, .antigravity: return .loopbackRedirect
+        case .kimi: return .pastedKey
         }
     }
 
