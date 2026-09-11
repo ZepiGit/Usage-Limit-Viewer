@@ -695,4 +695,27 @@ final class NotificationEvaluatorTests: XCTestCase {
             ).standingFindings.isEmpty)
     }
 
+    // MARK: - Zero is exhausted
+
+    /// A known 0 % is exhausted whether or not the provider also set its flag.
+    ///
+    /// The evaluator read the flag alone, so a window at 0 % without it reached only the warning
+    /// and critical tiers — and a user with just the exhausted alert switched on heard nothing
+    /// when a limit ran out. Android reads the window's severity, which counts 0 % as
+    /// exhausted; the two must say the same thing about the same payload.
+    func testZeroRemainingIsExhaustedWithoutTheProviderFlag() {
+        var onlyExhausted = settings
+        onlyExhausted.notifyBelow20Percent = false
+        onlyExhausted.notifyBelow10Percent = false
+        onlyExhausted.notifyOnExhausted = true
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [account(remaining: 0, exhausted: false)],
+            settings: onlyExhausted, states: [:], now: now)
+
+        XCTAssertEqual(
+            outcome.events.filter { !$0.line.isEmpty }.map(\.line),
+            ["Account acct · 5h limit exhausted"])
+    }
+
 }

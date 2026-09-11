@@ -63,4 +63,14 @@ final class JSONSupportParityTests: XCTestCase {
         XCTAssertEqual(JSONSupport.int64(["n": "1.8e4"], "n"), 18_000)
     }
 
+    /// A JSON `true` is an NSNumber whose int64Value is 1. `double` excluded booleans; `int64`
+    /// did not, so `"reset_after_seconds": true` became a reset one second away.
+    func testABooleanIsNotAnInteger() {
+        // Decoded, not written as a Swift literal: a JSON `true` arrives as `__NSCFBoolean`,
+        // which is what the production path sees and what the exclusion is keyed on.
+        XCTAssertNil(JSONSupport.int64(decode(#"{"n": true}"#), "n"))
+        XCTAssertNil(JSONSupport.int64(decode(#"{"n": false}"#), "n"))
+        XCTAssertEqual(JSONSupport.int64(decode(#"{"n": 1}"#), "n"), 1)
+    }
+
 }

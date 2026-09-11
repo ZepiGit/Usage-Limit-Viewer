@@ -391,4 +391,21 @@ final class AccountRepositoryTests: XCTestCase {
         XCTAssertEqual(ids, ["a"])
     }
 
+    /// A register written before `attributes` existed has no such key, and the synthesised
+    /// decoder demanded it — so the whole file read as corrupt, which this repository treats as
+    /// a register it must not overwrite. Every connected account was stranded.
+    func testARegisterWithoutAttributesStillLoads() async throws {
+        let legacy = """
+            [{"account": {"id": "a", "provider": "codex", "externalAccountID": "ext-a",
+              "credentialReference": "ref-a", "createdAt": "2026-09-01T00:00:00Z"},
+              "snapshot": null}]
+            """
+        try Data(legacy.utf8).write(to: directory.appendingPathComponent(AccountRepository.fileName))
+
+        let accounts = await AccountRepository(directory: directory).accounts()
+
+        XCTAssertEqual(accounts.map(\.credentialReference), ["ref-a"])
+        XCTAssertEqual(accounts.first?.attributes, [:])
+    }
+
 }

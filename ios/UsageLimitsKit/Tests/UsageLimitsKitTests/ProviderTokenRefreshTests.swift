@@ -334,4 +334,22 @@ final class ProviderTokenRefreshTests: XCTestCase {
         // literal `+` would decode back as a space — a different token.
         XCTAssertEqual(encoded, "client_id=x&refresh_token=a%26b%3Dc+d%2Be")
     }
+    // MARK: - A grant is presented once
+
+    /// Every body through the exchange spends something the server accepts only once, and it is
+    /// consumed by ARRIVING. With the client's default retry budget a failed exchange
+    /// re-presented the same grant, which the server then refused as spent — so a merely lost
+    /// response became a definite sign-out.
+    func testAnExchangeIsSentExactlyOnceWhateverTheRetryBudget() async {
+        let transport = Transport([(503, ""), (503, ""), (503, "")])
+        let http = UsageHTTPClient(transport: transport, maxRetries: 2, now: { [now] in now })
+
+        _ = try? await CodexClient(httpClient: http)
+            .refresh(credentials: OAuthCredentials(
+                accessToken: "synthetic-access", refreshToken: "synthetic-refresh"))
+
+        let attempts = await transport.requests.count
+        XCTAssertEqual(attempts, 1, "a one-time grant must never be re-sent")
+    }
+
 }

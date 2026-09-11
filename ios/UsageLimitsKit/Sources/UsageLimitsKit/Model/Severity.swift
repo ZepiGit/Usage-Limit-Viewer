@@ -39,7 +39,9 @@ public enum Severity: Int, Comparable, Sendable, Codable {
     /// you" no matter how healthy it was. Two missed refreshes is the signal worth acting on,
     /// so the threshold follows the interval rather than the clock.
     public static func staleAfter(syncIntervalMinutes: Int) -> TimeInterval {
-        max(TimeInterval(2 * syncIntervalMinutes * 60), minimumStaleAfter)
+        // Converted before multiplying. `2 * minutes * 60` is Int arithmetic and traps past
+        // Int.max / 120; the interval comes off a settings file with a floor and no ceiling.
+        max(TimeInterval(syncIntervalMinutes) * 120, minimumStaleAfter)
     }
 
     public static func from(remainingPercent: Double?, exhausted: Bool = false) -> Severity {

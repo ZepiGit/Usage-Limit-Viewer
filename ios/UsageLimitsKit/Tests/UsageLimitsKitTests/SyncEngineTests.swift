@@ -686,4 +686,62 @@ extension SyncEngineTests {
     // rather than merely eventually; it is not worth reworking a correct primitive for the
     // convenience of a test.
 
+    // MARK: - A login that lands while a rotation cannot be written
+
+    /// Every write refuses, and a login replaces the pair AFTER the last attempt but before the
+    /// fallback reads the store to record what it holds.
+    private actor StoreWithALateLogin: CredentialStore {
+        private var stored: OAuthCredentials
+        private let login: OAuthCredentials
+        private var failedWrites = 0
+
+        init(initial: OAuthCredentials, login: OAuthCredentials) {
+            self.stored = initial
+            self.login = login
+        }
+
+        func load(reference: String) async throws -> OAuthCredentials? {
+            // The login lands once the writes have all failed — exactly the window between the
+            // final attempt and the fallback's own load.
+            failedWrites >= 3 ? login : stored
+        }
+        func save(_ credentials: OAuthCredentials, reference: String) async throws { stored = credentials }
+        func updateIfPresent(_ credentials: OAuthCredentials, reference: String) async throws -> Bool {
+            failedWrites += 1
+            throw URLError(.cannotWriteToFile)
+        }
+        func delete(reference: String) async throws {}
+        func removeAll() async throws {}
+        func allReferences() async throws -> [String] { ["ref-a"] }
+    }
+
+    private actor FixedRotationProvider: SyncProvider {
+        let providerID = "codex"
+        func fetchUsage(credentials: OAuthCredentials, attributes: [String: String]) async throws -> UsageResult {
+            UsageResult()
+        }
+        func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
+            OAuthCredentials(accessToken: "access-A1", refreshToken: "refresh-A1",
+                             expiresAt: Date(timeIntervalSince1970: 1_757_000_000 + 3_600))
+        }
+    }
+
+    /// The fallback used to install the rotation over whatever the store held, unguarded. A
+    /// login that had just replaced the pair was thereby recorded as "superseded" by a rotation
+    /// derived from the OLD session, `currentCredentials` handed that old rotation back, and
+    /// the next rotation treated the override as authoritative and overwrote the fresh login.
+    /// "I logged in and it signed me straight back out", arriving through the fallback.
+    func testAFailedRotationDoesNotOverrideALoginThatLandedMeanwhile() async throws {
+        let login = fresh("access-B")
+        let store = StoreWithALateLogin(initial: expired("access-A"), login: login)
+        let engine = SyncEngine(
+            providers: ["codex": FixedRotationProvider()], credentials: store,
+            sink: RecordingSink(), now: { [now] in now })
+
+        _ = try await engine.sync(accounts: [account("a")])
+
+        let current = try await engine.usableCredentials(reference: "ref-a", provider: "codex")
+        XCTAssertEqual(current.accessToken, "access-B", "the login must win, not the old session's rotation")
+    }
+
 }

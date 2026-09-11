@@ -67,6 +67,32 @@ public struct ProviderAccount: Sendable, Codable, Identifiable, Equatable {
         self.attributes = attributes
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, provider, externalAccountID, email, displayName, plan, credentialReference
+        case createdAt, lastSuccessfulSync, attributes
+    }
+
+    /// Lenient on `attributes`, which arrived after the first registers were written.
+    ///
+    /// The synthesised decoder ignores the initialiser's `[:]` default and demands the key, so
+    /// a file from before it existed failed to decode — and the repository treats an
+    /// undecodable register as one it must not overwrite, which strands every connected
+    /// account and the credential reference each one names. Same rule as `UsageSnapshot`.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(String.self, forKey: .id),
+            provider: try c.decode(ProviderID.self, forKey: .provider),
+            externalAccountID: try c.decode(String.self, forKey: .externalAccountID),
+            email: try c.decodeIfPresent(String.self, forKey: .email),
+            displayName: try c.decodeIfPresent(String.self, forKey: .displayName),
+            plan: try c.decodeIfPresent(String.self, forKey: .plan),
+            credentialReference: try c.decode(String.self, forKey: .credentialReference),
+            createdAt: try c.decode(Date.self, forKey: .createdAt),
+            lastSuccessfulSync: try c.decodeIfPresent(Date.self, forKey: .lastSuccessfulSync),
+            attributes: try c.decodeIfPresent([String: String].self, forKey: .attributes) ?? [:])
+    }
+
     /// `m***@example.com` — what the UI shows instead of the full address.
     public var maskedEmail: String? {
         guard let email, let at = email.firstIndex(of: "@"), at != email.startIndex else {
@@ -192,8 +218,15 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
 
     /// The window closest to running out — what a summary leads with.
     public var mostCritical: UsageWindow? {
-        windows.min { ($0.remainingPercent ?? .greatestFiniteMagnitude)
-                    < ($1.remainingPercent ?? .greatestFiniteMagnitude) }
+        // An explicitly exhausted window outranks everything, whatever its percentage says.
+        // Ranked by percentage alone, a window the provider flagged exhausted but gave no
+        // figure for sorted LAST — unknown reads as "infinitely much left" — and the summary
+        // led with a 10 %-remaining neighbour while the real emergency sat below it.
+        windows.min { Self.rank($0) < Self.rank($1) }
+    }
+
+    private static func rank(_ window: UsageWindow) -> Double {
+        window.exhausted ? -1 : (window.remainingPercent ?? .greatestFiniteMagnitude)
     }
 
     public var nextReset: Date? { windows.compactMap(\.resetAt).min() }
