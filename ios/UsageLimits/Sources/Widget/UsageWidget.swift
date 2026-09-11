@@ -251,9 +251,20 @@ private enum GlanceText {
     }
 }
 
-/// Tap destinations. Lock Screen accessories ignore these; the app registers the scheme.
+/// Tap destinations. Lock Screen accessories ignore these; the app registers the scheme in its
+/// `CFBundleURLTypes` and answers them in `onOpenURL`.
 private enum DeepLink {
     static let glance = URL(string: "usagelimits://glance")
+
+    /// Opens the app and refreshes there.
+    ///
+    /// Not a refresh performed inside the widget, and that is a design decision rather than a
+    /// shortcut: the extension holds no credentials. Tokens live in the keychain and are read
+    /// only by the app process — which is precisely what keeps them out of widget state — so an
+    /// extension that fetched would have to be given them. A button that reloads the TIMELINE
+    /// without fetching would be worse still: it would redraw the same cached numbers and look
+    /// like a refresh that changed nothing.
+    static let refresh = URL(string: "usagelimits://refresh")
 }
 
 // MARK: - Shared views
@@ -418,6 +429,7 @@ private struct MediumAccountRow: View {
 struct UsageWidgetSmallView: View {
 
     let entry: UsageEntry
+    var transparent: Bool = false
 
     var body: some View {
         Group {
@@ -427,7 +439,7 @@ struct UsageWidgetSmallView: View {
                 WidgetEmptyStateView()
             }
         }
-        .widgetBackground(UsageColors.background)
+        .widgetBackground(transparent ? nil : UsageColors.background)
         .widgetURL(DeepLink.glance)
     }
 
@@ -501,6 +513,7 @@ struct UsageWidgetMediumView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let entry: UsageEntry
+    var transparent: Bool = false
 
     /// The kit's order, untouched. See `WidgetFocus` for what re-ranking here cost.
     private var rankedAccounts: [GlanceAccount] {
@@ -537,13 +550,13 @@ struct UsageWidgetMediumView: View {
                 content
             }
         }
-        .widgetBackground(UsageColors.background)
+        .widgetBackground(transparent ? nil : UsageColors.background)
         .widgetURL(DeepLink.glance)
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 5) {
-            header
+            WidgetHeader(entry: entry)
 
             ForEach(visibleAccounts) { account in
                 MediumAccountRow(
@@ -568,26 +581,6 @@ struct UsageWidgetMediumView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// "As of …" dates the numbers; the reset line names the nearest upcoming
-    /// reset. Both are absolute strings, for the reasons in `GlanceText`'s discussion.
-    @ViewBuilder
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            if let asOf = GlanceText.asOfLine(updatedAt: entry.snapshot.updatedAt, now: entry.date) {
-                Text(verbatim: asOf)
-                    .font(.caption2)
-                    .foregroundColor(UsageColors.textTertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
-                Text(verbatim: reset)
-                    .font(.caption2)
-                    .foregroundColor(UsageColors.textSecondary)
-                    .lineLimit(1)
-            }
-        }
-    }
 }
 
 /// accessoryRectangular (Lock Screen, StandBy): three short lines, system colours.
@@ -650,21 +643,290 @@ struct UsageAccessoryRectangularView: View {
     }
 }
 
+/// A quota as a ring: the arc is what is LEFT, and the middle names what of.
+///
+/// The one shape that survives being small. A bar has to be as wide as the tile to be
+/// readable, so a tile holding several of them holds little else; a ring carries the same
+/// number in a square and leaves its own middle free for the two facts that qualify it — which
+/// limit, and when it comes back.
+private struct UsageRing: View {
+
+    let remainingPercent: Double?
+    let severity: Severity
+    /// `Double`, not `CGFloat`: this file imports Foundation, where corelibs declares its own
+    /// CGFloat, so the name is ambiguous on the Linux typecheck. Swift converts between the two
+    /// implicitly (SE-0307), so `StrokeStyle` takes it unchanged on the real SDK.
+    let lineWidth: Double
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(UsageColors.progressTrack, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            if let remainingPercent {
+                // Unknown draws the track alone. A full ring for "the provider did not say"
+                // would be an all-clear nothing reported, which is the one direction a quota
+                // display must never round in.
+                Circle()
+                    .trim(from: 0, to: QuotaFormatting.fraction(remainingPercent))
+                    .stroke(
+                        SeverityPalette.bar(remainingPercent: remainingPercent, severity: severity),
+                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    // From twelve o'clock, clockwise. `trim` starts at three o'clock.
+                    .rotationEffect(Angle.degrees(-90))
+            }
+        }
+    }
+}
+
+/// systemSmall, transparent: one ring, the percentage inside it, the limit and its reset below.
+///
+/// The tile the feature list asked for — "usage as a circle with the reset time and the model
+/// inside, so many accounts fit a small area". Several of these side by side is how a home
+/// screen shows five subscriptions without five list tiles.
+struct UsageRingWidgetView: View {
+
+    let entry: UsageEntry
+
+    var body: some View {
+        Group {
+            if let focus = WidgetFocus(snapshot: entry.snapshot) {
+                content(for: focus)
+            } else {
+                WidgetEmptyStateView()
+            }
+        }
+        // Transparent: the wallpaper shows through the system's widget material. A ring reads
+        // perfectly well against it, which a list of bars would not.
+        .widgetBackground(nil)
+        .widgetURL(DeepLink.glance)
+    }
+
+    private func content(for focus: WidgetFocus) -> some View {
+        let aged = focus.account.severity(at: entry.date, staleAfter: entry.snapshot.staleAfter)
+        let severity = aged == .healthy ? (focus.row?.severity ?? aged) : aged
+        return VStack(spacing: 6) {
+            ZStack {
+                UsageRing(
+                    remainingPercent: focus.row?.remainingPercent,
+                    severity: severity,
+                    lineWidth: 9)
+                VStack(spacing: 1) {
+                    Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
+                        .font(.system(.title2, design: .rounded).weight(.semibold))
+                        .foregroundColor(SeverityPalette.text(severity))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    if let row = focus.row {
+                        Text(verbatim: row.label)
+                            .font(.caption2)
+                            .foregroundColor(UsageColors.textSecondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                }
+                .padding(10)
+            }
+            .accessibilityElement()
+            .accessibilityLabel(spoken(focus))
+
+            Text(verbatim: focus.account.title)
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(UsageColors.textPrimary)
+                .lineLimit(1)
+            if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
+                Text(verbatim: reset)
+                    .font(.caption2)
+                    .foregroundColor(UsageColors.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .padding(10)
+    }
+
+    private func spoken(_ focus: WidgetFocus) -> String {
+        let limit = focus.row.map { ", \($0.label)" } ?? ""
+        guard let remaining = focus.row?.remainingPercent else {
+            return "\(focus.account.title)\(limit): remaining unknown"
+        }
+        return "\(focus.account.title)\(limit): \(QuotaFormatting.percentText(remaining)) remaining"
+    }
+}
+
+/// accessoryCircular (Lock Screen, StandBy): the same ring, in the system's own tint.
+///
+/// No app colour at all, for the reason `UsageAccessoryRectangularView` gives: accessories are
+/// re-tinted against arbitrary backgrounds and a custom palette collapses into an unreadable
+/// grey. The arc carries the number and the middle carries it again in digits, because at this
+/// size an arc alone is a guess.
+struct UsageAccessoryCircularView: View {
+
+    let entry: UsageEntry
+
+    var body: some View {
+        let focus = WidgetFocus(snapshot: entry.snapshot)
+        let remaining = focus?.row?.remainingPercent
+        return ZStack {
+            Circle()
+                .stroke(.tertiary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            if let remaining {
+                Circle()
+                    .trim(from: 0, to: QuotaFormatting.fraction(remaining))
+                    .stroke(.primary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(Angle.degrees(-90))
+            }
+            Text(verbatim: QuotaFormatting.percentText(remaining))
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .accessibilityElement()
+        .accessibilityLabel(
+            focus.map { "\($0.title(for: remaining))" } ?? "Open the app to see your quota")
+    }
+}
+
+private extension WidgetFocus {
+    func title(for remaining: Double?) -> String {
+        guard let remaining else { return "\(account.title): remaining unknown" }
+        return "\(account.title): \(QuotaFormatting.percentText(remaining)) remaining"
+    }
+}
+
+/// systemLarge: every account that fits, one dense row each.
+///
+/// The medium tile stops at three and counts the rest, which is right for its height. A large
+/// tile has room for the whole fleet, and seeing all of it at once is the thing the app is for
+/// — the feature list asked for exactly this, "eight accounts in one tile". Eight is the cap:
+/// past that the rows are thinner than the text in them, and an honest "+N more" beats a row
+/// nobody can read.
+struct UsageWidgetLargeView: View {
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let entry: UsageEntry
+    let transparent: Bool
+
+    /// Eight at regular sizes, five once the type is large enough that eight would clip.
+    private var visibleLimit: Int { dynamicTypeSize >= .xLarge ? 5 : 8 }
+
+    private var visibleAccounts: [GlanceAccount] {
+        Array(entry.snapshot.accounts.prefix(visibleLimit))
+    }
+
+    private var hiddenCount: Int {
+        max(entry.snapshot.accounts.count - visibleAccounts.count, 0)
+    }
+
+    /// The lead shows the kit's headline row; every other account its own first row. Same rule
+    /// as the medium tile, and for the same reason — see `WidgetFocus`.
+    private func row(for account: GlanceAccount) -> GlanceRow? {
+        if account.id == entry.snapshot.accounts.first?.id {
+            return entry.snapshot.headlineShort ?? entry.snapshot.headlineLong ?? account.rows.first
+        }
+        return account.rows.first
+    }
+
+    var body: some View {
+        Group {
+            if entry.snapshot.accounts.isEmpty {
+                WidgetEmptyStateView()
+            } else {
+                content
+            }
+        }
+        .widgetBackground(transparent ? nil : UsageColors.background)
+        .widgetURL(DeepLink.glance)
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            WidgetHeader(entry: entry)
+
+            ForEach(visibleAccounts) { account in
+                MediumAccountRow(
+                    account: account,
+                    row: row(for: account),
+                    now: entry.date,
+                    staleAfter: entry.snapshot.staleAfter)
+            }
+
+            if hiddenCount > 0 {
+                Text(verbatim: "+\(hiddenCount) more")
+                    .font(.caption2)
+                    .foregroundColor(UsageColors.textTertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(UsageColors.surface))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// The line both list tiles carry: when the numbers were read, when the next limit rolls over,
+/// and the way to ask for fresher ones.
+private struct WidgetHeader: View {
+
+    let entry: UsageEntry
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let asOf = GlanceText.asOfLine(updatedAt: entry.snapshot.updatedAt, now: entry.date) {
+                Text(verbatim: asOf)
+                    .font(.caption2)
+                    .foregroundColor(UsageColors.textTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
+                Text(verbatim: reset)
+                    .font(.caption2)
+                    .foregroundColor(UsageColors.textSecondary)
+                    .lineLimit(1)
+            }
+            if let refresh = DeepLink.refresh {
+                // A `Link` rather than the tile-wide `widgetURL`, so this one glyph opens the
+                // app on a refresh while the rest of the tile still opens the overview. The
+                // system honours `Link` on medium and large only, which is why the small tile
+                // has no such button rather than a decorative one that does nothing.
+                Link(destination: refresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(UsageColors.textSecondary)
+                }
+                .accessibilityLabel("Refresh in the app")
+            }
+        }
+    }
+}
+
 /// Routes each render to the view for the family the system asked for.
 struct UsageWidgetEntryView: View {
 
     @Environment(\.widgetFamily) private var family
 
     let entry: UsageEntry
+    /// Whether this gallery entry is the transparent one. Carried rather than read from a
+    /// setting, because a widget's look is chosen per placed tile and two tiles of the same
+    /// kind may legitimately differ.
+    var transparent: Bool = false
 
     var body: some View {
         switch family {
+        case .systemLarge:
+            UsageWidgetLargeView(entry: entry, transparent: transparent)
         case .systemMedium:
-            UsageWidgetMediumView(entry: entry)
+            UsageWidgetMediumView(entry: entry, transparent: transparent)
         case .accessoryRectangular:
             UsageAccessoryRectangularView(entry: entry)
+        case .accessoryCircular:
+            UsageAccessoryCircularView(entry: entry)
         default:
-            UsageWidgetSmallView(entry: entry)
+            UsageWidgetSmallView(entry: entry, transparent: transparent)
         }
     }
 }
@@ -676,11 +938,15 @@ private extension View {
     /// requires `containerBackground` for full-bleed colour, and iOS 16 never
     /// heard of it. One wrapper keeps the call sites honest on either.
     @ViewBuilder
-    func widgetBackground(_ color: Color) -> some View {
+    func widgetBackground(_ color: Color?) -> some View {
         if #available(iOS 17.0, *) {
-            containerBackground(for: .widget) { color }
+            // `Color.clear` rather than no container background at all. On iOS 17 a widget that
+            // declares none is rejected from the Home Screen entirely; declaring a clear one is
+            // what "transparent" actually means there — the system's own widget material shows
+            // the wallpaper through it.
+            containerBackground(for: .widget) { color ?? Color.clear }
         } else {
-            background(color)
+            background(color ?? Color.clear)
         }
     }
 }
@@ -689,6 +955,9 @@ private extension View {
 struct UsageWidget: Widget {
 
     /// Reverse-DNS kind, unique among the app's widgets.
+    ///
+    /// Never changed once shipped: the kind is how the system identifies a PLACED tile, so a
+    /// rename silently orphans every widget the user has already put on their home screen.
     private static let kind = "com.usagelimits.widget.usage"
 
     var body: some WidgetConfiguration {
@@ -700,7 +969,66 @@ struct UsageWidget: Widget {
         }
         .configurationDisplayName("Usage Limits")
         .description("Quota left on your AI subscriptions, at a glance.")
-        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+        .supportedFamilies([
+            .systemSmall, .systemMedium, .systemLarge, .accessoryRectangular,
+        ])
+    }
+}
+
+/// The same tile, with the wallpaper showing through it.
+///
+/// A separate gallery entry rather than a switch inside one, which is what Android offers.
+/// The difference is not a preference: a per-tile option needs a configurable widget, and
+/// configuration means `AppIntentConfiguration` — iOS 17, where this app supports 16. Two
+/// entries cost the user one extra row in the gallery and work on every version the app runs
+/// on; the alternative would be a checkbox that half the installed base could not reach.
+struct UsageClearWidget: Widget {
+
+    private static let kind = "com.usagelimits.widget.usage.clear"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: Self.kind, provider: UsageProvider()) { entry in
+            UsageWidgetEntryView(entry: entry, transparent: true)
+        }
+        .configurationDisplayName("Usage Limits (Clear)")
+        .description("The same tile with a transparent background.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+/// One account as a ring, small enough that several fit where one list tile would.
+struct UsageRingWidget: Widget {
+
+    private static let kind = "com.usagelimits.widget.ring"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: Self.kind, provider: UsageProvider()) { entry in
+            UsageRingEntryView(entry: entry)
+        }
+        .configurationDisplayName("Usage Ring")
+        .description("What is left on one subscription, as a ring, with its reset time.")
+        .supportedFamilies([.systemSmall, .accessoryCircular])
+    }
+}
+
+/// Routes the ring widget's two families.
+///
+/// Separate from `UsageWidgetEntryView` rather than another case in it, because the two widgets
+/// support disjoint families and a shared router would silently fall through to the small list
+/// view if a family were ever added to one of them.
+struct UsageRingEntryView: View {
+
+    @Environment(\.widgetFamily) private var family
+
+    let entry: UsageEntry
+
+    var body: some View {
+        switch family {
+        case .accessoryCircular:
+            UsageAccessoryCircularView(entry: entry)
+        default:
+            UsageRingWidgetView(entry: entry)
+        }
     }
 }
 
@@ -708,5 +1036,7 @@ struct UsageWidget: Widget {
 struct UsageWidgets: WidgetBundle {
     var body: some Widget {
         UsageWidget()
+        UsageClearWidget()
+        UsageRingWidget()
     }
 }

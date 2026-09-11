@@ -26,10 +26,21 @@ struct UsageLimitsApp: App {
         ProcessInfo.processInfo.arguments.contains("-ui-testing")
     }
 
+    /// Which tab is showing. Lifted out of `TabView`'s own state so a widget tap can select
+    /// one: a deep link that opened the app on whatever tab was last used would make the
+    /// tile's destination a coin toss.
+    @State private var tab: RootView.Tab = .overview
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(tab: $tab)
                 .environmentObject(store)
+                // The widget's links. The scheme is declared in `CFBundleURLTypes`; without
+                // that declaration the system cannot route these at all and every tap on a
+                // tile does nothing, which is what it did before this existed.
+                .onOpenURL { url in
+                    Task { await handle(url) }
+                }
                 .preferredColorScheme(.dark)
                 // Cached first, then the network. A cold launch that waited for the slowest
                 // provider before drawing anything would read as "you have no accounts" for as
@@ -51,6 +62,29 @@ struct UsageLimitsApp: App {
                 }
         }
     }
+
+    /// Answers one widget link.
+    ///
+    /// Both destinations land on the overview, which is the screen the tiles summarise; the
+    /// refresh link additionally fetches. The fetch happens HERE rather than in the extension
+    /// because the app process is the only one that can read the keychain — which is the
+    /// arrangement that keeps tokens out of widget state, not an accident of layering.
+    ///
+    /// An unrecognised URL is ignored rather than treated as a refresh: a link this build does
+    /// not know is a link from a future one, and guessing at its meaning is how a tap starts
+    /// doing something the user did not ask for.
+    private func handle(_ url: URL) async {
+        guard url.scheme == "usagelimits" else { return }
+        switch url.host {
+        case "refresh":
+            tab = .overview
+            await store.refresh()
+        case "glance":
+            tab = .overview
+        default:
+            break
+        }
+    }
 }
 
 /// The four destinations from the reference design.
@@ -59,16 +93,24 @@ struct UsageLimitsApp: App {
 /// Dynamic Type and for VoiceOver, and a hand-rolled bar would have to re-earn all three.
 struct RootView: View {
 
+    enum Tab: Hashable { case overview, accounts, resets, settings }
+
+    @Binding var tab: Tab
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             OverviewScreen()
                 .tabItem { Label("Overview", systemImage: "gauge.with.dots.needle.33percent") }
+                .tag(Tab.overview)
             AccountsScreen()
                 .tabItem { Label("Accounts", systemImage: "person.2") }
+                .tag(Tab.accounts)
             ResetsScreen()
                 .tabItem { Label("Resets", systemImage: "clock.arrow.circlepath") }
+                .tag(Tab.resets)
             SettingsScreen()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
         }
         .tint(UsageColors.terracotta)
     }

@@ -166,6 +166,9 @@ extension View {
     public func widgetURL(_ url: URL?) -> Self { self }
     public func fill(_ value: Any) -> Self { self }
     public func stroke(_ value: Any, lineWidth: Any? = nil) -> Self { self }
+    public func stroke<S: ShapeStyle>(_ content: S, style: StrokeStyle) -> Self { self }
+    public func trim(from: CGFloat, to: CGFloat) -> Self { self }
+    public func rotationEffect(_ angle: Angle, anchor: Any? = nil) -> Self { self }
     public func symbolRenderingMode(_ value: Any) -> Self { self }
     public func imageScale(_ value: Any) -> Self { self }
     public func bold() -> Self { self }
