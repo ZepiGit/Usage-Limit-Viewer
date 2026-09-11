@@ -166,8 +166,17 @@ final class ProviderTokenRefreshTests: XCTestCase {
     func testARejectionSaysWhatTheUserCanDo() {
         // The engine renders the error onto the account card. Without a description a user is
         // told "unauthorised", which names an HTTP status rather than the remedy.
+        //
+        // Asserted against the CONSTANT rather than a literal copy of the sentence. This test
+        // held its own spelling while the notification evaluator matched on a different one,
+        // so it passed for months over a "reconnect this account" notification that could
+        // never fire. A literal here is what let the two ends disagree unnoticed.
         XCTAssertEqual(
-            ProviderError.unauthorised.errorDescription, "This account needs signing in again.")
+            ProviderError.unauthorised.errorDescription,
+            NotificationEvaluator.signInExpiredMessage)
+        XCTAssertFalse(
+            NotificationEvaluator.signInExpiredMessage.isEmpty,
+            "a user told nothing is a user told 'unauthorised'")
     }
 
     // MARK: - What each provider sends

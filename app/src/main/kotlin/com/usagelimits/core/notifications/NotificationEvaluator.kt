@@ -30,6 +30,33 @@ import kotlin.math.ceil
  */
 object NotificationEvaluator {
 
+    /**
+     * The exact sentence a rejected credential produces.
+     *
+     * Owned here, by the code that has to RECOGNISE it, and used by [ProviderException.userMessage]
+     * — rather than each end spelling its own and this one guessing with a substring.
+     *
+     * The guess worked on Android and was dead on iOS, where the same layer emitted "This
+     * account needs signing in again." and the predicate was therefore false for every account
+     * whose sign-in had lapsed. Nothing failed; the notification simply never fired. This side
+     * was one reword away from the same silence, which is why it stops guessing too.
+     */
+    const val SIGN_IN_EXPIRED_MESSAGE = "Sign-in expired — reconnect this account"
+
+    /**
+     * Whether this failure is one the user has to fix by signing in again.
+     *
+     * The canonical sentence, or — for a snapshot cached by an earlier build, which outlives
+     * the upgrade — the older wording it may still hold.
+     */
+    fun meansSignInExpired(message: String?): Boolean {
+        if (message == null) return false
+        return message == SIGN_IN_EXPIRED_MESSAGE ||
+            message.contains("expired", ignoreCase = true) ||
+            message == "This account needs signing in again."
+    }
+
+
     /** Below this much remaining, the account gets a warning. Strictly less than. */
     const val WARNING_PERCENT = 20.0
 
@@ -440,7 +467,7 @@ object NotificationEvaluator {
         settings: AppSettings,
     ): List<String> {
         if (!settings.notifyOnAuthExpired) return emptyList()
-        val expired = snapshot?.errorMessage?.contains("expired", ignoreCase = true) == true
+        val expired = meansSignInExpired(snapshot?.errorMessage)
         return if (expired) listOf("${usage.account.label} needs to be reconnected") else emptyList()
     }
 

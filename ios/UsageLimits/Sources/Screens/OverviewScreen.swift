@@ -54,13 +54,24 @@ struct OverviewScreen: View {
             .background(UsageColors.background)
             .navigationTitle("Overview")
             .toolbar {
-                if store.accounts.count > 1 {
+                // `|| editMode.isEditing` is the half that matters. Gated on the count alone,
+                // the button — and with it the only way OUT of reorder mode — vanished the
+                // moment a second account was disconnected on another tab: a TabView child is
+                // not torn down on a switch, so `editMode` came back still `.active`, the last
+                // card stayed in drag mode, and pull-to-refresh was suppressed with no control
+                // left to turn any of it off. Killing the app was the only exit.
+                if store.accounts.count > 1 || editMode.isEditing {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(editMode.isEditing ? "Done" : "Reorder") {
                             withAnimation { editMode = editMode.isEditing ? .inactive : .active }
                         }
                     }
                 }
+            }
+            // And ended outright once there is nothing left to reorder, so the mode cannot
+            // outlive its purpose even while the button is on screen.
+            .onChange(of: store.accounts.count) { count in
+                if count < 2 { editMode = .inactive }
             }
             // Suspended while reordering: a pull that starts on a row being dragged is a refresh
             // the user did not ask for, and it would replace the list under their finger.

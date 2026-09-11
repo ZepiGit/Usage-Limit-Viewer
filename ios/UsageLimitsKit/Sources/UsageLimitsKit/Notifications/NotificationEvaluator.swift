@@ -90,6 +90,32 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
 /// consume a key so a threshold cannot re-fire later within the same episode.
 public enum NotificationEvaluator {
 
+    /// The exact sentence a rejected credential produces.
+    ///
+    /// Owned here, by the code that has to RECOGNISE it, and used by the producer — rather than
+    /// each end spelling its own and the evaluator guessing with a substring.
+    ///
+    /// It guessed with `contains("expired")`, and on iOS nothing ever said "expired": a revoked
+    /// grant produced "This account needs signing in again.", so the predicate was false for
+    /// every account that had one and `notifyOnAuthExpired` was DEAD — the user whose sign-in
+    /// had lapsed was simply never told, while their numbers quietly stopped moving. The tests
+    /// missed it because they fed hand-written strings the real producer never emits.
+    ///
+    /// Matching one constant instead means a reword cannot silently kill the notification: it
+    /// breaks `testTheMessageAFailedSignInProducesIsTheOneTheEvaluatorLooksFor` first.
+    public static let signInExpiredMessage = "Sign-in expired — reconnect this account"
+
+    /// Whether this failure is one the user has to fix by signing in again.
+    ///
+    /// The canonical sentence, or — for a snapshot written by an earlier build, which is cached
+    /// and outlives the upgrade — the old wording it may still hold.
+    public static func meansSignInExpired(_ message: String?) -> Bool {
+        guard let message else { return false }
+        if message == signInExpiredMessage { return true }
+        return message.lowercased().contains("expired")
+            || message == "This account needs signing in again."
+    }
+
     /// Remaining percentage strictly below which the warning tier applies.
     public static let warningPercent = 20.0
 
@@ -245,8 +271,7 @@ public enum NotificationEvaluator {
                 // one failure the user must personally fix, and that is a standing fact.
                 if !muted,
                     settings.notifyOnAuthExpired,
-                    let message = snapshot.errorMessage,
-                    message.lowercased().contains("expired")
+                    meansSignInExpired(snapshot.errorMessage)
                 {
                     // No separator, unlike every other line: this one reads as a sentence, and
                     // it is worded identically on Android. Two platforms phrasing the same
