@@ -303,4 +303,92 @@ final class AccountRepositoryTests: XCTestCase {
         let ids = await reopened.accounts().map(\.id)
         XCTAssertEqual(ids, ["a"])
     }
+    // MARK: - The order the user dragged them into
+
+    func testAReorderSurvivesAReopen() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a", created: 100))
+        try await repository.upsert(account("b", created: 200))
+        try await repository.upsert(account("c", created: 300))
+
+        try await repository.reorder(ids: ["c", "a", "b"])
+
+        let reopened = AccountRepository(directory: directory)
+        let ids = await reopened.accounts().map(\.id)
+        XCTAssertEqual(ids, ["c", "a", "b"])
+    }
+
+    /// Until anything is dragged the list is oldest first, which is what a never-reordered
+    /// register has always meant.
+    func testWithoutAReorderTheOldestAccountIsStillFirst() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("b", created: 200))
+        try await repository.upsert(account("a", created: 100))
+
+        let ids = await repository.accounts().map(\.id)
+        XCTAssertEqual(ids, ["a", "b"])
+    }
+
+    /// A new account joins the END of a hand-arranged list.
+    ///
+    /// With `sortOrder` defaulting to 0 rather than nil it would tie with whatever the user
+    /// dragged to the front and land in the middle of their arrangement.
+    func testAnAccountAddedAfterAReorderJoinsTheEnd() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a", created: 100))
+        try await repository.upsert(account("b", created: 200))
+        try await repository.reorder(ids: ["b", "a"])
+
+        // Created before both of them, so age alone would put it first.
+        try await repository.upsert(account("c", created: 1))
+
+        let ids = await repository.accounts().map(\.id)
+        XCTAssertEqual(ids, ["b", "a", "c"])
+    }
+
+    /// An account this caller never saw keeps its place instead of being renumbered to the
+    /// front — the overview can be showing a list that another screen has since added to.
+    func testReorderingLeavesAnUnknownIdAlone() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a", created: 100))
+        try await repository.upsert(account("b", created: 200))
+
+        try await repository.reorder(ids: ["b", "a", "ghost"])
+
+        let ids = await repository.accounts().map(\.id)
+        XCTAssertEqual(ids, ["b", "a"])
+    }
+
+    /// Re-authenticating changes the tokens, not where the user put the card.
+    func testReSavingAnAccountKeepsItsPlace() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a", created: 100))
+        try await repository.upsert(account("b", created: 200))
+        try await repository.reorder(ids: ["b", "a"])
+
+        try await repository.upsert(account("a", created: 100))
+
+        let ids = await repository.accounts().map(\.id)
+        XCTAssertEqual(ids, ["b", "a"])
+    }
+
+    /// A register written before manual ordering existed must still decode. The synthesised
+    /// decoder would reject it for the missing key, and this type treats an undecodable file as
+    /// a register it must not overwrite — which would strand every account the user had.
+    func testARegisterWrittenBeforeOrderingStillLoads() async throws {
+        let repository = AccountRepository(directory: directory)
+        try await repository.upsert(account("a", created: 100))
+
+        // Strip the key the old format never wrote.
+        let url = directory.appendingPathComponent(AccountRepository.fileName)
+        let text = try String(contentsOf: url, encoding: .utf8)
+            .split(separator: "\n")
+            .filter { !$0.contains("sortOrder") }
+            .joined(separator: "\n")
+        try Data(text.utf8).write(to: url)
+
+        let ids = await AccountRepository(directory: directory).accounts().map(\.id)
+        XCTAssertEqual(ids, ["a"])
+    }
+
 }

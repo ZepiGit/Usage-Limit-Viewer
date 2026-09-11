@@ -38,6 +38,44 @@ final class PreferencesAndLedgerTests: XCTestCase {
         XCTAssertFalse(reopened.notifications.notifyOnExhausted)
     }
 
+    /// The store used to normalise by rebuilding the value from the two fields it named, so
+    /// every preference added afterwards was silently discarded on the way to disk — switching
+    /// the tier off wrote it straight back on. This fails against that implementation.
+    func testEveryDisplayPreferenceSurvivesASave() async throws {
+        let store = SettingsStore(directory: directory)
+        var settings = AppSettings()
+        settings.showSubscriptionTier = false
+        settings.showRenewalTime = true
+        settings.accountsManuallyOrdered = true
+        settings.notifications.mutedAccountIDs = ["acct-1", "acct-2"]
+
+        let returned = try await store.save(settings)
+
+        // What `save` reports and what the next launch reads have to agree: the settings screen
+        // renders the former and the user judges it by the latter.
+        XCTAssertEqual(returned, settings)
+        let reopened = await SettingsStore(directory: directory).settings()
+        XCTAssertFalse(reopened.showSubscriptionTier)
+        XCTAssertTrue(reopened.showRenewalTime)
+        XCTAssertTrue(reopened.accountsManuallyOrdered)
+        XCTAssertEqual(reopened.notifications.mutedAccountIDs, ["acct-1", "acct-2"])
+    }
+
+    /// A file from before these preferences existed must keep every value it does state, and
+    /// take the defaults only for what it does not.
+    func testAFileWithoutTheDisplayPreferencesTakesTheirDefaults() async throws {
+        let json = #"{"syncIntervalMinutes": 60}"#
+        try Data(json.utf8).write(to: directory.appendingPathComponent("settings.json"))
+
+        let settings = await SettingsStore(directory: directory).settings()
+
+        XCTAssertEqual(settings.syncIntervalMinutes, 60)
+        XCTAssertTrue(settings.showSubscriptionTier)
+        XCTAssertFalse(settings.showRenewalTime)
+        XCTAssertFalse(settings.accountsManuallyOrdered)
+        XCTAssertTrue(settings.notifications.mutedAccountIDs.isEmpty)
+    }
+
     func testDefaultsRatherThanAFailureWhenNothingIsStored() async {
         let settings = await SettingsStore(directory: directory).settings()
 

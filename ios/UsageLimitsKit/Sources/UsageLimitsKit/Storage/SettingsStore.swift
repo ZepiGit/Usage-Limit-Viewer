@@ -35,12 +35,11 @@ public actor SettingsStore {
     /// settings screen shows what will happen rather than what was asked for.
     @discardableResult
     public func save(_ settings: AppSettings) throws -> AppSettings {
-        // Round-tripped through the initialiser so the floor is applied to a value arriving from
-        // anywhere — a decoded file included, since a hand-edited or downgraded file could
-        // otherwise install an interval the system silently ignores.
-        let normalised = AppSettings(
-            syncIntervalMinutes: settings.syncIntervalMinutes,
-            notifications: settings.notifications)
+        // Normalised so the floor is applied to a value arriving from anywhere — a decoded file
+        // included, since a hand-edited or downgraded file could otherwise install an interval
+        // the system silently ignores. `normalised()` copies and adjusts rather than rebuilding
+        // from named fields, so a preference added later cannot be dropped on the way through.
+        let normalised = settings.normalised()
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
@@ -60,9 +59,7 @@ public actor SettingsStore {
             // preferences file costs them the app.
             return AppSettings()
         }
-        // Through the initialiser again, for the same reason as `save`.
-        return AppSettings(
-            syncIntervalMinutes: stored.syncIntervalMinutes,
-            notifications: stored.notifications)
+        // Normalised again, for the same reason as `save`.
+        return stored.normalised()
     }
 }

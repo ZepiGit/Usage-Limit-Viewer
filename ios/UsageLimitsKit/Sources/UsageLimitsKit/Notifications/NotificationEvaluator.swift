@@ -39,6 +39,14 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
     public var resetApproachingMinutes = 30
     public var resetCreditExpiryLeadMinutes = 1440
 
+    /// Accounts that should never notify, by local id.
+    ///
+    /// A preference about an account rather than a fact about it, so it lives here with the
+    /// other notification choices instead of on the account record. A stale id left behind by a
+    /// deleted account is inert: ids are UUIDs, so re-adding the same provider account mints a
+    /// new one and cannot inherit an old mute.
+    public var mutedAccountIDs: Set<String> = []
+
     public init() {}
 
     /// Decoded field by field, each falling back to its default.
@@ -64,6 +72,8 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
             try container.decodeIfPresent(Int.self, forKey: .resetApproachingMinutes) ?? 30
         resetCreditExpiryLeadMinutes =
             try container.decodeIfPresent(Int.self, forKey: .resetCreditExpiryLeadMinutes) ?? 1440
+        mutedAccountIDs =
+            try container.decodeIfPresent(Set<String>.self, forKey: .mutedAccountIDs) ?? []
     }
 }
 
@@ -218,6 +228,11 @@ public enum NotificationEvaluator {
         for account in accounts {
             let id = account.accountId
             var state = carried[id] ?? AccountState(accountId: id)
+            // Computed once per account and consulted at each place that would SAY something.
+            // Deliberately not a `continue` at the top of the loop: a muted account still has
+            // its episodes and its last-processed instant advanced, so unmuting it resumes from
+            // where it is now rather than replaying every edge it passed while silent.
+            let muted = settings.mutedAccountIDs.contains(id)
 
             guard let snapshot = account.snapshot else {
                 // No data at all, so no conclusions: the account is neither better nor worse.
@@ -228,7 +243,8 @@ public enum NotificationEvaluator {
                 // The payload of a failed fetch cannot be trusted for positive findings,
                 // so only the failure itself is interpreted. Expired credentials are the
                 // one failure the user must personally fix, and that is a standing fact.
-                if settings.notifyOnAuthExpired,
+                if !muted,
+                    settings.notifyOnAuthExpired,
                     let message = snapshot.errorMessage,
                     message.lowercased().contains("expired")
                 {
@@ -248,13 +264,15 @@ public enum NotificationEvaluator {
                 // away at fetch time with a thirty-minute lead was never announced when the
                 // next fetch came three hours later. The keys carry the instant, so this
                 // cannot say anything twice. Same rule as Android.
-                appendCreditsAvailableFinding(
-                    accountLabel: account.label,
-                    settings: settings,
-                    snapshot: snapshot,
-                    now: now,
-                    into: &findings
-                )
+                if !muted {
+                    appendCreditsAvailableFinding(
+                        accountLabel: account.label,
+                        settings: settings,
+                        snapshot: snapshot,
+                        now: now,
+                        into: &findings
+                    )
+                }
                 appendResetApproachingEvents(
                     accountId: id, accountLabel: account.label, windows: snapshot.windows,
                     settings: settings, now: now, into: &events)
@@ -332,20 +350,29 @@ public enum NotificationEvaluator {
                 now: now,
                 into: &events
             )
-            appendCreditsAvailableFinding(
-                accountLabel: account.label,
-                settings: settings,
-                snapshot: snapshot,
-                now: now,
-                into: &findings
-            )
+            if !muted {
+                appendCreditsAvailableFinding(
+                    accountLabel: account.label,
+                    settings: settings,
+                    snapshot: snapshot,
+                    now: now,
+                    into: &findings
+                )
+            }
 
             state.lastProcessedFetchedAt = snapshot.fetchedAt
             carried[id] = state
         }
 
         let orderedStates = carried.values.sorted { $0.accountId < $1.accountId }
-        return Outcome(states: orderedStates, events: events, standingFindings: findings)
+        return Outcome(
+            states: orderedStates,
+            // Filtered here rather than at each `append`, as on Android: an emit site added
+            // later is covered by this without anyone remembering to guard it. Every event a
+            // muted account would have raised is dropped entirely — including the blank-line
+            // ones, which only exist to consume a key for a caller that will never see them.
+            events: events.filter { !settings.mutedAccountIDs.contains($0.accountId) },
+            standingFindings: findings)
     }
 
     // MARK: Quota tiers
