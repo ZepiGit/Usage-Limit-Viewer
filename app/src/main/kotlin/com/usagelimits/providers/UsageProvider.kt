@@ -53,6 +53,20 @@ sealed interface LoginChallenge {
         val authorizationUrl: String,
         val redirectUri: String,
     ) : LoginChallenge
+
+    /**
+     * No flow at all: the user creates a key on the provider's own console and pastes it.
+     *
+     * The clumsiest of the three, and for Kimi Code the only honest one. Its device flow is
+     * bound to `kimi-cli`'s client id and the model API gates on an `X-Msh-Platform`
+     * allowlist that answers everything else with `403 access_terminated`, so driving it
+     * would mean impersonating another client past an access control the provider put there
+     * deliberately. See docs/providers-kimi.md.
+     */
+    data class ApiKey(
+        val consoleUrl: String,
+        val hint: String,
+    ) : LoginChallenge
 }
 
 /**
@@ -78,7 +92,14 @@ interface UsageProvider {
      * Drives the login to completion: polls (device flow) or exchanges the code (redirect).
      * Suspends until the user finishes, the attempt is cancelled, or the challenge expires.
      */
-    suspend fun completeLogin(challenge: LoginChallenge, redirectResponse: String? = null): OAuthCredentials
+    /**
+     * Drives the login to completion.
+     *
+     * [userInput] is whatever the user had to supply by hand: the redirect URL the browser
+     * came back with, or — for [LoginChallenge.ApiKey] — the key they pasted. Device flows
+     * need nothing and pass null.
+     */
+    suspend fun completeLogin(challenge: LoginChallenge, userInput: String? = null): OAuthCredentials
 
     /** Exchanges a refresh token for a fresh access token. */
     suspend fun refresh(credentials: OAuthCredentials): OAuthCredentials

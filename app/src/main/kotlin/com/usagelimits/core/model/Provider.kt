@@ -10,7 +10,8 @@ enum class ProviderId(val id: String, val displayName: String) {
     CODEX("codex", "OpenAI Codex"),
     CLAUDE("claude", "Claude"),
     ANTIGRAVITY("antigravity", "Antigravity"),
-    XAI("xai", "Grok");
+    XAI("xai", "Grok"),
+    KIMI("kimi", "Kimi");
 
     companion object {
         fun fromId(value: String?): ProviderId? = entries.firstOrNull { it.id == value }

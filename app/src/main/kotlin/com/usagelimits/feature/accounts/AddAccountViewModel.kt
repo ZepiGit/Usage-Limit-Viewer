@@ -16,6 +16,7 @@ import com.usagelimits.providers.codex.CodexProvider
 import com.usagelimits.providers.xai.XaiProvider
 import com.usagelimits.widget.WidgetUpdater
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,18 @@ sealed interface AddAccountState {
         val provider: ProviderId,
         val userCode: String,
         val verificationUri: String,
+    ) : AddAccountState
+
+    /**
+     * No flow to drive: the user has to fetch a key from the provider's console and paste it.
+     *
+     * The login job parks here rather than unwinding, so cancelling the screen still closes
+     * everything the attempt opened.
+     */
+    data class AwaitingApiKey(
+        val provider: ProviderId,
+        val consoleUrl: String,
+        val hint: String,
     ) : AddAccountState
 
     /** Redirect flow: the browser is open and the loopback listener is waiting. */
@@ -65,6 +78,15 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
      * The whole thing is one job so cancelling closes the loopback listener and stops polling
      * rather than leaving either running in the background.
      */
+    /** Set while a login is parked waiting for a pasted key. */
+    private var pendingApiKey: CompletableDeferred<String>? = null
+
+    /** Hands the key the user pasted to the login job that is waiting for it. */
+    fun submitApiKey(key: String) {
+        val trimmed = key.trim()
+        if (trimmed.isNotEmpty()) pendingApiKey?.complete(trimmed)
+    }
+
     fun startLogin(context: Context, providerId: ProviderId) {
         loginJob?.cancel()
         loginJob = viewModelScope.launch {
@@ -97,9 +119,26 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
                         _state.value = AddAccountState.AwaitingBrowser(providerId)
                         openUrl(context, challenge.authorizationUrl)
                     }
+
+                    is LoginChallenge.ApiKey -> {
+                        _state.value = AddAccountState.AwaitingApiKey(
+                            provider = providerId,
+                            consoleUrl = challenge.consoleUrl,
+                            hint = challenge.hint,
+                        )
+                    }
                 }
 
-                val credentials = provider.completeLogin(challenge)
+                // Parks the job until the key arrives, rather than returning and resuming
+                // later: cancelling the screen then cancels the await along with everything
+                // else the attempt opened.
+                val typed = if (challenge is LoginChallenge.ApiKey) {
+                    CompletableDeferred<String>().also { pendingApiKey = it }.await()
+                } else {
+                    null
+                }
+
+                val credentials = provider.completeLogin(challenge, typed)
                 val profile = provider.fetchProfile(credentials)
 
                 val account = container.repository.upsertFromLogin(

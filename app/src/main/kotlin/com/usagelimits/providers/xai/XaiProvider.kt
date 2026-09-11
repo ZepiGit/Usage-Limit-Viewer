@@ -155,7 +155,7 @@ class XaiProvider(
      */
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.DeviceCode) { "xAI uses the device flow" }
         val (_, deviceCode, packedEndpoint) = splitChallenge(challenge.userCode)

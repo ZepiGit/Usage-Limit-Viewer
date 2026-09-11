@@ -80,7 +80,7 @@ class CodexProvider(
 
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.DeviceCode) { "Codex uses the device flow" }
         val (userCode, deviceAuthId) = splitChallenge(challenge.userCode)
