@@ -97,10 +97,8 @@ class KimiProvider(
     /**
      * Polls the token endpoint until the user approves, denies, or the code expires.
      *
-     * Kimi answers a pending poll with 200 and an `error` body, as CLIProxyAPI reads it; a
-     * failed status is treated as "keep waiting" too, for the servers that follow the RFC's
-     * 400 instead. Transport failures and 5xx also keep the loop going — the user is in the
-     * browser while this runs and one lost poll is not a failed login. The deadline bounds it.
+     * OAuth error bodies are interpreted on both 2xx and HTTP 400/403. Only pending,
+     * slow_down and temporary transport/server failures continue; a refusal ends the attempt.
      */
     private suspend fun pollForTokens(challenge: LoginChallenge.DeviceCode): OAuthCredentials {
         val deviceCode = challenge.userCode.substringAfter(CODE_SEPARATOR, "")
@@ -123,12 +121,13 @@ class KimiProvider(
                     // Pending may arrive as a failed status; the generic retry must not
                     // absorb it — poll timing belongs to this loop.
                     retries = 0,
+                    devicePoll = true,
                 )
-                JsonSupport.parseObject(response.body)
-            } catch (e: ProviderException.Forbidden) {
-                null
-            } catch (e: ProviderException.Unexpected) {
-                null
+                JsonSupport.parseObject(response.body).also { payload ->
+                    if (response.statusCode !in 200..299 && JsonSupport.string(payload, "error") == null) {
+                        throw ProviderException.MalformedPayload("device error response had no error code")
+                    }
+                }
             } catch (e: ProviderException.Offline) {
                 null
             } catch (e: ProviderException.ServerError) {
@@ -147,14 +146,14 @@ class KimiProvider(
 
                 ERROR_SLOW_DOWN -> {
                     // RFC 8628 §3.5: the increase is permanent for the rest of the poll.
-                    intervalMs += SLOW_DOWN_STEP_MS
+                    intervalMs = Math.addExact(intervalMs, SLOW_DOWN_STEP_MS)
                     delay(intervalMs)
                 }
 
                 ERROR_EXPIRED_TOKEN, ERROR_ACCESS_DENIED ->
                     throw ProviderException.LoginCancelled("Device login was not completed ($error)")
 
-                else -> throw ProviderException.Unexpected("device authorization failed: $error")
+                else -> throw ProviderException.Unexpected("device authorization was refused")
             }
         }
 

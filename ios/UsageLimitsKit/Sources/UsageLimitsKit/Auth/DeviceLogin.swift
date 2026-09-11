@@ -292,6 +292,10 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
 
     private let httpClient: UsageHTTPClient
     private let now: @Sendable () -> Date
+    var waitForPoll: @Sendable (TimeInterval) async throws -> Void = {
+        try await DeviceLoginTiming.sleep(seconds: $0)
+    }
+
 
     public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
@@ -372,22 +376,8 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
         while now() < challenge.expiresAt {
             try Task.checkCancellation()
 
-            var payload: [String: Any]?
-            do {
-                let response = try await ProviderHTTP.request(
-                    httpClient, url: tokenEndpoint, method: "POST", headers: headers, body: body,
-                    endpoint: "xai device token")
-                payload = try? ProviderHTTP.decodeObject(
-                    response.body, endpoint: "xai device token")
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // RFC 8628 says pending is an error BODY; in practice it arrives on a non-2xx
-                // status, which the HTTP client has already turned into a thrown error before
-                // the body can be read. So a failed status means "keep waiting" and only a
-                // successful one is inspected.
-                payload = nil
-            }
+            let payload = try await DeviceTokenPoll.payload(
+                httpClient, url: tokenEndpoint, headers: headers, body: body)
 
             if let payload {
                 switch JSONSupport.string(payload, "error") {
@@ -403,12 +393,12 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
                     throw DeviceLoginError.expired
                 case "access_denied":
                     throw DeviceLoginError.declined("the sign-in was declined")
-                case let other?:
-                    throw DeviceLoginError.declined(other)
+                case _?:
+                    throw DeviceLoginError.declined("the device grant was refused")
                 }
             }
 
-            try await DeviceLoginTiming.sleep(seconds: interval)
+            try await waitForPoll(interval)
         }
         throw DeviceLoginError.expired
     }
@@ -475,6 +465,9 @@ public struct KimiDeviceLogin: DeviceLoginProvider {
 
     private let httpClient: UsageHTTPClient
     private let now: @Sendable () -> Date
+    var waitForPoll: @Sendable (TimeInterval) async throws -> Void = {
+        try await DeviceLoginTiming.sleep(seconds: $0)
+    }
 
     public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
         self.httpClient = httpClient
@@ -539,21 +532,8 @@ public struct KimiDeviceLogin: DeviceLoginProvider {
         while now() < challenge.expiresAt {
             try Task.checkCancellation()
 
-            var payload: [String: Any]?
-            do {
-                let response = try await ProviderHTTP.request(
-                    httpClient, url: ProviderEndpoints.Kimi.tokenURL, method: "POST",
-                    headers: headers, body: body, endpoint: "kimi device token")
-                payload = try? ProviderHTTP.decodeObject(
-                    response.body, endpoint: "kimi device token")
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // Kimi answers a pending poll with 200 and an error body; a server following
-                // the RFC's 400 lands here instead, and so does a poll that did not get
-                // through at all. Either way: keep waiting, the deadline bounds the loop.
-                payload = nil
-            }
+            let payload = try await DeviceTokenPoll.payload(
+                httpClient, url: ProviderEndpoints.Kimi.tokenURL, headers: headers, body: body)
 
             if let payload {
                 switch JSONSupport.string(payload, "error") {
@@ -568,12 +548,12 @@ public struct KimiDeviceLogin: DeviceLoginProvider {
                     throw DeviceLoginError.expired
                 case "access_denied":
                     throw DeviceLoginError.declined("the sign-in was declined")
-                case let other?:
-                    throw DeviceLoginError.declined(other)
+                case _?:
+                    throw DeviceLoginError.declined("the device grant was refused")
                 }
             }
 
-            try await DeviceLoginTiming.sleep(seconds: interval)
+            try await waitForPoll(interval)
         }
         throw DeviceLoginError.expired
     }
@@ -641,4 +621,36 @@ public enum DeviceLoginSupport {
     public static func unsupportedReason(for provider: ProviderID) -> String? { nil }
 
     public static var supported: [ProviderID] { ProviderID.allCases }
+}
+
+/// Keeps OAuth protocol errors available without passing raw error bodies to the UI.
+private enum DeviceTokenPoll {
+    static func payload(
+        _ client: UsageHTTPClient, url: String, headers: [String: String], body: Data
+    ) async throws -> [String: Any]? {
+        let text: String
+        let failedStatus: Bool
+        do {
+            let response = try await client.request(
+                url: url, method: "POST", headers: headers, body: body, retries: 0)
+            text = response.body
+            failedStatus = false
+        } catch HTTPError.status(let code, let body) where code == 400 || code == 403 {
+            text = body
+            failedStatus = true
+        } catch HTTPError.status(let code, _) where (500...599).contains(code) {
+            return nil
+        } catch HTTPError.transport {
+            return nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw DeviceLoginError.declined("the device endpoint refused the request")
+        }
+        let payload = try ProviderHTTP.decodeObject(text, endpoint: "device token")
+        if failedStatus && JSONSupport.string(payload, "error") == nil {
+            throw DeviceLoginError.malformedResponse("device error response had no error code")
+        }
+        return payload
+    }
 }
