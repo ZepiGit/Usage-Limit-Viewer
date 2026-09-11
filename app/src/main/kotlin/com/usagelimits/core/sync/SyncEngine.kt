@@ -270,7 +270,8 @@ fun ProviderException.userMessage(): String = when (this) {
     is ProviderException.Forbidden -> "Access denied for this account"
     is ProviderException.RateLimited -> "Rate limited — try again shortly"
     is ProviderException.ServerError -> "Provider is having trouble ($statusCode)"
-    is ProviderException.Offline -> "No network connection"
+    // The client names the host and the kind of failure; the generic line is only the fallback.
+    is ProviderException.Offline -> message ?: "No network connection"
     is ProviderException.MalformedPayload -> "Unexpected response from provider"
     is ProviderException.LoginCancelled -> "Sign-in was cancelled"
     is ProviderException.Unexpected -> "Refresh failed"

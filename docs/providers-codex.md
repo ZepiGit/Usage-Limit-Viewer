@@ -38,20 +38,40 @@ What is unverified, beyond "it has never run":
 
 ## 2. Auth flow
 
-The app uses **OpenAI's device authorization flow**. The reference desktop client uses the
-authorization-code flow with PKCE and a loopback redirect to
-`http://localhost:1455/auth/callback`; that alternative was rejected for Android.
+The app uses the **authorization-code flow with PKCE and a loopback redirect** — the flow the
+Codex CLI itself runs — with **OpenAI's device authorization flow** as the fallback.
 
-The reason is the platform, not the protocol. A loopback redirect needs the app to bind a
-fixed local port and still be alive when the browser hands the code back. On Android the app
-is backgrounded the moment a browser opens, and a backgrounded process can be killed at the
-system's discretion; the user may also finish the login in a browser on another device
-entirely, where `localhost` means that device and nothing comes back at all. The device flow
-has no redirect: the user reads a short code, types it on `auth.openai.com`, and the app
-polls. Nothing depends on the app surviving, on a port being free, or on the browser being on
-the same machine.
+The browser flow is the default because it is the one the user notices least: sign in on
+`auth.openai.com`, be redirected back, done. Its one precondition is that the app can bind the
+redirect port the CLI's client registration pins, `1455`, and that is the same precondition
+Claude (`54545`) and Antigravity (`51121`) have always had; the concerns that made the device
+flow the original choice — a backgrounded process, a taken port — turned out to be ones the
+loopback listener already handles for the other two providers. The device flow remains for the
+one case the browser flow cannot help: the port is taken. It costs the user a code to carry
+from this app into the browser, which is exactly the step the browser flow removes.
 
-The steps as implemented:
+### 2a. Browser flow (default)
+
+1. `beginLogin()` binds `127.0.0.1:1455` **before** building the URL, so a conflict is known
+   now — and answered with the device flow below — rather than after the browser has minted
+   a code that has nowhere to land.
+2. It generates a PKCE pair and a `state`, holds them on the instance, and returns a
+   `LoginChallenge.Redirect` whose URL is `https://auth.openai.com/oauth/authorize` with
+   `response_type=code`, the client id, `redirect_uri=http://localhost:1455/auth/callback`,
+   `scope=openid profile email offline_access`, the S256 challenge, the state, and the three
+   parameters the first-party client sends: `id_token_add_organizations=true`,
+   `codex_cli_simplified_flow=true`, `originator=codex_cli_rs`.
+3. The UI opens the URL in Custom Tabs. The user signs in; the provider redirects the browser
+   to the loopback URL; `LoopbackServer` answers it with a small page and hands the query
+   parameters back.
+4. `completeLogin()` checks the returned `state` against the one it generated (constant
+   time) before reading the code, then exchanges the code exactly as in step 7 below, with
+   `redirect_uri=http://localhost:1455/auth/callback` and the verifier it generated itself.
+
+PKCE here works as intended: the verifier is created on the device and never leaves it, so a
+code intercepted on its way back is worthless on its own.
+
+### 2b. Device flow (fallback, when port 1455 is taken)
 
 1. `beginLogin()` POSTs `{"client_id": …}` to the device *usercode* endpoint.
 2. The response yields a user code — accepted as either `user_code` or `usercode`, because
@@ -66,9 +86,11 @@ The steps as implemented:
 5. `completeLogin()` polls the device *token* endpoint with `{device_auth_id, user_code}` at
    the provider's interval, with HTTP retries disabled so the generic retry/backoff cannot
    swallow a pending response. **403 and 404 both mean "not approved yet"** — OpenAI does not
-   send the RFC 8628 `authorization_pending` error body — so those two continue the loop and
-   anything else is terminal. The loop is bounded by the 15-minute deadline, after which it
-   raises `LoginCancelled`.
+   send the RFC 8628 `authorization_pending` error body — so those two continue the loop. A
+   poll that does not get through (a transport failure, a 5xx) continues it as well: the user
+   is in the browser while this runs and one lost poll is not a failed login. Anything else
+   is terminal. The loop is bounded by the 15-minute deadline, after which it raises
+   `LoginCancelled`.
 6. A 2xx returns an `authorization_code` **and the PKCE `code_verifier`**, both of which the
    provider generated.
 7. `exchangeCode()` POSTs a form body to `https://auth.openai.com/oauth/token` with
@@ -86,8 +108,8 @@ never crosses an untrusted channel — it arrives over TLS in response to a requ
 made, holding a device id only this app knows — but PKCE in this flow is not the
 client-binding guarantee it normally is. It is closer to a second secret travelling the same
 path as the first. This is a property of OpenAI's device endpoint, not a choice the app makes,
-and it is the main reason the desktop authorization-code flow remains documented in
-`ProviderEndpoints.Codex` as the rejected alternative.
+and it is one more reason the browser flow — with a verifier this app generates — is the
+default and this one the fallback.
 
 Refresh is an ordinary RFC 6749 refresh-token grant. A refresh response that omits a new
 refresh token means "keep the old one", and the code carries it forward rather than storing a
@@ -102,7 +124,8 @@ attribute, because every usage call has to name it in a header.
 
 | Method and URL | Purpose | Headers sent | Provenance |
 |---|---|---|---|
-| `POST https://auth.openai.com/api/accounts/deviceauth/usercode` | Start device login | `Accept`, `User-Agent` | Internal endpoint observed in the first-party CLI — NOT a stable public API |
+| `https://auth.openai.com/oauth/authorize` | Browser sign-in page (default flow) | — (opened in a browser); redirects to `http://localhost:1455/auth/callback` | OAuth standard (RFC 6749 §4.1.1, RFC 7636); the extra parameters are the first-party CLI's |
+| `POST https://auth.openai.com/api/accounts/deviceauth/usercode` | Start device login (fallback) | `Accept`, `User-Agent` | Internal endpoint observed in the first-party CLI — NOT a stable public API |
 | `https://auth.openai.com/codex/device` | Page the user types the code on | — (opened in a browser) | Internal endpoint observed in the first-party CLI — NOT a stable public API |
 | `POST https://auth.openai.com/api/accounts/deviceauth/token` | Poll for approval | `Accept`, `User-Agent` | Internal endpoint observed in the first-party CLI — NOT a stable public API (RFC 8628-shaped, but the pending signalling is not RFC 8628) |
 | `POST https://auth.openai.com/oauth/token` | Code exchange and refresh | `Accept`, `User-Agent`; form body | OAuth standard (RFC 6749 §4.1.3 and §6, RFC 7636) |
@@ -255,7 +278,8 @@ safe on the provider side; the app declines to rely on that assumption twice.
 Behaviour derived from, and re-read at, these commits:
 
 - **CLIProxyAPI @ `7fac6b15`** (2026-09-09) — `internal/auth/codex/openai_auth.go` for the
-  authorization-code/PKCE alternative, the token endpoint and the refresh grant;
+  authorization-code/PKCE flow (the authorize URL, its extra parameters and the `:1455`
+  redirect), the token endpoint and the refresh grant;
   `sdk/auth/codex_device.go` for the device flow, the 403/404 pending semantics, and the
   server-generated PKCE pair.
 - **CLIProxyAPI Management Center @ `ed5f1c48`** (2026-09-08) — `src/utils/quota/constants.ts`

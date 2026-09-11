@@ -156,6 +156,17 @@ struct AddAccountSheet: View {
             Text("The browser opens \(provider.displayName)'s own sign-in page. This app never sees your password.")
                 .font(.caption)
                 .foregroundStyle(UsageColors.textTertiary)
+
+            if DeviceLoginSupport.acceptsPastedKey(provider) {
+                // The flow is the default because it costs the user nothing; the key is for
+                // when the flow's account cannot reach the API yet.
+                Button("Use an API key instead") {
+                    login?.cancel()
+                    stage = .awaitingKey(provider)
+                }
+                .buttonStyle(.bordered)
+                .tint(UsageColors.terracotta)
+            }
         }
         // On the clipboard before either button is pressed: the browser is opened for the user,
         // so the next thing they do is paste, and a code they have to go back and copy first is
@@ -166,11 +177,10 @@ struct AddAccountSheet: View {
         }
     }
 
-    /// The one sign-in with nothing to drive.
+    /// The sign-in with nothing to drive: a key from the provider's console.
     ///
-    /// Kimi Code's device flow is bound to `kimi-cli`'s client id and its API gates on an
-    /// `X-Msh-Platform` allowlist, so this app does not present one. The user brings a key
-    /// from their own console instead. See docs/providers-kimi.md.
+    /// Kimi Code's second way in, under its device flow, for the time before Moonshot has
+    /// allowlisted this app's name on the coding API. See docs/providers-kimi.md.
     private func awaitingKey(_ provider: ProviderID) -> some View {
         UsageCard {
             Text("Paste your \(provider.displayName) key")
@@ -210,9 +220,19 @@ struct AddAccountSheet: View {
             Text(verbatim: message)
                 .font(.footnote)
                 .foregroundStyle(UsageColors.textSecondary)
-            Button("Try again") { start(provider) }
-                .buttonStyle(.bordered)
-                .tint(UsageColors.terracotta)
+            HStack(spacing: 10) {
+                Button("Try again") { start(provider) }
+                    .buttonStyle(.bordered)
+                    .tint(UsageColors.terracotta)
+                if DeviceLoginSupport.acceptsPastedKey(provider) {
+                    Button("Use an API key") {
+                        login?.cancel()
+                        stage = .awaitingKey(provider)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(UsageColors.terracotta)
+                }
+            }
         }
     }
 
@@ -284,9 +304,19 @@ struct AddAccountSheet: View {
                     // The listener is bound INSIDE `authorize`, before the browser opens: a
                     // provider that redirects promptly would otherwise find nothing listening.
                     let challenge = try await container.beginLoopbackLogin(provider: provider)
-                    let code = try await loopback.authorize(challenge)
-                    _ = try await container.completeLoopbackLogin(
-                        code: code, challenge: challenge)
+                    do {
+                        let code = try await loopback.authorize(challenge)
+                        _ = try await container.completeLoopbackLogin(
+                            code: code, challenge: challenge)
+                    } catch LoopbackListener.ListenError.portUnavailable where provider == .codex {
+                        // The CLI's port is taken, and Codex alone has a second way in: its
+                        // device flow needs no port at all, at the price of a code to carry
+                        // into the browser — the step the browser flow exists to remove.
+                        let fallback = try await container.beginLogin(provider: provider)
+                        stage = .waiting(provider, fallback)
+                        _ = try await container.completeLogin(
+                            provider: provider, challenge: fallback)
+                    }
                 }
 
                 // Straight into a refresh: an account that appears with no numbers looks like it

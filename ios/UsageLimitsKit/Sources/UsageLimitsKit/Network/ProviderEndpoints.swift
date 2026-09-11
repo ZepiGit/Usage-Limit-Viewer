@@ -17,10 +17,24 @@ public enum ProviderEndpoints {
     public enum Codex {
         public static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-        // Device authorization — the flow both platforms use. No redirect URI has to be
-        // registered and no loopback listener has to run. The provider generates the PKCE pair
-        // and returns it with the code, which means PKCE here is not the client-binding
-        // guarantee it normally is; that caveat is recorded in the research doc.
+        /// Authorization code + PKCE with a loopback redirect — the flow the Codex CLI itself
+        /// runs, and the default on both platforms. The client registration pins this exact
+        /// redirect, so the app listens on this port just as it does for Claude and
+        /// Antigravity. The extra parameters are the ones the first-party client sends; the
+        /// authorize page shapes what it shows by them.
+        public static let authorizeURL = "https://auth.openai.com/oauth/authorize"
+        public static let redirectURI = "http://localhost:1455/auth/callback"
+        public static let authorizeScope = "openid profile email offline_access"
+        public static let authorizeExtraParameters = [
+            "id_token_add_organizations": "true",
+            "codex_cli_simplified_flow": "true",
+            "originator": "codex_cli_rs",
+        ]
+
+        // Device authorization — the fallback when the redirect port is taken. No redirect URI
+        // has to be registered and no loopback listener has to run. The provider generates the
+        // PKCE pair and returns it with the code, which means PKCE here is not the
+        // client-binding guarantee it normally is; that caveat is recorded in the research doc.
         public static let deviceUserCodeURL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
         public static let deviceTokenURL = "https://auth.openai.com/api/accounts/deviceauth/token"
         public static let deviceVerificationURL = "https://auth.openai.com/codex/device"
@@ -180,11 +194,35 @@ public enum ProviderEndpoints {
 
     /// Kimi Code.
     ///
-    /// No OAuth here, deliberately — see docs/providers-kimi.md. The user brings a key from
-    /// their own console because the device flow's client id belongs to `kimi-cli` and the
-    /// model API gates on an `X-Msh-Platform` allowlist.
+    /// OAuth, under this app's OWN name. Kimi's device flow uses one public client id for every
+    /// program that drives it, and what `api.kimi.com/coding` gates on is the `X-Msh-Platform`
+    /// header naming the calling program. Moonshot allowlists third-party programs on request
+    /// and forbids exactly one thing: presenting another program's identity. So this app says
+    /// who it is, never `kimi_cli`. Until its name is allowlisted the coding API may answer
+    /// `403 access_terminated`, and a key from the user's own console stays the other way in.
+    /// See docs/providers-kimi.md.
     public enum Kimi {
+        /// The public client id every Kimi Code device-flow client presents.
+        public static let clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+        public static let deviceCodeURL = "https://auth.kimi.com/api/oauth/device_authorization"
+        public static let tokenURL = "https://auth.kimi.com/api/oauth/token"
+        public static let deviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+
         public static let usageEndpoint = "https://api.kimi.com/coding/v1/usages"
         public static let consoleURL = "https://www.kimi.com/code"
+
+        /// This app's own name, sent wherever Kimi asks which program is calling.
+        public static let platform = "UsageLimits"
+
+        /// Who is calling, truthfully. The version is the app's own, read from its bundle.
+        public static var identityHeaders: [String: String] {
+            let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "0"
+            return [
+                "User-Agent": "\(platform)/\(version) (iOS)",
+                "X-Msh-Platform": platform,
+                "X-Msh-Version": version,
+            ]
+        }
     }
 }

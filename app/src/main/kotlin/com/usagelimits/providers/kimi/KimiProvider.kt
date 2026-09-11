@@ -1,5 +1,6 @@
 package com.usagelimits.providers.kimi
 
+import com.usagelimits.BuildConfig
 import com.usagelimits.core.auth.OAuthCredentials
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
@@ -8,33 +9,77 @@ import com.usagelimits.core.network.HttpClient
 import com.usagelimits.core.network.JsonSupport
 import com.usagelimits.core.network.ProviderEndpoints.Kimi
 import com.usagelimits.core.network.ProviderException
+import com.usagelimits.providers.KeyLoginCapable
 import com.usagelimits.providers.LoginChallenge
 import com.usagelimits.providers.ProviderProfile
 import com.usagelimits.providers.UsageProvider
 import com.usagelimits.providers.UsageResult
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import java.security.MessageDigest
 
 /**
- * Kimi Code, authenticated with a key the user creates themselves.
+ * Kimi Code.
  *
- * The other four providers sign in through a normal OAuth flow. This one deliberately does
- * not, and the reason is worth stating where someone will read it before "fixing" it:
+ * Signs in with Kimi's RFC 8628 device flow, under this app's own name. For a while this was
+ * the one provider without OAuth, on the reading that its device flow belonged to `kimi-cli`
+ * and that driving it meant impersonating that client. The reading was half right: the client
+ * id is public and shared by every program that drives the flow, first-party or not, and what
+ * Moonshot actually gates on — and forbids spoofing — is the `X-Msh-Platform` header that
+ * names the calling program. CLIProxyAPI sends its own name there; so does this app. What the
+ * gate may still do is answer `403 access_terminated` on the coding API until this app's name
+ * is allowlisted, which is why a key from the user's own console remains the second way in.
  *
- * Kimi Code does have an RFC 8628 device flow. Its public client id belongs to `kimi-cli`, and
- * `api.kimi.com` additionally gates on an `X-Msh-Platform` header against a server-side
- * allowlist, answering values outside it with `403 access_terminated`. Using that client id
- * and header from this app would be impersonating another client past an access control the
- * provider put there on purpose. The open request asking Moonshot for a third-party client id
- * (moonshotai/kimi-code#1795) calls it impersonation in as many words, and it has not been
- * granted. So the user brings a key from their own console; it lands in the Keystore like
- * every other credential and never leaves the device.
+ * A key-connected account has no refresh grant and no expiry; an OAuth-connected one has both.
+ * Everything after sign-in is the same for either.
  */
-class KimiProvider(private val http: HttpClient) : UsageProvider {
+class KimiProvider(
+    private val http: HttpClient,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val version: String = BuildConfig.VERSION_NAME,
+) : UsageProvider, KeyLoginCapable {
 
     override val providerId = ProviderId.KIMI
 
-    override suspend fun beginLogin(): LoginChallenge = LoginChallenge.ApiKey(
+    override suspend fun beginLogin(): LoginChallenge {
+        val response = http.request(
+            url = Kimi.DEVICE_CODE_URL,
+            method = "POST",
+            headers = oauthHeaders(),
+            body = HttpClient.formBody(mapOf("client_id" to Kimi.CLIENT_ID)),
+        )
+        val payload = JsonSupport.parseObject(response.body)
+
+        val userCode = JsonSupport.string(payload, "user_code", "userCode")
+            ?: throw ProviderException.MalformedPayload("device response had no user code")
+        val deviceCode = JsonSupport.string(payload, "device_code", "deviceCode")
+            ?: throw ProviderException.MalformedPayload("device response had no device code")
+        val verificationUri = JsonSupport.string(payload, "verification_uri", "verificationUri")
+            ?: JsonSupport.string(payload, "verification_uri_complete", "verificationUriComplete")
+            ?: throw ProviderException.MalformedPayload("device response had no verification URI")
+
+        val expiresIn = JsonSupport.long(payload, "expires_in", "expiresIn") ?: DEFAULT_EXPIRES_SECONDS
+        val interval = JsonSupport.long(payload, "interval") ?: MIN_POLL_SECONDS
+
+        return LoginChallenge.DeviceCode(
+            // Only the first segment is ever shown; the device code rides along so
+            // completeLogin stays stateless.
+            userCode = "$userCode$CODE_SEPARATOR$deviceCode",
+            verificationUri = verificationUri,
+            verificationUriComplete = JsonSupport.string(
+                payload,
+                "verification_uri_complete",
+                "verificationUriComplete",
+            ),
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs())
+                ?: (nowMs() + DEFAULT_EXPIRES_SECONDS * 1000),
+            // The provider's interval is honoured but never allowed below the floor.
+            pollIntervalMs = JsonSupport.secondsToMillis(maxOf(interval, MIN_POLL_SECONDS))
+                ?: MIN_POLL_SECONDS * 1000,
+        )
+    }
+
+    override fun keyLoginChallenge(): LoginChallenge.ApiKey = LoginChallenge.ApiKey(
         consoleUrl = Kimi.CONSOLE_URL,
         hint = "Create a key in your Kimi Code console and paste it here. It is stored on this " +
             "device only, in the same encrypted store as every other account.",
@@ -43,7 +88,81 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
     override suspend fun completeLogin(
         challenge: LoginChallenge,
         userInput: String?,
-    ): OAuthCredentials {
+    ): OAuthCredentials = when (challenge) {
+        is LoginChallenge.DeviceCode -> pollForTokens(challenge)
+        is LoginChallenge.ApiKey -> connectWithKey(userInput)
+        is LoginChallenge.Redirect -> throw ProviderException.Unexpected("Kimi does not redirect")
+    }
+
+    /**
+     * Polls the token endpoint until the user approves, denies, or the code expires.
+     *
+     * Kimi answers a pending poll with 200 and an `error` body, as CLIProxyAPI reads it; a
+     * failed status is treated as "keep waiting" too, for the servers that follow the RFC's
+     * 400 instead. Transport failures and 5xx also keep the loop going — the user is in the
+     * browser while this runs and one lost poll is not a failed login. The deadline bounds it.
+     */
+    private suspend fun pollForTokens(challenge: LoginChallenge.DeviceCode): OAuthCredentials {
+        val deviceCode = challenge.userCode.substringAfter(CODE_SEPARATOR, "")
+        if (deviceCode.isEmpty()) throw ProviderException.Unexpected("malformed device challenge")
+
+        val fields = mapOf(
+            "grant_type" to Kimi.DEVICE_CODE_GRANT_TYPE,
+            "device_code" to deviceCode,
+            "client_id" to Kimi.CLIENT_ID,
+        )
+
+        var intervalMs = challenge.pollIntervalMs
+        while (nowMs() < challenge.expiresAt) {
+            val payload = try {
+                val response = http.request(
+                    url = Kimi.TOKEN_URL,
+                    method = "POST",
+                    headers = oauthHeaders(),
+                    body = HttpClient.formBody(fields),
+                    // Pending may arrive as a failed status; the generic retry must not
+                    // absorb it — poll timing belongs to this loop.
+                    retries = 0,
+                )
+                JsonSupport.parseObject(response.body)
+            } catch (e: ProviderException.Forbidden) {
+                null
+            } catch (e: ProviderException.Unexpected) {
+                null
+            } catch (e: ProviderException.Offline) {
+                null
+            } catch (e: ProviderException.ServerError) {
+                null
+            }
+
+            if (payload == null) {
+                delay(intervalMs)
+                continue
+            }
+
+            when (val error = JsonSupport.string(payload, "error")) {
+                null -> return toCredentials(payload)
+
+                ERROR_AUTHORIZATION_PENDING -> delay(intervalMs)
+
+                ERROR_SLOW_DOWN -> {
+                    // RFC 8628 §3.5: the increase is permanent for the rest of the poll.
+                    intervalMs += SLOW_DOWN_STEP_MS
+                    delay(intervalMs)
+                }
+
+                ERROR_EXPIRED_TOKEN, ERROR_ACCESS_DENIED ->
+                    throw ProviderException.LoginCancelled("Device login was not completed ($error)")
+
+                else -> throw ProviderException.Unexpected("device authorization failed: $error")
+            }
+        }
+
+        throw ProviderException.LoginCancelled("Device login expired before it was approved")
+    }
+
+    /** The other way in: a key from the user's console, proved against the usage endpoint. */
+    private suspend fun connectWithKey(userInput: String?): OAuthCredentials {
         val key = userInput?.trim()
         if (key.isNullOrEmpty()) throw ProviderException.LoginCancelled("No key was entered")
 
@@ -61,14 +180,36 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
     }
 
     /**
-     * Nothing to refresh: an API key has no expiry and no refresh grant.
+     * Refreshes an OAuth-connected account; hands a key-connected one back unchanged.
      *
-     * Returning the same credentials rather than throwing, because the sync engine calls this
-     * whenever it thinks a credential is stale — and for this provider it never is. A key that
-     * has actually been revoked surfaces as a 401 on the usage call, which is the path that
-     * marks an account as needing attention.
+     * A key has no expiry and no refresh grant, and the sync engine calls this whenever it
+     * suspects staleness — for a key that suspicion is never right, and a revoked key surfaces
+     * as a 401 on the usage call, which already marks the account as needing attention.
      */
-    override suspend fun refresh(credentials: OAuthCredentials): OAuthCredentials = credentials
+    override suspend fun refresh(credentials: OAuthCredentials): OAuthCredentials {
+        val refreshToken = credentials.refreshToken ?: return credentials
+
+        val response = http.request(
+            url = Kimi.TOKEN_URL,
+            method = "POST",
+            headers = oauthHeaders(),
+            body = HttpClient.formBody(
+                mapOf(
+                    "grant_type" to "refresh_token",
+                    "client_id" to Kimi.CLIENT_ID,
+                    "refresh_token" to refreshToken,
+                ),
+            ),
+            // A dead refresh token, not a malformed request: see `badRequestMeansExpired`.
+            badRequestMeansExpired = true,
+            // A rotating refresh grant is spent on arrival; see HttpClient.oneTimeGrant.
+            oneTimeGrant = true,
+        )
+
+        val refreshed = toCredentials(JsonSupport.parseObject(response.body))
+        // A refresh response may omit the refresh token, meaning "keep using the old one".
+        return refreshed.copy(refreshToken = refreshed.refreshToken ?: refreshToken)
+    }
 
     override suspend fun fetchProfile(credentials: OAuthCredentials): ProviderProfile {
         val payload = fetchUsagePayload(credentials)
@@ -89,12 +230,27 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
     private suspend fun fetchUsagePayload(credentials: OAuthCredentials): JsonObject {
         val response = http.request(
             url = Kimi.USAGE_ENDPOINT,
-            headers = mapOf(
+            headers = Kimi.identityHeaders(version) + mapOf(
                 "Authorization" to "Bearer ${credentials.accessToken}",
                 "Accept" to "application/json",
             ),
         )
         return JsonSupport.parseObject(response.body)
+    }
+
+    private fun oauthHeaders(): Map<String, String> =
+        Kimi.identityHeaders(version) + mapOf("Accept" to "application/json")
+
+    private fun toCredentials(payload: JsonObject): OAuthCredentials {
+        val accessToken = JsonSupport.string(payload, "access_token", "accessToken")
+            ?: throw ProviderException.MalformedPayload("token response had no access_token")
+        val expiresIn = JsonSupport.long(payload, "expires_in", "expiresIn")
+        return OAuthCredentials(
+            accessToken = accessToken,
+            refreshToken = JsonSupport.string(payload, "refresh_token", "refreshToken"),
+            idToken = JsonSupport.string(payload, "id_token", "idToken"),
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs()),
+        )
     }
 
     /** The membership tier, spelled the way every other provider's tier is spelled. */
@@ -104,25 +260,17 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
     )
 
     /**
-     * A stable identity for the account, which is what tells a re-entered key from a new one.
+     * The account this credential belongs to: Kimi's own id where the payload states one, a
+     * one-way digest of the credential where it does not.
      *
-     * Kimi's own identifier when the response carries one. When it does not, a digest of the
-     * key stands in — one way, truncated, and never the key itself, which must not reach Room.
-     * It only has to be stable and unique: pasting the same key again then updates the account
-     * it belongs to instead of creating a second one beside it.
-     */
-    /**
-     * The account this key belongs to: Kimi's own id where the payload states one, a one-way
-     * digest of the key where it does not.
+     * The preference order is not cosmetic. A digest changes when the credential does, so
+     * naming the account after one means a user who rotates their key — or whose access token
+     * is simply reissued — comes back as a SECOND account for the same subscription, with the
+     * first left behind holding a credential that no longer works. Kimi's id survives both.
      *
-     * The preference order is not cosmetic. A digest changes when the key does, so naming the
-     * account after one means a user who rotates their key in the console comes back as a
-     * SECOND account for the same subscription — with the first left behind holding a key that
-     * no longer works. Kimi's id survives the rotation.
-     *
-     * The digest is the fallback rather than the rule because a payload that names nobody still
-     * has to produce a stable account, and the key is then the only thing left to derive one
-     * from. It is truncated SHA-256 and never reversible into the key.
+     * The digest is the fallback rather than the rule because a payload that names nobody
+     * still has to produce a stable account, and the credential is then the only thing left to
+     * derive one from. It is truncated SHA-256 and never reversible into the credential.
      *
      * Internal rather than private so it can be tested directly. The behaviour only shows up
      * on the second sign-in with a rotated key, which is not a state a parser test can reach.
@@ -137,5 +285,21 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
 
         val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray())
         return "key-" + digest.take(8).joinToString("") { "%02x".format(it) }
+    }
+
+    companion object {
+        /** Packs the user code and the device code into one challenge field. */
+        private const val CODE_SEPARATOR = "|"
+        private const val MIN_POLL_SECONDS = 5L
+        private const val DEFAULT_EXPIRES_SECONDS = 15L * 60
+        private const val SLOW_DOWN_STEP_MS = 5_000L
+
+        private const val ERROR_AUTHORIZATION_PENDING = "authorization_pending"
+        private const val ERROR_SLOW_DOWN = "slow_down"
+        private const val ERROR_EXPIRED_TOKEN = "expired_token"
+        private const val ERROR_ACCESS_DENIED = "access_denied"
+
+        /** The user-visible half of the packed challenge code. */
+        fun displayCode(packed: String): String = packed.substringBefore(CODE_SEPARATOR)
     }
 }

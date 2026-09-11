@@ -3,14 +3,22 @@ package com.usagelimits.core.network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 /** A response body plus the bits of the envelope callers actually need. */
 data class HttpResponse(
@@ -111,14 +119,30 @@ class HttpClient(
     ): HttpResponse = withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url)
         headers.forEach { (k, v) -> builder.header(k, v) }
-        builder.method(method, body)
 
-        // OkHttp retries connection failures itself, below the loop above and invisibly to it,
-        // so leaving it on would resend a spent grant no matter what that loop decided. The
-        // derived client shares this one's connection pool and dispatcher — `newBuilder` keeps
-        // them — so this costs a wrapper object and no sockets.
+        // OkHttp recovers from connection trouble on its own, below the loop above, and that
+        // recovery has two halves which must be told apart for a grant the server accepts
+        // once. Route fallback happens BEFORE any request byte leaves the device: the host
+        // resolved to several addresses and the first would not connect, or a pooled socket
+        // refused to open a stream. Switching it off along with the dangerous half — as the
+        // first version of this did — turned every token exchange on a phone whose first,
+        // usually IPv6, route is dead into "No network connection": the exchange that used to
+        // move on to the next address now died on the first. The dangerous half is the resend
+        // AFTER the request was written and its reply lost; delivery is unknown then, and a
+        // second presentation of a spent grant can cost the account. OkHttp draws exactly that
+        // line for a body that declares itself one-shot: route failures still fall through to
+        // the next route, and a failure after the send is final.
+        builder.method(method, if (oneTimeGrant && body != null) OneShotBody(body) else body)
+
+        // The grant also gets a connection of its own rather than one from the pool. A pooled
+        // socket the far end has silently dropped — a NAT mapping expiring while the user was
+        // in the browser — fails only after the request is written, which is the one case
+        // that can no longer be retried. A fresh connection cannot be stale, and the pool it
+        // comes from evicts it as soon as the reply is read. `newBuilder` keeps the dispatcher.
         val call = if (oneTimeGrant) {
-            client.newBuilder().retryOnConnectionFailure(false).build()
+            client.newBuilder()
+                .connectionPool(ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
+                .build()
         } else {
             client
         }
@@ -149,11 +173,45 @@ class HttpClient(
                     else -> throw ProviderException.Unexpected("HTTP ${response.code}")
                 }
             }
-        } catch (e: UnknownHostException) {
-            throw ProviderException.Offline(cause = e)
         } catch (e: IOException) {
-            throw ProviderException.Offline(cause = e)
+            throw ProviderException.Offline(describeTransportFailure(url, e), e)
         }
+    }
+
+    /**
+     * Says WHERE a request died and HOW, without any of the exception's own text: OkHttp's
+     * messages carry the URL, and a token URL belongs on neither a screen nor a log.
+     *
+     * "No network connection" used to be the one answer for every transport failure, which
+     * sent a user whose connection was fine off to check their Wi-Fi while the real cause —
+     * a resolver that blocks the host, a handshake the edge refused, a reply that never came
+     * — stayed invisible. The host is safe to name; nothing else from the wire is.
+     */
+    private fun describeTransportFailure(url: String, e: IOException): String {
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: "the provider"
+        return when (e) {
+            is UnknownHostException ->
+                "Could not look up $host. Check the connection, or a DNS filter that may block it."
+            is ConnectException, is NoRouteToHostException -> "Could not connect to $host."
+            is SocketTimeoutException -> "$host did not answer in time."
+            is SSLHandshakeException, is SSLPeerUnverifiedException ->
+                "A secure connection to $host could not be established."
+            else -> "The connection to $host was interrupted."
+        }
+    }
+
+    /**
+     * A body OkHttp may write at most once.
+     *
+     * Declaring a body one-shot is how OkHttp is told "do not resend this after it was written",
+     * while leaving every recovery that happens before the write — trying the next address of a
+     * multi-homed host, replacing a pooled connection that would not open a stream — in place.
+     */
+    private class OneShotBody(private val delegate: RequestBody) : RequestBody() {
+        override fun contentType(): MediaType? = delegate.contentType()
+        override fun contentLength(): Long = delegate.contentLength()
+        override fun writeTo(sink: BufferedSink) = delegate.writeTo(sink)
+        override fun isOneShot(): Boolean = true
     }
 
     /**
