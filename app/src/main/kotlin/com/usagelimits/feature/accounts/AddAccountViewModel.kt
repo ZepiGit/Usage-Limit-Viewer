@@ -12,7 +12,9 @@ import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.core.sync.userMessage
 import com.usagelimits.providers.LoginChallenge
+import com.usagelimits.providers.KeyLoginCapable
 import com.usagelimits.providers.codex.CodexProvider
+import com.usagelimits.providers.kimi.KimiProvider
 import com.usagelimits.providers.xai.XaiProvider
 import com.usagelimits.widget.WidgetUpdater
 import kotlinx.coroutines.Job
@@ -33,6 +35,8 @@ sealed interface AddAccountState {
         val provider: ProviderId,
         val userCode: String,
         val verificationUri: String,
+        /** True where the provider also takes a pasted key, so the screen can offer it. */
+        val keyAlternative: Boolean = false,
     ) : AddAccountState
 
     /**
@@ -52,7 +56,12 @@ sealed interface AddAccountState {
 
     data class Success(val provider: ProviderId, val accountLabel: String) : AddAccountState
 
-    data class Failed(val provider: ProviderId?, val message: String) : AddAccountState
+    data class Failed(
+        val provider: ProviderId?,
+        val message: String,
+        /** True where the provider also takes a pasted key, so "try again" has a sibling. */
+        val keyAlternative: Boolean = false,
+    ) : AddAccountState
 }
 
 /**
@@ -87,15 +96,25 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
         if (trimmed.isNotEmpty()) pendingApiKey?.complete(trimmed)
     }
 
-    fun startLogin(context: Context, providerId: ProviderId) {
+    /**
+     * [withKey] picks the pasted-key way in, for a provider that offers one beside its flow.
+     * The flow is the default; the key is the button under it.
+     */
+    fun startLogin(context: Context, providerId: ProviderId, withKey: Boolean = false) {
         loginJob?.cancel()
+        val keyAlternative = container.providerRegistry.forId(providerId) is KeyLoginCapable
         loginJob = viewModelScope.launch {
             _state.value = AddAccountState.Starting(providerId)
             try {
                 val provider = container.providerRegistry.forId(providerId)
                     ?: throw ProviderException.Unexpected("Provider unavailable")
 
-                val challenge = provider.beginLogin()
+                val challenge = if (withKey) {
+                    (provider as? KeyLoginCapable)?.keyLoginChallenge()
+                        ?: throw ProviderException.Unexpected("This provider takes no key")
+                } else {
+                    provider.beginLogin()
+                }
 
                 when (challenge) {
                     is LoginChallenge.DeviceCode -> {
@@ -104,6 +123,7 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
                         val display = when (providerId) {
                             ProviderId.CODEX -> CodexProvider.displayCode(challenge.userCode)
                             ProviderId.XAI -> XaiProvider.displayCode(challenge.userCode)
+                            ProviderId.KIMI -> KimiProvider.displayCode(challenge.userCode)
                             else -> challenge.userCode.substringBefore('|')
                         }
                         _state.value = AddAccountState.AwaitingDeviceCode(
@@ -111,6 +131,7 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
                             userCode = display,
                             verificationUri = challenge.verificationUriComplete
                                 ?: challenge.verificationUri,
+                            keyAlternative = keyAlternative,
                         )
                         openUrl(context, challenge.verificationUriComplete ?: challenge.verificationUri)
                     }
@@ -161,11 +182,11 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
 
                 _state.value = AddAccountState.Success(providerId, account.label)
             } catch (e: ProviderException) {
-                _state.value = AddAccountState.Failed(providerId, e.userMessage())
+                _state.value = AddAccountState.Failed(providerId, e.userMessage(), keyAlternative)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value = AddAccountState.Failed(providerId, "Sign-in failed")
+                _state.value = AddAccountState.Failed(providerId, "Sign-in failed", keyAlternative)
             }
         }
     }

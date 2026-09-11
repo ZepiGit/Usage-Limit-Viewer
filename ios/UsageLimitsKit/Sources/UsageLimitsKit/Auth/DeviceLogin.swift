@@ -461,6 +461,139 @@ public struct XaiDeviceLogin: DeviceLoginProvider {
     }
 }
 
+// MARK: - Kimi
+
+/// Kimi Code's device flow, which IS RFC 8628, driven under this app's own name.
+///
+/// The identity headers are the point. Kimi's client id is public and shared by every program
+/// that runs this flow; what Moonshot gates on, and forbids spoofing, is the platform header that
+/// names the caller. This sends the app's own — never `kimi_cli` — and the coding API may refuse
+/// it with `403 access_terminated` until Moonshot has allowlisted the name. The pasted key
+/// (`UsageLimitsContainer.completePastedKeyLogin`) stays as the other way in for that case.
+public struct KimiDeviceLogin: DeviceLoginProvider {
+    public let providerID = ProviderID.kimi
+
+    private let httpClient: UsageHTTPClient
+    private let now: @Sendable () -> Date
+
+    public init(httpClient: UsageHTTPClient, now: @Sendable @escaping () -> Date = { Date() }) {
+        self.httpClient = httpClient
+        self.now = now
+    }
+
+    private var headers: [String: String] {
+        var headers = [
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        ]
+        headers.merge(ProviderEndpoints.Kimi.identityHeaders) { current, _ in current }
+        return headers
+    }
+
+    public func begin() async throws -> DeviceLoginChallenge {
+        let response = try await ProviderHTTP.request(
+            httpClient,
+            url: ProviderEndpoints.Kimi.deviceCodeURL,
+            method: "POST", headers: headers,
+            body: TokenExchange.formBody(["client_id": ProviderEndpoints.Kimi.clientID]),
+            endpoint: "kimi device")
+        let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "kimi device")
+
+        let complete = JSONSupport.string(
+            payload, "verification_uri_complete", "verificationUriComplete")
+        guard let userCode = JSONSupport.string(payload, "user_code", "userCode"),
+              let deviceCode = JSONSupport.string(payload, "device_code", "deviceCode"),
+              let verificationURI = JSONSupport.string(
+                payload, "verification_uri", "verificationUri") ?? complete
+        else {
+            throw DeviceLoginError.malformedResponse("the device response is incomplete")
+        }
+
+        let lifetime = JSONSupport.int64(payload, "expires_in", "expiresIn").map(TimeInterval.init)
+            ?? DeviceLoginTiming.defaultLifetime
+        let interval = JSONSupport.int64(payload, "interval").map(TimeInterval.init) ?? 0
+
+        return DeviceLoginChallenge(
+            userCode: userCode,
+            verificationURI: verificationURI,
+            verificationURIComplete: complete,
+            expiresAt: now().addingTimeInterval(lifetime),
+            pollInterval: max(interval, DeviceLoginTiming.minimumPollInterval),
+            continuation: ["device_code": deviceCode])
+    }
+
+    public func complete(_ challenge: DeviceLoginChallenge) async throws -> OAuthCredentials {
+        guard let deviceCode = challenge.continuation["device_code"] else {
+            throw DeviceLoginError.malformedResponse("the challenge carries no device code")
+        }
+
+        let body = TokenExchange.formBody([
+            "grant_type": ProviderEndpoints.Kimi.deviceCodeGrantType,
+            "device_code": deviceCode,
+            "client_id": ProviderEndpoints.Kimi.clientID,
+        ])
+
+        // The interval outlives a slow_down, as RFC 8628 §3.5 requires.
+        var interval = challenge.pollInterval
+
+        while now() < challenge.expiresAt {
+            try Task.checkCancellation()
+
+            var payload: [String: Any]?
+            do {
+                let response = try await ProviderHTTP.request(
+                    httpClient, url: ProviderEndpoints.Kimi.tokenURL, method: "POST",
+                    headers: headers, body: body, endpoint: "kimi device token")
+                payload = try? ProviderHTTP.decodeObject(
+                    response.body, endpoint: "kimi device token")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Kimi answers a pending poll with 200 and an error body; a server following
+                // the RFC's 400 lands here instead, and so does a poll that did not get
+                // through at all. Either way: keep waiting, the deadline bounds the loop.
+                payload = nil
+            }
+
+            if let payload {
+                switch JSONSupport.string(payload, "error") {
+                case nil:
+                    return try TokenExchange.credentials(
+                        from: payload, endpoint: "kimi device token", now: now())
+                case "authorization_pending":
+                    break
+                case "slow_down":
+                    interval += 5
+                case "expired_token":
+                    throw DeviceLoginError.expired
+                case "access_denied":
+                    throw DeviceLoginError.declined("the sign-in was declined")
+                case let other?:
+                    throw DeviceLoginError.declined(other)
+                }
+            }
+
+            try await DeviceLoginTiming.sleep(seconds: interval)
+        }
+        throw DeviceLoginError.expired
+    }
+
+    /// Who the credentials belong to: what the usage response names, else a digest of the
+    /// credential — the same rule the pasted key follows, so one payload names one account.
+    public func profile(_ credentials: OAuthCredentials) async throws -> ProviderProfile {
+        let usage = try await KimiClient(httpClient: httpClient)
+            .fetchUsage(credentials: credentials, attributes: [:])
+        let named = usage.accountIdentity?.trimmingCharacters(in: .whitespaces) ?? ""
+        return ProviderProfile(
+            externalAccountID: named.isEmpty
+                ? UsageLimitsContainer.pastedKeyIdentity(credentials.accessToken)
+                : named,
+            email: nil,
+            displayName: nil,
+            plan: nil)
+    }
+}
+
 // MARK: - The providers a phone cannot sign into
 
 /// How each provider signs in.
@@ -480,9 +613,8 @@ public enum LoginStyle: Sendable, Equatable {
 
     /// No flow at all: the user creates a key on the provider's console and pastes it.
     ///
-    /// Kimi Code only. Its device flow is bound to `kimi-cli`'s client id and `api.kimi.com`
-    /// gates on an `X-Msh-Platform` allowlist, so driving it would mean impersonating another
-    /// client past an access control. See docs/providers-kimi.md.
+    /// No provider's default any more — Kimi Code signs in with its device flow — but still
+    /// the shape of Kimi's second way in, offered under the flow. See docs/providers-kimi.md.
     case pastedKey
 }
 
@@ -490,13 +622,18 @@ public enum DeviceLoginSupport {
 
     public static func style(for provider: ProviderID) -> LoginStyle {
         switch provider {
-        case .xai: return .deviceCode
+        case .xai, .kimi: return .deviceCode
         // Codex runs the CLI's own browser flow on its registered redirect; the device flow
         // is kept as the fallback the app switches to when that port is taken.
         case .codex, .claude, .antigravity: return .loopbackRedirect
-        case .kimi: return .pastedKey
         }
     }
+
+    /// Whether the provider ALSO takes a key the user pastes, beside its flow.
+    ///
+    /// Kimi Code: the flow is the default, but the coding API admits only programs Moonshot
+    /// has allowlisted by name, and a key from the user's console works either way.
+    public static func acceptsPastedKey(_ provider: ProviderID) -> Bool { provider == .kimi }
 
     /// Nil for every provider now. Kept because "can this be signed into here" is a question the
     /// UI asks, and answering it through a function leaves one place to change if a provider

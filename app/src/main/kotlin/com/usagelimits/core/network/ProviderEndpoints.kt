@@ -222,14 +222,35 @@ object ProviderEndpoints {
     /**
      * Kimi Code.
      *
-     * No OAuth here, deliberately. Kimi Code's device flow is bound to `kimi-cli`'s client id
-     * and `api.kimi.com` gates on an `X-Msh-Platform` allowlist that answers anything else
-     * with `403 access_terminated` — so driving it would mean impersonating another client
-     * past an access control the provider put there on purpose. The user brings a key from
-     * their own console instead. See docs/providers-kimi.md.
+     * OAuth, under this app's OWN name. Kimi's RFC 8628 device flow uses one public client id
+     * for every program that drives it — the first-party CLI, CLIProxyAPI, pi and others all
+     * present the same one — and what `api.kimi.com/coding` gates on is the `X-Msh-Platform`
+     * header, which names the calling program. Moonshot allowlists third-party programs on
+     * request and forbids exactly one thing: presenting another program's identity. So this
+     * app says who it is, never `kimi_cli`, and asks to be allowlisted under that name. Until
+     * that is granted the coding API may answer `403 access_terminated`, and a key from the
+     * user's own console stays available as the other way in. See docs/providers-kimi.md.
+     *
+     * Source: CLIProxyAPI internal/auth/kimi/kimi.go.
      */
     object Kimi {
+        /** The public client id every Kimi Code device-flow client presents. */
+        const val CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+        const val DEVICE_CODE_URL = "https://auth.kimi.com/api/oauth/device_authorization"
+        const val TOKEN_URL = "https://auth.kimi.com/api/oauth/token"
+        const val DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
         const val USAGE_ENDPOINT = "https://api.kimi.com/coding/v1/usages"
         const val CONSOLE_URL = "https://www.kimi.com/code"
+
+        /** This app's own name, sent wherever Kimi asks which program is calling. */
+        const val PLATFORM = "UsageLimits"
+
+        /** Who is calling, truthfully. The version is the app's, so the two never disagree. */
+        fun identityHeaders(version: String): Map<String, String> = mapOf(
+            "User-Agent" to "$PLATFORM/$version (Android)",
+            "X-Msh-Platform" to PLATFORM,
+            "X-Msh-Version" to version,
+        )
     }
 }
