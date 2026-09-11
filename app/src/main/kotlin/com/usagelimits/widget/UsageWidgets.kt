@@ -4,10 +4,12 @@ import android.content.Context
 import com.usagelimits.core.model.percentLabel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
@@ -188,6 +190,34 @@ class CompactUsageWidget : GlanceAppWidget() {
                         modifier = GlanceModifier.defaultWeight(),
                         accent = W.textColor(snapshot.overallSeverity),
                     )
+                    // The 2x4 widget has had a refresh button since it was written; this one
+                    // did not, so the only way to force a sync from a home screen was to open
+                    // the app — on the widget whose whole point is not having to.
+                    //
+                    // No weight: the four tiles share the width and this takes what it needs,
+                    // rather than a fifth of the row for one glyph.
+                    Box(
+                        modifier = GlanceModifier
+                            .size(32.dp)
+                            .clickable(actionRunCallback<RefreshWidgetAction>()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = GlanceModifier
+                                .size(24.dp)
+                                .cornerRadius(12.dp)
+                                .background(W.Card),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "↻",
+                                style = TextStyle(
+                                    color = androidx.glance.unit.ColorProvider(W.TextPrimary),
+                                    fontSize = 13.sp,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -462,6 +492,136 @@ class DetailedUsageWidget : GlanceAppWidget() {
             }
         }
     }
+}
+
+/**
+ * The smallest widget: one ring per account, and nothing else.
+ *
+ * The other two answer "how much is left" with a number and a bar, which costs a row of height
+ * per account and runs out of room at three or four. This answers it with a shape, so a dozen
+ * accounts fit where three did — and the thing you actually scan for, a ring that is nearly
+ * empty, is legible at a glance without reading anything.
+ *
+ * Inside each ring is what a number could not tell you: which account it is, and how long
+ * until it comes back. The percentage is deliberately absent — the ring IS the percentage, and
+ * printing it twice would waste the space this widget exists to save.
+ */
+class MinimalUsageWidget : GlanceAppWidget() {
+
+    override val sizeMode = SizeMode.Responsive(
+        setOf(
+            DpSize(120.dp, 120.dp),
+            DpSize(250.dp, 120.dp),
+            DpSize(250.dp, 200.dp),
+        ),
+    )
+
+    override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val view = WidgetUpdater.load(context, id)
+        val snapshot = view.snapshot
+
+        provideContent {
+            GlanceTheme {
+                Column(
+                    modifier = GlanceModifier
+                        .fillMaxSize()
+                        .cornerRadius(24.dp)
+                        .background(if (view.transparent) Color.Transparent else W.Background)
+                        .padding(10.dp)
+                        .clickable(actionStartActivity<MainActivity>()),
+                ) {
+                    if (snapshot.accounts.isEmpty()) {
+                        Text(
+                            text = "No accounts yet",
+                            style = TextStyle(
+                                color = androidx.glance.unit.ColorProvider(W.TextSecondary),
+                                fontSize = 12.sp,
+                            ),
+                        )
+                    } else {
+                        LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
+                            items(
+                                snapshot.accounts,
+                                itemId = { it.accountId.hashCode().toLong() },
+                            ) { account ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Ring(account)
+                                    Spacer(GlanceModifier.width(8.dp))
+                                    Column(modifier = GlanceModifier.defaultWeight()) {
+                                        Text(
+                                            text = account.title,
+                                            maxLines = 1,
+                                            style = TextStyle(
+                                                color = androidx.glance.unit.ColorProvider(
+                                                    W.TextPrimary,
+                                                ),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                            ),
+                                        )
+                                        Text(
+                                            text = ringRow(account)?.resetAt
+                                                ?.let {
+                                                    Countdown.format(
+                                                        it - System.currentTimeMillis(),
+                                                    )
+                                                }
+                                                ?: "—",
+                                            maxLines = 1,
+                                            style = TextStyle(
+                                                color = androidx.glance.unit.ColorProvider(
+                                                    W.TextSecondary,
+                                                ),
+                                                fontSize = 11.sp,
+                                            ),
+                                        )
+                                    }
+                                }
+                                Spacer(GlanceModifier.height(6.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The row the ring is about: whichever of the account's windows is closest to running out.
+     *
+     * Not the first one. Windows arrive in whatever order the provider lists them, and a ring
+     * drawn from a healthy weekly window while the five-hour window beside it is empty says
+     * precisely the opposite of the truth.
+     */
+    private fun ringRow(account: WidgetAccount): WidgetRow? =
+        account.rows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
+
+    @androidx.compose.runtime.Composable
+    private fun Ring(account: WidgetAccount) {
+        val row = ringRow(account)
+        val accent = W.accent(row?.severity ?: account.severity)
+        Image(
+            provider = ImageProvider(
+                UsageRing.draw(
+                    sizePx = RING_PX,
+                    remainingPercent = row?.remainingPercent,
+                    argb = accent.toArgb(),
+                    trackArgb = W.Track.toArgb(),
+                ),
+            ),
+            contentDescription = account.title,
+            modifier = GlanceModifier.size(34.dp),
+        )
+    }
+
+    private companion object {
+        /** Drawn larger than it is shown, so the arc stays smooth on a dense screen. */
+        const val RING_PX = 132
+    }
+}
+
+class MinimalUsageWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = MinimalUsageWidget()
 }
 
 class CompactUsageWidgetReceiver : GlanceAppWidgetReceiver() {
