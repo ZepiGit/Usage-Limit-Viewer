@@ -58,7 +58,7 @@ final class DeviceLoginTests: XCTestCase {
         // All four can be signed into. Claude and Antigravity redirect to a loopback address,
         // which the app receives itself — the first reading of that constraint, that a phone
         // cannot, was wrong.
-        XCTAssertEqual(DeviceLoginSupport.style(for: .codex), .deviceCode)
+        XCTAssertEqual(DeviceLoginSupport.style(for: .codex), .loopbackRedirect)
         XCTAssertEqual(DeviceLoginSupport.style(for: .xai), .deviceCode)
         XCTAssertEqual(DeviceLoginSupport.style(for: .claude), .loopbackRedirect)
         XCTAssertEqual(DeviceLoginSupport.style(for: .antigravity), .loopbackRedirect)

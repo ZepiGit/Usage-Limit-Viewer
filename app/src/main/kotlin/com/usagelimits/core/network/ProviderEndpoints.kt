@@ -23,9 +23,26 @@ object ProviderEndpoints {
     object Codex {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-        // Device authorization — the flow this app uses. No redirect URI has to be
-        // registered and no loopback server has to run, which is why it is preferred on
-        // Android. The provider generates the PKCE pair and returns it with the code.
+        /**
+         * Authorization code + PKCE with a loopback redirect — the flow the Codex CLI itself
+         * runs, and the default here. The client registration pins this exact redirect, so
+         * the app binds this port (see LoopbackServer) just as it does for Claude and
+         * Antigravity. The extra parameters are the ones the first-party client sends; the
+         * authorize page shapes what it shows by them.
+         */
+        const val AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
+        const val REDIRECT_PORT = 1455
+        const val REDIRECT_URI = "http://localhost:$REDIRECT_PORT/auth/callback"
+        const val AUTHORIZE_SCOPE = "openid profile email offline_access"
+        val AUTHORIZE_EXTRA_PARAMS = mapOf(
+            "id_token_add_organizations" to "true",
+            "codex_cli_simplified_flow" to "true",
+            "originator" to "codex_cli_rs",
+        )
+
+        // Device authorization — the fallback when the redirect port is taken. No redirect
+        // URI has to be registered and no loopback server has to run. The provider generates
+        // the PKCE pair and returns it with the code.
         const val DEVICE_USER_CODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
         const val DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
         const val DEVICE_VERIFICATION_URL = "https://auth.openai.com/codex/device"
