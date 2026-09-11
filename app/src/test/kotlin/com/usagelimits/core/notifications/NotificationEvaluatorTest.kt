@@ -949,4 +949,84 @@ class NotificationEvaluatorTest {
             outcome.states.any { it.accountId == "acct" },
         )
     }
+
+    // region silencing one account
+
+    /**
+     * A silenced account says nothing — and its state keeps moving anyway.
+     *
+     * The second half is the one worth pinning. Suppressing the events but freezing the state
+     * would mean un-silencing an account replays whatever episode it was in when it went
+     * quiet: the evaluator would see the snapshot as new, decide the account had just dropped
+     * below its threshold, and notify about a dip from hours ago. Silence is "do not tell me",
+     * not "pretend this did not happen".
+     */
+    @Test
+    fun `a muted account produces no events`() {
+        val settings = AppSettings(mutedAccountIds = setOf("acct"))
+        val outcome = NotificationEvaluator.evaluate(
+            accounts = listOf(usage(remaining = 5.0)),
+            settings = settings,
+            states = emptyMap(),
+            nowMs = now,
+        )
+
+        assertTrue("a silenced account emits nothing", outcome.events.isEmpty())
+        assertTrue("and contributes no standing line either", outcome.standingFindings.isEmpty())
+    }
+
+    @Test
+    fun `muting one account does not silence the others`() {
+        val settings = AppSettings(mutedAccountIds = setOf("quiet"))
+        val outcome = NotificationEvaluator.evaluate(
+            accounts = listOf(
+                usage(remaining = 5.0, id = "quiet"),
+                usage(remaining = 5.0, id = "loud"),
+            ),
+            settings = settings,
+            states = emptyMap(),
+            nowMs = now,
+        )
+
+        assertEquals(
+            "only the account that was not silenced speaks",
+            listOf("loud"),
+            outcome.events.map { it.accountId }.distinct(),
+        )
+    }
+
+    @Test
+    fun `a muted account still advances its state, so un-muting says nothing about the past`() {
+        val muted = AppSettings(mutedAccountIds = setOf("acct"))
+        val low = usage(remaining = 5.0)
+
+        val whileMuted = NotificationEvaluator.evaluate(
+            accounts = listOf(low),
+            settings = muted,
+            states = emptyMap(),
+            nowMs = now,
+        )
+        assertTrue(whileMuted.events.isEmpty())
+
+        // Un-silenced, and handed the SAME snapshot again. The state carried forward says it
+        // has already been processed, so there is nothing new to announce.
+        val afterUnmuting = NotificationEvaluator.evaluate(
+            accounts = listOf(low),
+            settings = AppSettings(),
+            states = whileMuted.states.associateBy { it.accountId },
+            nowMs = now,
+        )
+
+        // Nothing at all, not "nothing matching a substring". The first version of this
+        // assertion looked for "low" in the key; the keys spell the tier "below-20", so it was
+        // vacuous and passed against the naive implementation that skips a muted account
+        // outright and freezes its state.
+        assertTrue(
+            "un-silencing must not replay the episode that ran while it was quiet, but got " +
+                afterUnmuting.events.map { it.key },
+            afterUnmuting.events.isEmpty(),
+        )
+    }
+
+    // endregion
 }

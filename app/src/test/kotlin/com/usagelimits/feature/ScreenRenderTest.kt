@@ -291,6 +291,8 @@ class ScreenRenderTest {
                 onRefresh = { refreshed = true },
                 onConsumeResetCredit = {},
                 onRemove = {},
+                notificationsEnabled = true,
+                onNotificationsChange = {},
             )
         }
 
@@ -310,6 +312,8 @@ class ScreenRenderTest {
                 onRefresh = {},
                 onConsumeResetCredit = {},
                 onRemove = {},
+                notificationsEnabled = true,
+                onNotificationsChange = {},
             )
         }
 

@@ -277,6 +277,11 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                             accountId?.let(viewModel::removeAccount)
                             navController.popBackStack()
                         },
+                        notificationsEnabled =
+                            accountId !in state.settings.mutedAccountIds,
+                        onNotificationsChange = { enabled ->
+                            accountId?.let { viewModel.setAccountNotifications(it, enabled) }
+                        },
                     )
                 }
             }
