@@ -34,6 +34,7 @@ import com.usagelimits.feature.overview.providerTint
 import com.usagelimits.ui.components.IconBadge
 import com.usagelimits.ui.components.SectionHeader
 import com.usagelimits.ui.components.StatusPill
+import com.usagelimits.ui.components.ToggleRow
 import com.usagelimits.ui.components.UsageCard
 import com.usagelimits.ui.components.UsageWindowRow
 import com.usagelimits.ui.theme.UsageColors
@@ -54,6 +55,8 @@ fun AccountDetailScreen(
     onRefresh: () -> Unit,
     onConsumeResetCredit: () -> Unit,
     onRemove: () -> Unit,
+    notificationsEnabled: Boolean,
+    onNotificationsChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (usage == null) {
@@ -184,6 +187,22 @@ fun AccountDetailScreen(
         }
 
         item { SectionHeader("Account") }
+        item {
+            UsageCard {
+                // Per account, because the global switches in Settings decide WHICH kinds of
+                // alert exist, not which accounts may raise them. Someone with a spare account
+                // they never run down does not want to turn off "below 20%" for the account
+                // they live in.
+                ToggleRow(
+                    title = "Notifications",
+                    subtitle = "Alerts about this account's limits, resets and credits. Its " +
+                        "numbers keep updating either way.",
+                    checked = notificationsEnabled,
+                    onChange = onNotificationsChange,
+                )
+            }
+        }
+
         item {
             UsageCard {
                 Button(

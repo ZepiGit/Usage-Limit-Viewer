@@ -3,6 +3,7 @@ package com.usagelimits.core.settings
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -45,6 +46,15 @@ data class AppSettings(
      * detail that makes a glanceable tile unglanceable.
      */
     val showRenewalTime: Boolean = false,
+    /**
+     * Accounts that should never notify, by local id.
+     *
+     * A set of ids rather than a column on the account, because it is a preference about an
+     * account and not a fact about it — and adding a column costs a migration. A stale id left
+     * behind by a deleted account is inert: ids are UUIDs, so re-adding the same provider
+     * account mints a new one and cannot inherit an old mute.
+     */
+    val mutedAccountIds: Set<String> = emptySet(),
 ) {
     companion object {
         /**
@@ -123,6 +133,13 @@ class SettingsStore(context: Context) {
 
     suspend fun setShowRenewalTime(show: Boolean) = edit { it[Keys.SHOW_RENEWAL] = show }
 
+    /** Silences one account, or lets it speak again. */
+    suspend fun setAccountNotifications(accountId: String, enabled: Boolean) = edit { prefs ->
+        val current = prefs[Keys.MUTED_ACCOUNTS] ?: emptySet()
+        prefs[Keys.MUTED_ACCOUNTS] =
+            if (enabled) current - accountId else current + accountId
+    }
+
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)
     }
@@ -146,6 +163,7 @@ class SettingsStore(context: Context) {
         accountsManuallyOrdered = this[Keys.ACCOUNTS_MANUAL_ORDER] ?: false,
         showSubscriptionTier = this[Keys.SHOW_TIER] ?: true,
         showRenewalTime = this[Keys.SHOW_RENEWAL] ?: false,
+        mutedAccountIds = this[Keys.MUTED_ACCOUNTS] ?: emptySet(),
     )
 
     private object Keys {
@@ -164,5 +182,6 @@ class SettingsStore(context: Context) {
         val ACCOUNTS_MANUAL_ORDER = booleanPreferencesKey("accounts_manually_ordered")
         val SHOW_TIER = booleanPreferencesKey("show_subscription_tier")
         val SHOW_RENEWAL = booleanPreferencesKey("show_renewal_time")
+        val MUTED_ACCOUNTS = stringSetPreferencesKey("muted_account_ids")
     }
 }

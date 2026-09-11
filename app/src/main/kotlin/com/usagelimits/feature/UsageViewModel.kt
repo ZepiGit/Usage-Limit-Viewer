@@ -310,6 +310,13 @@ class UsageViewModel(
         }
     }
 
+    /** Silences one account, or lets it speak again. */
+    fun setAccountNotifications(accountId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            container.settingsStore.setAccountNotifications(accountId, enabled)
+        }
+    }
+
     fun setShowSubscriptionTier(enabled: Boolean) {
         viewModelScope.launch { container.settingsStore.setShowSubscriptionTier(enabled) }
     }
