@@ -64,6 +64,8 @@ fun providerSymbol(provider: ProviderId): String = when (provider) {
     ProviderId.CLAUDE -> "✳"
     ProviderId.ANTIGRAVITY -> "✦"
     ProviderId.XAI -> "✕"
+    // Moonshot's product, and a moon is the one mark nobody mistakes for another provider's.
+    ProviderId.KIMI -> "☾"
 }
 
 fun providerTint(provider: ProviderId): Color = when (provider) {
@@ -71,6 +73,7 @@ fun providerTint(provider: ProviderId): Color = when (provider) {
     ProviderId.CLAUDE -> UsageColors.Terracotta
     ProviderId.ANTIGRAVITY -> UsageColors.Green
     ProviderId.XAI -> UsageColors.TextPrimary
+    ProviderId.KIMI -> UsageColors.Indigo
 }
 
 /**

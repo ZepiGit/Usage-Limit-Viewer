@@ -99,7 +99,7 @@ class AntigravityProvider(
 
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.Redirect) { "Antigravity uses the redirect flow" }
 

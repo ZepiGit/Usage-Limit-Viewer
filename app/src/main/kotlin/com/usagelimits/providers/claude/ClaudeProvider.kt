@@ -85,7 +85,7 @@ class ClaudeProvider(
 
     override suspend fun completeLogin(
         challenge: LoginChallenge,
-        redirectResponse: String?,
+        userInput: String?,
     ): OAuthCredentials {
         require(challenge is LoginChallenge.Redirect) { "Claude uses the redirect flow" }
 

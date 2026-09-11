@@ -247,6 +247,7 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         state = addState,
                         providers = addViewModel.availableProviders(),
                         onStart = { addViewModel.startLogin(context, it) },
+                        onSubmitApiKey = addViewModel::submitApiKey,
                         onCancel = {
                             addViewModel.cancel()
                             navController.popBackStack()

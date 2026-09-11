@@ -343,6 +343,7 @@ class ScreenRenderTest {
                 onStart = {},
                 onCancel = {},
                 onDone = {},
+                onSubmitApiKey = {},
             )
         }
 

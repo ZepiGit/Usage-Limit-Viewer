@@ -17,6 +17,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,6 +58,7 @@ fun AddAccountScreen(
     onStart: (ProviderId) -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onSubmitApiKey: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -177,6 +180,62 @@ fun AddAccountScreen(
                 TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
             }
 
+            is AddAccountState.AwaitingApiKey -> {
+                val uriHandler = LocalUriHandler.current
+                var key by remember(state.provider) { mutableStateOf("") }
+
+                UsageCard {
+                    Text(
+                        text = "Paste your ${state.provider.displayName} key",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = UsageColors.TextPrimary,
+                    )
+                    Text(
+                        text = state.hint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = UsageColors.TextSecondary,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = { key = it },
+                        singleLine = true,
+                        label = { Text("API key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = UsageColors.TextPrimary,
+                            unfocusedTextColor = UsageColors.TextPrimary,
+                            focusedBorderColor = UsageColors.Terracotta,
+                            unfocusedBorderColor = UsageColors.Outline,
+                            focusedLabelColor = UsageColors.Terracotta,
+                            unfocusedLabelColor = UsageColors.TextSecondary,
+                            cursorColor = UsageColors.Terracotta,
+                        ),
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { onSubmitApiKey(key) },
+                            enabled = key.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.Terracotta,
+                                contentColor = UsageColors.Background,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Connect") }
+                        Button(
+                            onClick = { uriHandler.openUri(state.consoleUrl) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.TerracottaSurface,
+                                contentColor = UsageColors.Terracotta,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Open console") }
+                    }
+                }
+                TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
+            }
+
             is AddAccountState.AwaitingBrowser -> {
                 LoadingCard(
                     "Complete the sign-in in your browser. You'll come straight back here.",
@@ -277,6 +336,9 @@ private fun loginHint(provider: ProviderId): String = when (provider) {
     ProviderId.XAI -> "Sign in with a device code"
     ProviderId.CLAUDE -> "Sign in in your browser"
     ProviderId.ANTIGRAVITY -> "Sign in with Google"
+    // The only one of the five that cannot be started from here. Said plainly, so the row does
+    // not promise a sign-in and then ask for something the user has to go and fetch.
+    ProviderId.KIMI -> "Paste a key from your Kimi console"
 }
 
 @Composable
