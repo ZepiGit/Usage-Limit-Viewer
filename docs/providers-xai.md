@@ -36,7 +36,9 @@ What is unverified beyond "it has never run":
   captured production shape carries spend as `includedUsed` (and `totalUsed`), which the
   parser now reads alongside `used`. When a limit is present with no spend figure under any
   of those names, the window is emitted with an UNKNOWN percentage — until 10 September both
-  platforms substituted zero and showed a 90 %-spent account as untouched.
+  platforms substituted zero and showed a 90 %-spent account as untouched. The credit view is
+  the mirror image: an absent `creditUsagePercent` inside the live period IS a zero, because
+  proto3 omits it — see "The implicit zero" under normalisation.
 - Whether `/v1/me` is reachable with the granted scopes. It is only used when no ID token is
   issued, so a failure there is invisible in the common case.
 
@@ -165,8 +167,9 @@ The monthly spend view, in which **every amount is an integer number of cents**:
 
 | Payload field | Maps to | Direction and units |
 |---|---|---|
-| `creditUsagePercent` / `credit_usage_percent` | `usedPercent` of the `xai-credits` window | **Percent CONSUMED**, 0–100, used unchanged. `34.0` renders as "66 % remaining". Absent → the credit window is not produced at all, rather than a bar drawn from an assumed zero. |
-| `currentPeriod.start` and `.end` | `periodSeconds` (derived) and `resetAt` | Both absolute instants. The span is **measured** as `end − start`, not assumed from the `"weekly"` label; `resetAt` is `end`. An absent, unusable or inverted pair leaves the period null → `OTHER`, still rendered but not claimed to be weekly. |
+| `creditUsagePercent` / `credit_usage_percent` | `usedPercent` of the `xai-credits` window | **Percent CONSUMED**, 0–100, used unchanged. `34.0` renders as "66 % remaining". Absent → **zero when the reported period contains now**, and no window otherwise — see "The implicit zero" below. |
+| `currentPeriod.start` and `.end`, or the flat `usagePeriodStart` / `usagePeriodEnd` | `periodSeconds` (derived) and `resetAt` | Both absolute instants. The span is **measured** as `end − start`, not assumed from the `"weekly"` label; `resetAt` is `end`. An absent, unusable or inverted pair leaves the period null → `OTHER`, still rendered but not claimed to be weekly. |
+| `currentPeriod.type`, or the flat `usagePeriodType` | category when no span can be measured | `USAGE_PERIOD_TYPE_WEEKLY` in production; matched by substring (`week`, `month`), never by the exact literal. |
 | `monthlyLimit` / `monthly_limit` | denominator of the `xai-monthly` window | **Integer cents.** |
 | `used` | numerator of `xai-monthly`, clamped to the limit | **Integer cents**, total spend for the period. |
 | `onDemandCap` / `on_demand_cap` | denominator of the `xai-on-demand` window | **Integer cents.** Zero or absent → no on-demand window at all. |
@@ -196,6 +199,21 @@ from.
 **Classification.** The credit window's category is derived from its measured period, so a
 change upstream reclassifies itself instead of mislabelling a fortnight as a week. The two
 billing windows are `MONTHLY` by construction.
+
+**The implicit zero.** xAI's billing message is proto3, and `credit_usage_percent` is an
+implicit-presence float there: a value of exactly zero is not written to the wire at all. So
+the one week in which nothing has been spent — the first week, the week after a reset —
+arrives with the field *missing*, and the earlier rule "absent means no window" made the
+weekly row vanish at precisely the moment it read 100 % remaining; the account showed only
+its monthly limit. The provider's own web client reads the omitted scalar as zero, and so does
+the parser now — but only when the payload proves it describes the period that contains now
+(`start ≤ now ≤ end`). A period in the past, or none at all, still yields no window rather than
+an invented bar. This is the one place `nowMs` is consulted in the xAI parser.
+
+**The weekly row is read from both views.** The unified-billing shape of `/v1/billing` carries
+`creditUsagePercent` and the flat `usagePeriod*` trio beside its monthly figures, so
+`parseBilling` yields the weekly window as well. `merge` keeps the credit view's copy when
+both answer, and the row survives if the credit view alone stops answering.
 
 **Included and on-demand are two bars, not one**, because they run out independently: an
 account can have burned its entire monthly allowance and still be able to spend on demand. The

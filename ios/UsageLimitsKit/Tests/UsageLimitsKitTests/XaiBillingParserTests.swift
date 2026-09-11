@@ -204,4 +204,105 @@ final class XaiBillingParserTests: XCTestCase {
         XCTAssertTrue(XaiBillingParser.parseBilling(payload("{}"), now: now).isEmpty)
         XCTAssertTrue(XaiBillingParser.merge([], []).isEmpty)
     }
+
+    // MARK: - The implicit zero (proto3 omits a zero-valued scalar)
+
+    private var liveNow: Date { ISO8601DateFormatter().date(from: "2026-09-05T12:00:00Z")! }
+
+    /// The credit view as the wire carries it when nothing has been spent: no percentage.
+    private let untouchedWeek = """
+    { "config": {
+        "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                           "start": "2026-09-02T00:00:00Z",
+                           "end":   "2026-09-09T00:00:00Z" },
+        "onDemandCap": { "val": 0 }, "onDemandUsed": { "val": 0 },
+        "isUnifiedBillingUser": true } }
+    """
+
+    func testAnAbsentPercentageInsideTheLivePeriodIsZeroNotAMissingRow() throws {
+        // `credit_usage_percent` has implicit presence: an exact zero is not written to the
+        // wire. The one week the user has spent nothing in used to be the week the row
+        // vanished — the account showed only its monthly limit.
+        let windows = XaiBillingParser.parseCredits(payload(untouchedWeek), now: liveNow)
+
+        XCTAssertEqual(windows.count, 1)
+        let window = try XCTUnwrap(windows.first)
+        XCTAssertEqual(window.id, "xai-credits")
+        XCTAssertEqual(window.usedPercent, 0)
+        XCTAssertEqual(window.category, .weekly)
+        XCTAssertEqual(window.resetAt, ISO8601DateFormatter().date(from: "2026-09-09T00:00:00Z"))
+        XCTAssertFalse(window.exhausted)
+    }
+
+    func testAnAbsentPercentageOutsideTheReportedPeriodStaysAMissingRow() {
+        // The zero is only readable for the period that contains now: a stale period would
+        // otherwise show "100 % remaining" for a week that has already ended.
+        let later = ISO8601DateFormatter().date(from: "2026-09-20T12:00:00Z")!
+        XCTAssertTrue(XaiBillingParser.parseCredits(payload(untouchedWeek), now: later).isEmpty)
+
+        // And with no period at all there is nothing to anchor the zero to.
+        let noPeriod = """
+        { "config": { "isUnifiedBillingUser": true, "onDemandCap": { "val": 0 } } }
+        """
+        XCTAssertTrue(XaiBillingParser.parseCredits(payload(noPeriod), now: liveNow).isEmpty)
+    }
+
+    func testTheFlatUsagePeriodFieldsIdentifyTheWeeklyWindow() throws {
+        let flat = """
+        { "creditUsagePercent": 12.0,
+          "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+          "usagePeriodStart": "2026-09-02T00:00:00Z",
+          "usagePeriodEnd":   "2026-09-09T00:00:00Z" }
+        """
+        let window = try XCTUnwrap(XaiBillingParser.parseCredits(payload(flat), now: liveNow).first)
+
+        XCTAssertEqual(window.usedPercent, 12)
+        XCTAssertEqual(window.category, .weekly)
+        XCTAssertEqual(window.periodSeconds, 604_800)
+        XCTAssertEqual(window.resetAt, ISO8601DateFormatter().date(from: "2026-09-09T00:00:00Z"))
+
+        // The flat spelling anchors the implicit zero just as the nested one does.
+        let flatUntouched = """
+        { "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+          "usagePeriodStart": "2026-09-02T00:00:00Z",
+          "usagePeriodEnd":   "2026-09-09T00:00:00Z" }
+        """
+        XCTAssertEqual(XaiBillingParser.parseCredits(payload(flatUntouched), now: liveNow).first?.usedPercent, 0)
+    }
+
+    func testTheUnifiedBillingViewYieldsTheWeeklyRowBesideTheMonthlyOne() throws {
+        // The plain billing view of a unified-billing account carries the weekly figures too.
+        // Reading them here keeps the weekly row when the credit view alone stops answering,
+        // and merge keeps exactly one copy when both do.
+        let unified = """
+        { "monthlyLimit": 10000, "used": 4200, "onDemandCap": 0,
+          "creditUsagePercent": 41.0,
+          "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+          "usagePeriodStart": "2026-09-02T00:00:00Z",
+          "usagePeriodEnd":   "2026-09-09T00:00:00Z",
+          "billingPeriodStart": "2026-09-01T00:00:00Z",
+          "billingPeriodEnd":   "2026-10-01T00:00:00Z" }
+        """
+        let fromBilling = XaiBillingParser.parseBilling(payload(unified), now: liveNow)
+        XCTAssertEqual(fromBilling.map(\.id), ["xai-credits", "xai-monthly"])
+        XCTAssertEqual(try percent(fromBilling, "xai-credits"), 41, accuracy: 0.001)
+        XCTAssertEqual(try percent(fromBilling, "xai-monthly"), 42, accuracy: 0.001)
+
+        let fromCredits = XaiBillingParser.parseCredits(payload("""
+        { "config": { "creditUsagePercent": 34.0,
+                      "currentPeriod": { "type": "weekly",
+                                         "start": "2026-09-02T00:00:00Z",
+                                         "end": "2026-09-09T00:00:00Z" } } }
+        """), now: liveNow)
+        let merged = XaiBillingParser.merge(fromCredits, fromBilling)
+        XCTAssertEqual(merged.filter { $0.id == "xai-credits" }.count, 1)
+        XCTAssertEqual(try percent(merged, "xai-credits"), 34, accuracy: 0.001, "the credit view's own figure wins")
+
+        // A legacy billing view has no weekly figures and keeps yielding only its own rows.
+        let legacy = XaiBillingParser.parseBilling(payload("""
+        { "monthlyLimit": 10000, "used": 4200, "onDemandCap": 5000, "onDemandUsed": 0,
+          "billingPeriodEnd": "2026-10-01T00:00:00Z" }
+        """), now: liveNow)
+        XCTAssertEqual(legacy.map(\.id), ["xai-monthly", "xai-on-demand"])
+    }
 }

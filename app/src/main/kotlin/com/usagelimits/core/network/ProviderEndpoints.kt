@@ -23,9 +23,26 @@ object ProviderEndpoints {
     object Codex {
         const val CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-        // Device authorization — the flow this app uses. No redirect URI has to be
-        // registered and no loopback server has to run, which is why it is preferred on
-        // Android. The provider generates the PKCE pair and returns it with the code.
+        /**
+         * Authorization code + PKCE with a loopback redirect — the flow the Codex CLI itself
+         * runs, and the default here. The client registration pins this exact redirect, so
+         * the app binds this port (see LoopbackServer) just as it does for Claude and
+         * Antigravity. The extra parameters are the ones the first-party client sends; the
+         * authorize page shapes what it shows by them.
+         */
+        const val AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
+        const val REDIRECT_PORT = 1455
+        const val REDIRECT_URI = "http://localhost:$REDIRECT_PORT/auth/callback"
+        const val AUTHORIZE_SCOPE = "openid profile email offline_access"
+        val AUTHORIZE_EXTRA_PARAMS = mapOf(
+            "id_token_add_organizations" to "true",
+            "codex_cli_simplified_flow" to "true",
+            "originator" to "codex_cli_rs",
+        )
+
+        // Device authorization — the fallback when the redirect port is taken. No redirect
+        // URI has to be registered and no loopback server has to run. The provider generates
+        // the PKCE pair and returns it with the code.
         const val DEVICE_USER_CODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
         const val DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
         const val DEVICE_VERIFICATION_URL = "https://auth.openai.com/codex/device"
@@ -205,14 +222,35 @@ object ProviderEndpoints {
     /**
      * Kimi Code.
      *
-     * No OAuth here, deliberately. Kimi Code's device flow is bound to `kimi-cli`'s client id
-     * and `api.kimi.com` gates on an `X-Msh-Platform` allowlist that answers anything else
-     * with `403 access_terminated` — so driving it would mean impersonating another client
-     * past an access control the provider put there on purpose. The user brings a key from
-     * their own console instead. See docs/providers-kimi.md.
+     * OAuth, under this app's OWN name. Kimi's RFC 8628 device flow uses one public client id
+     * for every program that drives it — the first-party CLI, CLIProxyAPI, pi and others all
+     * present the same one — and what `api.kimi.com/coding` gates on is the `X-Msh-Platform`
+     * header, which names the calling program. Moonshot allowlists third-party programs on
+     * request and forbids exactly one thing: presenting another program's identity. So this
+     * app says who it is, never `kimi_cli`, and asks to be allowlisted under that name. Until
+     * that is granted the coding API may answer `403 access_terminated`, and a key from the
+     * user's own console stays available as the other way in. See docs/providers-kimi.md.
+     *
+     * Source: CLIProxyAPI internal/auth/kimi/kimi.go.
      */
     object Kimi {
+        /** The public client id every Kimi Code device-flow client presents. */
+        const val CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+        const val DEVICE_CODE_URL = "https://auth.kimi.com/api/oauth/device_authorization"
+        const val TOKEN_URL = "https://auth.kimi.com/api/oauth/token"
+        const val DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
         const val USAGE_ENDPOINT = "https://api.kimi.com/coding/v1/usages"
         const val CONSOLE_URL = "https://www.kimi.com/code"
+
+        /** This app's own name, sent wherever Kimi asks which program is calling. */
+        const val PLATFORM = "UsageLimits"
+
+        /** Who is calling, truthfully. The version is the app's, so the two never disagree. */
+        fun identityHeaders(version: String): Map<String, String> = mapOf(
+            "User-Agent" to "$PLATFORM/$version (Android)",
+            "X-Msh-Platform" to PLATFORM,
+            "X-Msh-Version" to version,
+        )
     }
 }

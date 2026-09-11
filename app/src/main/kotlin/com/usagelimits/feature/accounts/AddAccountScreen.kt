@@ -60,6 +60,8 @@ fun AddAccountScreen(
     onDone: () -> Unit,
     onSubmitApiKey: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** The pasted-key way in, for a provider that offers one beside its flow. */
+    onStartWithKey: (ProviderId) -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -177,7 +179,16 @@ fun AddAccountScreen(
                         )
                     }
                 }
-                TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.keyAlternative) {
+                        // The flow is the default because it costs the user nothing. The key
+                        // is for when the flow's account cannot reach the API yet.
+                        TextButton(onClick = { onStartWithKey(state.provider) }) {
+                            Text("Use an API key instead", color = UsageColors.Terracotta)
+                        }
+                    }
+                    TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
+                }
             }
 
             is AddAccountState.AwaitingApiKey -> {
@@ -288,6 +299,11 @@ fun AddAccountScreen(
                                 contentColor = UsageColors.Background,
                             ),
                         ) { Text("Try again") }
+                        if (state.keyAlternative) {
+                            TextButton(onClick = { onStartWithKey(provider) }) {
+                                Text("Use an API key", color = UsageColors.Terracotta)
+                            }
+                        }
                     }
                     TextButton(onClick = onCancel) {
                         Text("Back", color = UsageColors.TextSecondary)
