@@ -619,4 +619,60 @@ final class NotificationEvaluatorTests: XCTestCase {
             outcome.states.contains { $0.accountId == "acct" },
             "the absent account's state must survive: \(outcome.states.map(\.accountId))")
     }
+    // MARK: - The message the evaluator has to recognise
+
+    /// The producer and the matcher have to agree, and nothing else was making them.
+    ///
+    /// The evaluator asked `errorMessage.lowercased().contains("expired")`. Nothing on this
+    /// platform ever said "expired" — a rejected credential produced "This account needs
+    /// signing in again." — so the predicate was false for every account that had one and
+    /// `notifyOnAuthExpired` never fired. The user whose sign-in had lapsed was simply not
+    /// told, while their numbers quietly stopped moving.
+    ///
+    /// The old tests fed hand-written strings the real producer never emits, so they passed
+    /// against a notification that could not fire. This one asks the producer.
+    func testTheMessageAFailedSignInProducesIsTheOneTheEvaluatorLooksFor() {
+        let produced = (ProviderError.unauthorised as any LocalizedError).errorDescription
+
+        XCTAssertNotNil(produced)
+        XCTAssertTrue(
+            NotificationEvaluator.meansSignInExpired(produced),
+            "the evaluator must recognise what the provider layer actually emits, not a "
+                + "sentence only a test ever writes: \(produced ?? "nil")")
+    }
+
+    /// End to end through the evaluator, with the real message rather than an invented one.
+    func testARejectedCredentialIsReportedUsingTheRealMessage() {
+        let produced = (ProviderError.unauthorised as any LocalizedError).errorDescription
+        let summary = account(remaining: nil, failed: true, errorMessage: produced)
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+
+        XCTAssertEqual(outcome.standingFindings, ["Account acct needs to be reconnected"])
+    }
+
+    /// A snapshot cached by an earlier build holds the old wording and outlives the upgrade, so
+    /// the account it belongs to must not go quiet until the next successful sync replaces it.
+    func testASnapshotFromAnEarlierBuildIsStillRecognised() {
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "This account needs signing in again.")
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+
+        XCTAssertEqual(outcome.standingFindings, ["Account acct needs to be reconnected"])
+    }
+
+    /// And an unrelated failure still says nothing about signing in.
+    func testAnOrdinaryFailureIsNotReportedAsAnExpiredSignIn() {
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "No usage could be read (timeout).")
+
+        XCTAssertTrue(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: settings, states: [:], now: now
+            ).standingFindings.isEmpty)
+    }
+
 }

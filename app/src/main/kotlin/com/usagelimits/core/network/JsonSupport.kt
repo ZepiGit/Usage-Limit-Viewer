@@ -65,7 +65,23 @@ object JsonSupport {
     fun long(source: JsonObject?, vararg names: String): Long? {
         val element = field(source, *names) ?: return null
         val primitive = runCatching { element.jsonPrimitive }.getOrNull() ?: return null
-        return primitive.longOrNull ?: primitive.content.trim().toDoubleOrNull()?.toLong()
+        primitive.longOrNull?.let { return it }
+
+        // The same rule `double` applies, for a sharper reason. `toLong()` SATURATES: "Infinity"
+        // becomes Long.MAX_VALUE rather than failing, and every caller here then multiplies by
+        // 1000 — which overflows to -1000, so the result lands one second in the PAST.
+        //
+        // Two places that reached: a reset offset became a reset that had already happened and
+        // took over the account's "next reset" everywhere, since that is a min; and an
+        // `expires_in` became an expiry already behind us, so `needsRefresh` was true for ever
+        // and every sync pass spent a rotating one-time refresh grant instead of one an hour.
+        //
+        // The range check is separate from the finiteness one: 1e30 is perfectly finite and
+        // still saturates.
+        val approx = primitive.content.trim().toDoubleOrNull() ?: return null
+        if (!approx.isFinite()) return null
+        if (approx < Long.MIN_VALUE.toDouble() || approx > Long.MAX_VALUE.toDouble()) return null
+        return approx.toLong()
     }
 
     fun boolean(source: JsonObject?, vararg names: String): Boolean? {

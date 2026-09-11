@@ -39,6 +39,12 @@ final class UsageStore: ObservableObject {
 
     /// Suppresses the save that would otherwise fire when the stored settings are read back in.
     private var isLoadingSettings = false
+
+    /// Dismisses whatever `lastError` is currently reporting.
+    ///
+    /// Needed because the alert that shows it has to be able to close: a binding derived from a
+    /// non-nil check needs somewhere to write `false` back to.
+    func clearError() { lastError = nil }
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
 

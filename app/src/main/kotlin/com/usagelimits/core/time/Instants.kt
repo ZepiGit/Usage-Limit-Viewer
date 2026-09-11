@@ -47,6 +47,15 @@ object Instants {
     /** Converts a "resets in N seconds" offset into an absolute instant. */
     fun fromOffsetSeconds(seconds: Long?, nowMs: Long): Long? {
         if (seconds == null || seconds < 0) return null
+        // Bounded before the multiply, not after. `seconds * 1000` overflows silently in Kotlin
+        // and lands in the past, which is the worst direction: a reset shown as already done,
+        // and — because the account's next reset is a min over every window — one bogus value
+        // dragging the whole account's clock backwards.
+        //
+        // The bound is the same figure that separates a seconds stamp from a millis one, about
+        // three centuries. Anything past it is not a duration a quota window has; refusing it
+        // says "no reset time" rather than inventing one.
+        if (seconds > SECONDS_UPPER_BOUND) return null
         return nowMs + seconds * 1000
     }
 }

@@ -122,6 +122,9 @@ extension View {
                       @ViewBuilder content: () -> any View) -> Self { self }
     public func alert(_ title: Any, isPresented: Binding<Bool>,
                       @ViewBuilder actions: () -> any View) -> Self { self }
+    public func alert(_ title: Any, isPresented: Binding<Bool>,
+                      @ViewBuilder actions: () -> any View,
+                      @ViewBuilder message: () -> any View) -> Self { self }
     public func confirmationDialog(_ title: Any, isPresented: Binding<Bool>,
                                    titleVisibility: Visibility? = nil,
                                    @ViewBuilder actions: () -> any View) -> Self { self }
