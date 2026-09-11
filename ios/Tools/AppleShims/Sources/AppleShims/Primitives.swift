@@ -307,6 +307,33 @@ public struct Circle: View {
     public var body: some View { ShimLeaf() }
 }
 
+/// How a stroked path is drawn. Only the parameters the app actually passes.
+public struct StrokeStyle {
+    public init(lineWidth: CGFloat = 1, lineCap: CGLineCap = .butt,
+                lineJoin: CGLineJoin = .miter, dash: [CGFloat] = []) {}
+}
+
+public enum CGLineCap { case butt, round, square }
+public enum CGLineJoin { case miter, round, bevel }
+
+/// A rotation. `.degrees` and `.radians`, as the SDK spells them.
+public struct Angle {
+    public static func degrees(_ value: Double) -> Angle { Angle() }
+    public static func radians(_ value: Double) -> Angle { Angle() }
+    public init() {}
+}
+
+/// A tap target INSIDE a widget, as opposed to `widgetURL` which claims the whole tile.
+///
+/// Supported on medium and large families only — the system ignores it on small, where
+/// `widgetURL` is the only route — which is a rule this shim cannot enforce and the call
+/// sites have to respect.
+public struct Link: View {
+    public init(destination: URL, @ViewBuilder label: () -> any View) {}
+    public init(_ title: String, destination: URL) {}
+    public var body: some View { ShimLeaf() }
+}
+
 public struct RoundedRectangle: View {
     public init(cornerRadius: CGFloat, style: RoundedCornerStyle? = nil) {}
     public var body: some View { ShimLeaf() }

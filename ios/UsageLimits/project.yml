@@ -73,6 +73,13 @@ targets:
         # registration throws at launch and background refresh silently never happens again.
         BGTaskSchedulerPermittedIdentifiers:
           - com.usagelimits.app.refresh
+        # The scheme the widget's links use. Without it the system cannot route
+        # usagelimits:// at all, so every tap on a tile did nothing — the widget had
+        # shipped its links against a scheme no bundle claimed.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.usagelimits.app
+            CFBundleURLSchemes:
+              - usagelimits
     # The app and the widget are separate processes; the shared container is the only thing
     # they have in common, and a missing entitlement makes the container URL nil at runtime —
     # which shows up as a permanently blank tile rather than as any kind of error.
