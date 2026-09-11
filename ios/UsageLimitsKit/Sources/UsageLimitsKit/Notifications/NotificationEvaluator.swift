@@ -39,6 +39,14 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
     public var resetApproachingMinutes = 30
     public var resetCreditExpiryLeadMinutes = 1440
 
+    /// Accounts that should never notify, by local id.
+    ///
+    /// A preference about an account rather than a fact about it, so it lives here with the
+    /// other notification choices instead of on the account record. A stale id left behind by a
+    /// deleted account is inert: ids are UUIDs, so re-adding the same provider account mints a
+    /// new one and cannot inherit an old mute.
+    public var mutedAccountIDs: Set<String> = []
+
     public init() {}
 
     /// Decoded field by field, each falling back to its default.
@@ -64,6 +72,8 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
             try container.decodeIfPresent(Int.self, forKey: .resetApproachingMinutes) ?? 30
         resetCreditExpiryLeadMinutes =
             try container.decodeIfPresent(Int.self, forKey: .resetCreditExpiryLeadMinutes) ?? 1440
+        mutedAccountIDs =
+            try container.decodeIfPresent(Set<String>.self, forKey: .mutedAccountIDs) ?? []
     }
 }
 
@@ -79,6 +89,32 @@ public struct NotificationSettings: Equatable, Sendable, Codable {
 /// still-true condition without notifying twice, and what lets an intentionally blank line
 /// consume a key so a threshold cannot re-fire later within the same episode.
 public enum NotificationEvaluator {
+
+    /// The exact sentence a rejected credential produces.
+    ///
+    /// Owned here, by the code that has to RECOGNISE it, and used by the producer — rather than
+    /// each end spelling its own and the evaluator guessing with a substring.
+    ///
+    /// It guessed with `contains("expired")`, and on iOS nothing ever said "expired": a revoked
+    /// grant produced "This account needs signing in again.", so the predicate was false for
+    /// every account that had one and `notifyOnAuthExpired` was DEAD — the user whose sign-in
+    /// had lapsed was simply never told, while their numbers quietly stopped moving. The tests
+    /// missed it because they fed hand-written strings the real producer never emits.
+    ///
+    /// Matching one constant instead means a reword cannot silently kill the notification: it
+    /// breaks `testTheMessageAFailedSignInProducesIsTheOneTheEvaluatorLooksFor` first.
+    public static let signInExpiredMessage = "Sign-in expired — reconnect this account"
+
+    /// Whether this failure is one the user has to fix by signing in again.
+    ///
+    /// The canonical sentence, or — for a snapshot written by an earlier build, which is cached
+    /// and outlives the upgrade — the old wording it may still hold.
+    public static func meansSignInExpired(_ message: String?) -> Bool {
+        guard let message else { return false }
+        if message == signInExpiredMessage { return true }
+        return message.lowercased().contains("expired")
+            || message == "This account needs signing in again."
+    }
 
     /// Remaining percentage strictly below which the warning tier applies.
     public static let warningPercent = 20.0
@@ -218,6 +254,11 @@ public enum NotificationEvaluator {
         for account in accounts {
             let id = account.accountId
             var state = carried[id] ?? AccountState(accountId: id)
+            // Computed once per account and consulted at each place that would SAY something.
+            // Deliberately not a `continue` at the top of the loop: a muted account still has
+            // its episodes and its last-processed instant advanced, so unmuting it resumes from
+            // where it is now rather than replaying every edge it passed while silent.
+            let muted = settings.mutedAccountIDs.contains(id)
 
             guard let snapshot = account.snapshot else {
                 // No data at all, so no conclusions: the account is neither better nor worse.
@@ -228,9 +269,9 @@ public enum NotificationEvaluator {
                 // The payload of a failed fetch cannot be trusted for positive findings,
                 // so only the failure itself is interpreted. Expired credentials are the
                 // one failure the user must personally fix, and that is a standing fact.
-                if settings.notifyOnAuthExpired,
-                    let message = snapshot.errorMessage,
-                    message.lowercased().contains("expired")
+                if !muted,
+                    settings.notifyOnAuthExpired,
+                    meansSignInExpired(snapshot.errorMessage)
                 {
                     // No separator, unlike every other line: this one reads as a sentence, and
                     // it is worded identically on Android. Two platforms phrasing the same
@@ -248,13 +289,15 @@ public enum NotificationEvaluator {
                 // away at fetch time with a thirty-minute lead was never announced when the
                 // next fetch came three hours later. The keys carry the instant, so this
                 // cannot say anything twice. Same rule as Android.
-                appendCreditsAvailableFinding(
-                    accountLabel: account.label,
-                    settings: settings,
-                    snapshot: snapshot,
-                    now: now,
-                    into: &findings
-                )
+                if !muted {
+                    appendCreditsAvailableFinding(
+                        accountLabel: account.label,
+                        settings: settings,
+                        snapshot: snapshot,
+                        now: now,
+                        into: &findings
+                    )
+                }
                 appendResetApproachingEvents(
                     accountId: id, accountLabel: account.label, windows: snapshot.windows,
                     settings: settings, now: now, into: &events)
@@ -271,7 +314,12 @@ public enum NotificationEvaluator {
                 guard let id = keys[window.id] else { continue }
                 var windowState = state.windows[id] ?? WindowState()
                 let remaining = window.remainingPercent
-                let exhausted = window.exhausted
+                // The window's own severity, which counts a known 0 % as exhausted whether or
+                // not the provider also set its flag. Reading the flag alone reached only the
+                // warning and critical tiers for a window at 0 %, so a user with just the
+                // exhausted alert switched on heard nothing when a limit ran out. Android reads
+                // the severity, and both must say the same thing about the same payload.
+                let exhausted = window.severity == .exhausted
 
                 // An unknown percentage does not hold a window low: unknown is an absence of
                 // evidence, and the account already reads as error on screen.
@@ -332,20 +380,38 @@ public enum NotificationEvaluator {
                 now: now,
                 into: &events
             )
-            appendCreditsAvailableFinding(
-                accountLabel: account.label,
-                settings: settings,
-                snapshot: snapshot,
-                now: now,
-                into: &findings
-            )
+            if !muted {
+                appendCreditsAvailableFinding(
+                    accountLabel: account.label,
+                    settings: settings,
+                    snapshot: snapshot,
+                    now: now,
+                    into: &findings
+                )
+            }
 
             state.lastProcessedFetchedAt = snapshot.fetchedAt
             carried[id] = state
         }
 
         let orderedStates = carried.values.sorted { $0.accountId < $1.accountId }
-        return Outcome(states: orderedStates, events: events, standingFindings: findings)
+        return Outcome(
+            states: orderedStates,
+            // Silenced here rather than at each `append`, as on Android: an emit site added
+            // later is covered by this without anyone remembering to guard it.
+            //
+            // Silenced by BLANKING the line, not by dropping the event. A mute is a disabled
+            // setting scoped to one account, and it follows the rule every disabled setting
+            // here follows: the key is still claimed, so switching back on delivers what
+            // happens NEXT rather than a threshold crossed while the user had asked not to
+            // hear about it. Dropping the events left those keys unclaimed; the first sync
+            // after unmuting then found them, with text, and announced a dip from days ago.
+            events: events.map { event in
+                settings.mutedAccountIDs.contains(event.accountId)
+                    ? Event(accountId: event.accountId, key: event.key, line: "")
+                    : event
+            },
+            standingFindings: findings)
     }
 
     // MARK: Quota tiers
@@ -430,16 +496,6 @@ public enum NotificationEvaluator {
         }
     }
 
-    /// Whether the account has climbed back out of its low-quota episode.
-    ///
-    /// An unknown percentage does not block recovery. Treating it as low did, in the Kotlin
-    /// original: one window whose figure the provider stopped reporting vetoed recovery for
-    /// good, so the episode never ended and the account never alerted again. Unknown is an
-    /// absence of evidence, and such an account already reads as an error on screen — adding
-    /// permanent silence on top of that helps nobody.
-    ///
-    /// `allSatisfy` over an empty list is true, which is the same judgement: an account
-    /// reporting no windows is not an account known to be low.
     /// Identities for every window in one snapshot, keyed by the window's own id.
     ///
     /// Category and label together, as on Android, because ids are provider-assigned and a
@@ -466,11 +522,6 @@ public enum NotificationEvaluator {
             keys[window.id] = counts[base] == 1 ? base : "\(base)#\(window.id)"
         }
         return keys
-    }
-
-    private static func hasRecovered(_ windows: [UsageWindow]) -> Bool {
-        guard !windows.contains(where: { $0.exhausted }) else { return false }
-        return windows.allSatisfy { ($0.remainingPercent ?? warningPercent) >= warningPercent }
     }
 
     // MARK: Resets and credits

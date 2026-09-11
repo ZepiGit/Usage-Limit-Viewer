@@ -585,4 +585,46 @@ extension GlanceModelTests {
             decoded.accounts[0].severity,
             "with no fetch instant there is nothing to age, so behaviour is unchanged")
     }
+    // MARK: - The next reset is one still ahead
+
+    /// A snapshot keeps a window's reset instant until the next fetch replaces it. Once one had
+    /// passed, the minimum was anchored in the past and the summary read "next reset now" for
+    /// hours while the real next rollover was never shown.
+    func testAPassedResetDoesNotMaskTheNextOne() {
+        let passed = now.addingTimeInterval(-100)
+        let ahead = now.addingTimeInterval(1_000)
+        let usage = AccountUsage(
+            account: account("a", .codex),
+            snapshot: UsageSnapshot(
+                accountID: "a", fetchedAt: now, status: .ok,
+                windows: [
+                    UsageWindow(id: "5h", label: "5h limit", category: .fiveHour, usedPercent: 50,
+                                periodSeconds: 18_000, resetAt: passed, exhausted: false),
+                    UsageWindow(id: "wk", label: "Weekly", category: .weekly, usedPercent: 50,
+                                periodSeconds: 604_800, resetAt: ahead, exhausted: false),
+                ]))
+
+        let snapshot = GlanceModel.build([usage], now: now, scope: .mostCritical)
+
+        XCTAssertEqual(snapshot.nextResetAt, ahead)
+    }
+
+    // MARK: - The most critical window
+
+    /// An explicitly exhausted window outranks everything, whatever its percentage says.
+    /// Ranked by percentage alone, one the provider flagged exhausted but gave no figure for
+    /// sorted LAST — unknown reads as "infinitely much left".
+    func testAnExhaustedWindowWithNoPercentageLeads() {
+        let snapshot = UsageSnapshot(
+            accountID: "a", fetchedAt: now, status: .ok,
+            windows: [
+                UsageWindow(id: "b", label: "Weekly", category: .weekly, usedPercent: 90,
+                            periodSeconds: 604_800, resetAt: nil, exhausted: false),
+                UsageWindow(id: "a", label: "5h limit", category: .fiveHour, usedPercent: nil,
+                            periodSeconds: 18_000, resetAt: nil, exhausted: true),
+            ])
+
+        XCTAssertEqual(snapshot.mostCritical?.id, "a")
+    }
+
 }

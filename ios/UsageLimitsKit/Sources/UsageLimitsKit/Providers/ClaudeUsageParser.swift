@@ -21,16 +21,11 @@ import Foundation
 /// same account reads differently on the two platforms.
 public enum ClaudeUsageParser {
 
-    /// ProviderEndpoints.Claude.usageWindowKeys — the flat keys, in the fixed read order.
-    private static let usageWindowKeys: [(key: String, label: String)] = [
-        ("five_hour", "5h limit"),
-        ("seven_day", "Weekly"),
-        ("seven_day_oauth_apps", "Weekly (OAuth apps)"),
-        ("seven_day_opus", "Weekly (Opus)"),
-        ("seven_day_sonnet", "Weekly (Sonnet)"),
-        ("seven_day_cowork", "Weekly (Cowork)"),
-        ("iguana_necktie", "Weekly (Fable)"),
-    ]
+    /// The flat keys, in the fixed read order — the endpoints table itself, not a copy of it.
+    /// Two tables that have to say the same thing eventually will not.
+    private static var usageWindowKeys: [(key: String, label: String)] {
+        ProviderEndpoints.Claude.usageWindowKeys
+    }
 
     private static let fiveHourKey = "five_hour"
     private static let fiveHourSeconds: Int64 = 18_000

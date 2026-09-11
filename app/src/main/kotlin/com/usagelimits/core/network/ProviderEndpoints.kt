@@ -201,4 +201,18 @@ object ProviderEndpoints {
             "x-grok-client-version" to CLIENT_VERSION,
         )
     }
+
+    /**
+     * Kimi Code.
+     *
+     * No OAuth here, deliberately. Kimi Code's device flow is bound to `kimi-cli`'s client id
+     * and `api.kimi.com` gates on an `X-Msh-Platform` allowlist that answers anything else
+     * with `403 access_terminated` — so driving it would mean impersonating another client
+     * past an access control the provider put there on purpose. The user brings a key from
+     * their own console instead. See docs/providers-kimi.md.
+     */
+    object Kimi {
+        const val USAGE_ENDPOINT = "https://api.kimi.com/coding/v1/usages"
+        const val CONSOLE_URL = "https://www.kimi.com/code"
+    }
 }

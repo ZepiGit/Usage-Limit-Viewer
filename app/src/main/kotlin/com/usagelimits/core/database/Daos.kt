@@ -37,6 +37,19 @@ interface AccountDao {
 
     @Query("UPDATE accounts SET lastSuccessfulSync = :timestamp WHERE localId = :localId")
     suspend fun markSynced(localId: String, timestamp: Long)
+
+    /** One step of a reorder. Callers write the whole list inside one transaction. */
+    @Query("UPDATE accounts SET sortOrder = :order WHERE localId = :localId")
+    suspend fun setSortOrder(localId: String, order: Int)
+
+    /**
+     * Where a newly connected account belongs: after everything already here.
+     *
+     * `sortOrder` used to be 0 for every row, so a manual order made the next account added
+     * jump to the top of it.
+     */
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM accounts")
+    suspend fun nextSortOrder(): Int
 }
 
 @Dao
@@ -100,6 +113,18 @@ interface NotificationDao {
 
     @Query("SELECT * FROM notification_state")
     suspend fun allStates(): List<NotificationStateEntity>
+
+    /**
+     * The accounts that exist RIGHT NOW, read inside the publisher's transaction.
+     *
+     * The publisher is handed a list read moments earlier. An account disconnected in between
+     * — the user tapping "Disconnect" while a background sync is mid-pass — is still in that
+     * list, and both tables below carry a foreign key to it: inserting its event or upserting
+     * its state raises SQLITE_CONSTRAINT_FOREIGNKEY and aborts the whole publication, the
+     * surviving accounts' alerts included.
+     */
+    @Query("SELECT localId FROM accounts")
+    suspend fun existingAccountIds(): List<String>
 
     @Upsert
     suspend fun upsertStates(states: List<NotificationStateEntity>)

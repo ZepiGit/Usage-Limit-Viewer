@@ -108,6 +108,11 @@ extension View {
     public func navigationTitle(_ value: Any) -> Self { self }
     public func listRowBackground(_ value: Any?) -> Self { self }
     public func listRowSeparator(_ value: Visibility) -> Self { self }
+    public func listRowInsets(_ value: EdgeInsets?) -> Self { self }
+    public func moveDisabled(_ value: Bool) -> Self { self }
+    public func deleteDisabled(_ value: Bool) -> Self { self }
+    public func environment<T>(_ keyPath: WritableKeyPath<EnvironmentValues, T>,
+                               _ value: T) -> Self { self }
     public func listStyle(_ value: ListStyleShim) -> Self { self }
     public func scrollContentBackground(_ value: Visibility) -> Self { self }
     public func toolbar(@ViewBuilder content: () -> any View) -> Self { self }
@@ -117,6 +122,9 @@ extension View {
                       @ViewBuilder content: () -> any View) -> Self { self }
     public func alert(_ title: Any, isPresented: Binding<Bool>,
                       @ViewBuilder actions: () -> any View) -> Self { self }
+    public func alert(_ title: Any, isPresented: Binding<Bool>,
+                      @ViewBuilder actions: () -> any View,
+                      @ViewBuilder message: () -> any View) -> Self { self }
     public func confirmationDialog(_ title: Any, isPresented: Binding<Bool>,
                                    titleVisibility: Visibility? = nil,
                                    @ViewBuilder actions: () -> any View) -> Self { self }
@@ -149,6 +157,11 @@ extension View {
     public func id<T: Hashable>(_ value: T) -> Self { self }
     public func tag<T: Hashable>(_ value: T) -> Self { self }
     public func labelsHidden() -> Self { self }
+    public func textFieldStyle(_ value: TextFieldStyleShim) -> Self { self }
+    public func autocorrectionDisabled(_ disabled: Bool = true) -> Self { self }
+    public func textInputAutocapitalization(
+        _ value: TextInputAutocapitalizationShim?
+    ) -> Self { self }
     public func pickerStyle(_ value: PickerStyleShim) -> Self { self }
     public func containerBackground<S: ShapeStyle>(_ style: S, for container: Any) -> Self { self }
     public func containerBackground(for container: ContainerBackgroundPlacement,
@@ -156,6 +169,9 @@ extension View {
     public func widgetURL(_ url: URL?) -> Self { self }
     public func fill(_ value: Any) -> Self { self }
     public func stroke(_ value: Any, lineWidth: Any? = nil) -> Self { self }
+    public func stroke<S: ShapeStyle>(_ content: S, style: StrokeStyle) -> Self { self }
+    public func trim(from: CGFloat, to: CGFloat) -> Self { self }
+    public func rotationEffect(_ angle: Angle, anchor: Any? = nil) -> Self { self }
     public func symbolRenderingMode(_ value: Any) -> Self { self }
     public func imageScale(_ value: Any) -> Self { self }
     public func bold() -> Self { self }

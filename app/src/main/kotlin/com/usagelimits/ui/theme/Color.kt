@@ -50,6 +50,13 @@ object UsageColors {
     val Slate = Color(0xFF6B6960)
 
     /**
+     * Kimi's accent. Distinct from the other four at a glance and, more importantly, from
+     * Amber and Red — a provider badge that reads as a severity colour is a false alarm every
+     * time the eye passes it.
+     */
+    val Indigo = Color(0xFF7C86D9)
+
+    /**
      * Text tones for the two accents that are not legible as words.
      *
      * [Red] and [Slate] are fine as a bar or a dot, but as a status label on their own tinted

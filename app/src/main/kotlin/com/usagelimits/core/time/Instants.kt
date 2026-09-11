@@ -31,11 +31,10 @@ object Instants {
         val normalized = raw.replace(Regex("(\\.\\d{3})\\d+"), "$1")
         runCatching { return OffsetDateTime.parse(normalized).toInstant().toEpochMilli() }
         runCatching { return Instant.parse(normalized).toEpochMilli() }
-        return try {
-            OffsetDateTime.parse("${normalized}Z").toInstant().toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            null
-        }
+        // `runCatching`, like the two attempts above it: a year that parses but does not fit in
+        // epoch milliseconds throws ArithmeticException out of toEpochMilli(), which a catch for
+        // the parse exception alone let escape from a function that promises null.
+        return runCatching { OffsetDateTime.parse("${normalized}Z").toInstant().toEpochMilli() }.getOrNull()
     }
 
     /** Disambiguates epoch seconds from epoch millis by magnitude. */
@@ -47,6 +46,15 @@ object Instants {
     /** Converts a "resets in N seconds" offset into an absolute instant. */
     fun fromOffsetSeconds(seconds: Long?, nowMs: Long): Long? {
         if (seconds == null || seconds < 0) return null
+        // Bounded before the multiply, not after. `seconds * 1000` overflows silently in Kotlin
+        // and lands in the past, which is the worst direction: a reset shown as already done,
+        // and — because the account's next reset is a min over every window — one bogus value
+        // dragging the whole account's clock backwards.
+        //
+        // The bound is the same figure that separates a seconds stamp from a millis one, about
+        // three centuries. Anything past it is not a duration a quota window has; refusing it
+        // says "no reset time" rather than inventing one.
+        if (seconds > SECONDS_UPPER_BOUND) return null
         return nowMs + seconds * 1000
     }
 }

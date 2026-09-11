@@ -4,6 +4,7 @@ import com.usagelimits.core.auth.CredentialStore
 import com.usagelimits.core.auth.OAuthCredentials
 import com.usagelimits.core.database.UsageRepository
 import com.usagelimits.core.model.ProviderAccount
+import com.usagelimits.core.notifications.NotificationEvaluator
 import com.usagelimits.core.model.SnapshotStatus
 import com.usagelimits.core.model.UsageSnapshot
 import com.usagelimits.core.network.ProviderException
@@ -262,7 +263,10 @@ class SyncEngine(
 
 /** Message safe to show a user: never contains a token, URL, or raw provider body. */
 fun ProviderException.userMessage(): String = when (this) {
-    is ProviderException.Unauthorized -> "Sign-in expired — reconnect this account"
+    // The evaluator's constant, not a second copy of the sentence. See
+    // `NotificationEvaluator.SIGN_IN_EXPIRED_MESSAGE` for the notification a divergence here
+    // silently disabled on the other platform.
+    is ProviderException.Unauthorized -> NotificationEvaluator.SIGN_IN_EXPIRED_MESSAGE
     is ProviderException.Forbidden -> "Access denied for this account"
     is ProviderException.RateLimited -> "Rate limited — try again shortly"
     is ProviderException.ServerError -> "Provider is having trouble ($statusCode)"

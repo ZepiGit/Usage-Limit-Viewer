@@ -43,6 +43,10 @@ private struct AccountSummaryCard: View {
 
     private var snapshot: UsageSnapshot? { usage.snapshot }
 
+    private var notificationsEnabled: Bool {
+        store.notificationsEnabled(accountID: usage.account.id)
+    }
+
     var body: some View {
         UsageCard {
             HStack {
@@ -50,13 +54,24 @@ private struct AccountSummaryCard: View {
                     Text(usage.account.label)
                         .font(.headline)
                         .foregroundStyle(UsageColors.textPrimary)
-                    if let subtitle = usage.account.plan ?? usage.account.maskedEmail {
+                    // Through the shared `planLabel`, so "claude_max_20x" reads as "Claude Max
+                    // 20×" here exactly as it does on Android, rather than as the raw value
+                    // one platform happened to print.
+                    if let subtitle = planLabel(usage.account.plan) ?? usage.account.maskedEmail {
                         Text(subtitle)
                             .font(.footnote)
                             .foregroundStyle(UsageColors.textSecondary)
                     }
                 }
                 Spacer()
+                // A muted account looks muted. Without this the only evidence of the choice is
+                // inside a menu nobody opens twice, and silence then reads as the app failing
+                // to notify rather than as the user having asked it not to.
+                if !notificationsEnabled {
+                    Image(systemName: "bell.slash.fill")
+                        .foregroundStyle(UsageColors.textTertiary)
+                        .accessibilityLabel("Notifications muted")
+                }
                 StatusPill(severity: snapshot?.severity(at: now, staleAfter: store.settings.staleAfter) ?? .stale)
                 // Disconnecting has been possible in the container, and tested there, since
                 // before anything on screen could ask for it — so a user could connect an
@@ -65,6 +80,13 @@ private struct AccountSummaryCard: View {
                 // one. A menu rather than a swipe: these cards are not a plain list, and an
                 // action this consequential should not be discoverable only by accident.
                 Menu {
+                    // Muting lives in this menu rather than as a switch on the card, because
+                    // it is a per-account preference and not a per-account fact: a row of
+                    // toggles down the list would compete with the numbers the screen is for.
+                    Button(notificationsEnabled ? "Mute notifications" : "Unmute notifications") {
+                        store.setNotifications(
+                            enabled: !notificationsEnabled, accountID: usage.account.id)
+                    }
                     Button("Disconnect account", role: .destructive) {
                         isConfirmingRemove = true
                     }

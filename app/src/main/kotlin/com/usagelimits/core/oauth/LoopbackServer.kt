@@ -101,7 +101,7 @@ class LoopbackServer(private val port: Int) : Closeable {
             connection.soTimeout = READ_TIMEOUT_MS
             val reader = BufferedReader(InputStreamReader(connection.getInputStream()))
             val requestLine = try {
-                readBoundedLine(reader)
+                readBoundedLine(reader, connection)
             } catch (e: SocketTimeoutException) {
                 // Said nothing in time. Not an answer, and not a reason to end the sign-in.
                 return@use null
@@ -142,9 +142,20 @@ class LoopbackServer(private val port: Int) : Closeable {
      * app on the device can reach. A redirect line is a few hundred bytes; this cap is far
      * above anything legitimate and far below anything dangerous.
      */
-    private fun readBoundedLine(reader: BufferedReader): String {
+    private fun readBoundedLine(reader: BufferedReader, connection: java.net.Socket): String {
+        // A TOTAL deadline for the line, not merely a per-read one. `soTimeout` bounds each
+        // individual read, so a peer that sends one byte every few seconds never trips it —
+        // and one that sends carriage returns adds nothing to the builder, so the byte cap
+        // never trips either. Such a connection held the accept loop for as long as it liked,
+        // past the sign-in's own deadline, and no genuine redirect could be served meanwhile.
+        // The remaining time is re-applied before every read so the existing handler for a
+        // silent peer covers a slow one too.
         val builder = StringBuilder()
+        val deadline = System.nanoTime() + READ_TIMEOUT_MS.toLong() * NANOS_PER_MS
         while (builder.length < MAX_REQUEST_LINE_BYTES) {
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) throw SocketTimeoutException("request line took too long")
+            connection.soTimeout = ((remainingNanos + NANOS_PER_MS - 1) / NANOS_PER_MS).toInt()
             val ch = reader.read()
             if (ch == -1 || ch == '\n'.code) break
             if (ch != '\r'.code) builder.append(ch.toChar())

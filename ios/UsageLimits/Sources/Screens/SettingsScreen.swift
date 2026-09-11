@@ -37,6 +37,19 @@ struct SettingsScreen: View {
                     Toggle("Sign-in expired", isOn: $store.settings.notifications.notifyOnAuthExpired)
                 }
 
+                Section("Display") {
+                    Toggle(
+                        "Show subscription tier",
+                        isOn: $store.settings.showSubscriptionTier)
+                    Toggle("Show renewal time", isOn: $store.settings.showRenewalTime)
+                    Text(
+                        "The renewal line names when the longest allowance comes back. It is "
+                        + "shown on the overview only — a widget has room for the number you "
+                        + "are about to run out of, not a second date competing with it.")
+                        .font(.footnote)
+                        .foregroundStyle(UsageColors.textSecondary)
+                }
+
                 Section("Privacy") {
                     Text(
                         "Tokens are stored in the keychain and excluded from backups and device "

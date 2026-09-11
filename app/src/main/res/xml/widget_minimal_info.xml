@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The ring widget. Small on purpose: it exists to put many accounts on a little space, so it
+  starts at 2x2 and grows in both directions rather than assuming a full-width row.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="60dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_minimal_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:configure="com.usagelimits.widget.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />

@@ -227,6 +227,17 @@ already invalidated, which presents to the user as an inexplicable "sign-in expi
 invites them to re-authenticate more often than necessary. Key generation is guarded by its
 own mutex for the same reason: two first-use encryptions must not race to create the key.
 
+**A one-time grant is presented exactly once.** A rotating refresh token and an authorization
+code are both consumed by *arriving* at the token endpoint, not by the reply getting back. If
+the reply is lost — a dropped connection, a 502 from something in front of the endpoint —
+whether the grant was spent is not observable from the client, so the only safe move is not to
+send it again: an ambiguous failure ends that exchange rather than retrying it, on both
+platforms (`oneTimeGrant = true` on Android, `retries: 0` in the kit's `TokenExchange`). A
+retry here does not recover the lost response; it turns an ambiguous failure into a definite
+"invalid grant" from a provider that treats reuse as theft, and on some of them revokes the
+whole token family. The code exchange shipped without this rule for a while, on both
+platforms, while the refresh path had it; a review caught the asymmetry.
+
 **Ordering on login and logout is deliberate, and the two orderings are opposite for the same
 reason** — a stored credential must never outlive the account row that names it.
 

@@ -96,6 +96,41 @@ public actor NotificationLedger {
         return newlyClaimed
     }
 
+    /// One evaluation: state advanced, keys claimed, and both written — or none of it.
+    ///
+    /// `save(states:)` followed by `claim(_:at:)` was two writes with the cache updated before
+    /// each. When the first write failed, the cached state had already advanced
+    /// `lastProcessedFetchedAt`, so the retry read the same snapshot as a replay and skipped
+    /// its quota edges: the transition was consumed and its notification never returned, with
+    /// no crash and nothing posted. Here the cache changes only after the file is safely on
+    /// disk, so a failed commit leaves the transition retryable. And because the whole step
+    /// runs on this actor without suspending, no other evaluation can interleave between the
+    /// state read and the write.
+    ///
+    /// Only the claimed events with something to say come back, which is all a caller posts.
+    public func evaluateAndClaim(
+        accounts: [AccountSummary],
+        settings: NotificationSettings,
+        at time: Date
+    ) throws -> [NotificationEvaluator.Event] {
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: accounts, settings: settings, states: states(), now: time)
+
+        var candidate = stored
+        candidate.states = outcome.states
+        var claimed: [NotificationEvaluator.Event] = []
+        for event in outcome.events where candidate.delivered[event.key] == nil {
+            candidate.delivered[event.key] = Delivery(accountId: event.accountId, at: time)
+            claimed.append(event)
+        }
+        let cutoff = time.addingTimeInterval(-Self.retention)
+        candidate.delivered = candidate.delivered.filter { $0.value.at >= cutoff }
+
+        try write(candidate)
+        stored = candidate
+        return claimed.filter { !$0.line.isEmpty }
+    }
+
     public func hasDelivered(_ key: String) -> Bool {
         stored.delivered[key] != nil
     }
@@ -118,11 +153,14 @@ public actor NotificationLedger {
         stored.delivered = stored.delivered.filter { $0.value.at >= cutoff }
     }
 
-    private func persist() throws {
+    private func persist() throws { try write(stored) }
+
+    /// Encodes and atomically replaces the file with `value`, touching no cache.
+    private func write(_ value: Stored) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        try encoder.encode(stored).write(to: fileURL, options: ContainerFile.writingOptions)
+        try encoder.encode(value).write(to: fileURL, options: ContainerFile.writingOptions)
     }
 
     private static func load(from url: URL) -> Stored {

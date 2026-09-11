@@ -1,5 +1,7 @@
 package com.usagelimits.providers.claude
 
+import com.usagelimits.core.model.planLabel
+
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.model.WindowCategory
 import com.usagelimits.core.network.JsonSupport
@@ -148,23 +150,11 @@ object ClaudeUsageParser {
      * table would render a new one as no plan at all. An unrecognised tier still yields
      * something readable, which beats a blank subtitle.
      */
-    private fun planFromTier(tier: String?): String? {
-        val raw = tier?.trim()?.lowercase()?.removePrefix("default_")?.removePrefix("claude_")
-        if (raw.isNullOrBlank()) return null
-
-        val multiplier = Regex("_(\\d+)x$").find(raw)?.groupValues?.get(1)
-        val base = raw.removeSuffix("_${multiplier}x").replace('_', ' ').trim()
-        if (base.isEmpty()) return null
-
-        // Blank parts are dropped, so "team__plus" reads "Team Plus" rather than "Team  Plus",
-        // and `Char.uppercase()` is the full Unicode mapping rather than the single-character
-        // one — 'ß' has no single-char uppercase, so `replaceFirstChar` left it alone where the
-        // Swift twin produced "SS". Both are how the Swift side already behaves.
-        val name = base.split(' ')
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { part -> part.first().uppercase() + part.drop(1) }
-        return if (multiplier == null) name else "$name $multiplier×"
-    }
+    private fun planFromTier(tier: String?): String? = planLabel(
+        // The vendor prefixes are Anthropic's alone, so they are stripped here rather than in
+        // the shared formatter.
+        tier?.trim()?.lowercase()?.removePrefix("default_")?.removePrefix("claude_"),
+    )
 
     /**
      * Maps the `limits` array one entry to one window.

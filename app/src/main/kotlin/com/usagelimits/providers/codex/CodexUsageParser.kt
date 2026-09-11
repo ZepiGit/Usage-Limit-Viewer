@@ -1,5 +1,7 @@
 package com.usagelimits.providers.codex
 
+import com.usagelimits.core.model.planLabel
+
 import com.usagelimits.core.model.ResetCredit
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.model.WindowCategory
@@ -139,7 +141,7 @@ object CodexUsageParser {
 
     /** Reads the subscription plan, which the usage endpoint reports alongside the windows. */
     fun parsePlan(payload: JsonObject): String? =
-        JsonSupport.string(payload, "plan_type", "planType")
+        planLabel(JsonSupport.string(payload, "plan_type", "planType"))
 
     private fun windowsFor(
         limitInfo: JsonObject?,

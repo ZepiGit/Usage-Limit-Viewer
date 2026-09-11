@@ -17,13 +17,23 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,6 +58,7 @@ fun AddAccountScreen(
     onStart: (ProviderId) -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onSubmitApiKey: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -81,6 +92,19 @@ fun AddAccountScreen(
             is AddAccountState.Starting -> LoadingCard("Contacting ${state.provider.displayName}…")
 
             is AddAccountState.AwaitingDeviceCode -> {
+                // Reading the code off the screen and typing it into a browser on the same phone
+                // means holding eight characters in your head while switching apps. The code goes
+                // to the clipboard the moment it exists, so the sign-in page needs a paste and
+                // nothing else.
+                val clipboard = LocalClipboardManager.current
+                val uriHandler = LocalUriHandler.current
+                var copied by remember(state.userCode) { mutableStateOf(false) }
+                val copy = {
+                    clipboard.setText(AnnotatedString(state.userCode))
+                    copied = true
+                }
+                LaunchedEffect(state.userCode) { copy() }
+
                 UsageCard {
                     Text(
                         text = "Enter this code",
@@ -88,8 +112,8 @@ fun AddAccountScreen(
                         color = UsageColors.TextPrimary,
                     )
                     Text(
-                        text = "Your browser is opening ${state.verificationUri}. Sign in there " +
-                            "and enter the code below — this app never sees your password.",
+                        text = "Your browser is opening ${state.verificationUri}. Paste the code " +
+                            "there — this app never sees your password.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = UsageColors.TextSecondary,
                     )
@@ -102,8 +126,42 @@ fun AddAccountScreen(
                         letterSpacing = 6.sp,
                         color = UsageColors.Terracotta,
                         textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            // The code itself is the biggest target on the card, so it is also
+                            // the copy button.
+                            .clickable(onClick = copy),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (copied) "Copied to your clipboard" else "Tap the code to copy",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = UsageColors.TextTertiary,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = copy,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.Terracotta,
+                                contentColor = UsageColors.Background,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Copy code") }
+                        // The browser was opened once already. This is for the times it was not —
+                        // no default browser, the tab dismissed, the wrong profile — where the
+                        // flow is otherwise dead with a code and nowhere to put it.
+                        Button(
+                            onClick = { uriHandler.openUri(state.verificationUri) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.TerracottaSurface,
+                                contentColor = UsageColors.Terracotta,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Open page") }
+                    }
                     Spacer(Modifier.height(14.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(
@@ -117,6 +175,62 @@ fun AddAccountScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = UsageColors.TextSecondary,
                         )
+                    }
+                }
+                TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
+            }
+
+            is AddAccountState.AwaitingApiKey -> {
+                val uriHandler = LocalUriHandler.current
+                var key by remember(state.provider) { mutableStateOf("") }
+
+                UsageCard {
+                    Text(
+                        text = "Paste your ${state.provider.displayName} key",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = UsageColors.TextPrimary,
+                    )
+                    Text(
+                        text = state.hint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = UsageColors.TextSecondary,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = { key = it },
+                        singleLine = true,
+                        label = { Text("API key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = UsageColors.TextPrimary,
+                            unfocusedTextColor = UsageColors.TextPrimary,
+                            focusedBorderColor = UsageColors.Terracotta,
+                            unfocusedBorderColor = UsageColors.Outline,
+                            focusedLabelColor = UsageColors.Terracotta,
+                            unfocusedLabelColor = UsageColors.TextSecondary,
+                            cursorColor = UsageColors.Terracotta,
+                        ),
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { onSubmitApiKey(key) },
+                            enabled = key.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.Terracotta,
+                                contentColor = UsageColors.Background,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Connect") }
+                        Button(
+                            onClick = { uriHandler.openUri(state.consoleUrl) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = UsageColors.TerracottaSurface,
+                                contentColor = UsageColors.Terracotta,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Open console") }
                     }
                 }
                 TextButton(onClick = onCancel) { Text("Cancel", color = UsageColors.TextSecondary) }
@@ -222,6 +336,9 @@ private fun loginHint(provider: ProviderId): String = when (provider) {
     ProviderId.XAI -> "Sign in with a device code"
     ProviderId.CLAUDE -> "Sign in in your browser"
     ProviderId.ANTIGRAVITY -> "Sign in with Google"
+    // The only one of the five that cannot be started from here. Said plainly, so the row does
+    // not promise a sign-in and then ask for something the user has to go and fetch.
+    ProviderId.KIMI -> "Paste a key from your Kimi console"
 }
 
 @Composable

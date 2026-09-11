@@ -30,6 +30,33 @@ import kotlin.math.ceil
  */
 object NotificationEvaluator {
 
+    /**
+     * The exact sentence a rejected credential produces.
+     *
+     * Owned here, by the code that has to RECOGNISE it, and used by [ProviderException.userMessage]
+     * — rather than each end spelling its own and this one guessing with a substring.
+     *
+     * The guess worked on Android and was dead on iOS, where the same layer emitted "This
+     * account needs signing in again." and the predicate was therefore false for every account
+     * whose sign-in had lapsed. Nothing failed; the notification simply never fired. This side
+     * was one reword away from the same silence, which is why it stops guessing too.
+     */
+    const val SIGN_IN_EXPIRED_MESSAGE = "Sign-in expired — reconnect this account"
+
+    /**
+     * Whether this failure is one the user has to fix by signing in again.
+     *
+     * The canonical sentence, or — for a snapshot cached by an earlier build, which outlives
+     * the upgrade — the older wording it may still hold.
+     */
+    fun meansSignInExpired(message: String?): Boolean {
+        if (message == null) return false
+        return message == SIGN_IN_EXPIRED_MESSAGE ||
+            message.contains("expired", ignoreCase = true) ||
+            message == "This account needs signing in again."
+    }
+
+
     /** Below this much remaining, the account gets a warning. Strictly less than. */
     const val WARNING_PERCENT = 20.0
 
@@ -109,6 +136,10 @@ object NotificationEvaluator {
 
         for (usage in accounts) {
             val id = usage.account.localId
+            // Silenced by the user. State still advances below — suppressing the events but
+            // freezing the state would make un-silencing an account replay whatever episode it
+            // was in when it went quiet, which is a notification about the past.
+            val muted = id in settings.mutedAccountIds
             // Read from the state being BUILT, not from the input map.
             //
             // Nothing enforces that one evaluation sees an account only once, and reading the
@@ -126,7 +157,7 @@ object NotificationEvaluator {
             // network blip end a low-quota episode and re-arm the warning for the next sync.
             if (snapshot == null || snapshot.status == SnapshotStatus.FAILED) {
                 newStates[id] = previous
-                standing += authFinding(usage, snapshot, settings)
+                if (!muted) standing += authFinding(usage, snapshot, settings)
                 continue
             }
 
@@ -136,7 +167,7 @@ object NotificationEvaluator {
                 snapshot.fetchedAt <= previous.lastProcessedFetchedAt
             ) {
                 newStates[id] = previous
-                standing += standingFindings(usage, snapshot, settings, nowMs)
+                if (!muted) standing += standingFindings(usage, snapshot, settings, nowMs)
                 // Quota edges are a property of the snapshot and fire once; DEADLINES are a
                 // property of the clock. A reset two hours away at fetch time, with a
                 // thirty-minute lead and a three-hour sync interval, was never announced: the
@@ -152,10 +183,24 @@ object NotificationEvaluator {
             val (state, accountEvents) = evaluateAccount(usage, snapshot, settings, previous, nowMs)
             newStates[id] = state
             events += accountEvents
-            standing += standingFindings(usage, snapshot, settings, nowMs)
+            if (!muted) standing += standingFindings(usage, snapshot, settings, nowMs)
         }
 
-        return Outcome(newStates.values.toList(), events, standing)
+        // Silenced here rather than at each `events +=` above. Every event carries the account
+        // it belongs to, so one pass covers the emit sites that exist and the ones a later
+        // change adds — a guard per site only covers the ones someone remembered.
+        //
+        // Silenced by BLANKING the line, not by dropping the event. A mute is a disabled
+        // setting scoped to one account, and it follows the rule every disabled setting here
+        // follows: the key is still claimed, so that switching back on delivers what happens
+        // NEXT rather than a threshold crossed while the user had asked not to hear about it.
+        // Dropping the events left those keys unclaimed; the first sync after unmuting then
+        // found them, with text, and announced a dip from hours or days ago.
+        return Outcome(
+            newStates.values.toList(),
+            events.map { if (it.accountId in settings.mutedAccountIds) it.copy(line = "") else it },
+            standing,
+        )
     }
 
     private fun evaluateAccount(
@@ -429,7 +474,7 @@ object NotificationEvaluator {
         settings: AppSettings,
     ): List<String> {
         if (!settings.notifyOnAuthExpired) return emptyList()
-        val expired = snapshot?.errorMessage?.contains("expired", ignoreCase = true) == true
+        val expired = meansSignInExpired(snapshot?.errorMessage)
         return if (expired) listOf("${usage.account.label} needs to be reconnected") else emptyList()
     }
 

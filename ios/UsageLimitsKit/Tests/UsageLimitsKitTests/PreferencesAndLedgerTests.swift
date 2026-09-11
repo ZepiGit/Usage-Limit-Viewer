@@ -38,6 +38,44 @@ final class PreferencesAndLedgerTests: XCTestCase {
         XCTAssertFalse(reopened.notifications.notifyOnExhausted)
     }
 
+    /// The store used to normalise by rebuilding the value from the two fields it named, so
+    /// every preference added afterwards was silently discarded on the way to disk — switching
+    /// the tier off wrote it straight back on. This fails against that implementation.
+    func testEveryDisplayPreferenceSurvivesASave() async throws {
+        let store = SettingsStore(directory: directory)
+        var settings = AppSettings()
+        settings.showSubscriptionTier = false
+        settings.showRenewalTime = true
+        settings.accountsManuallyOrdered = true
+        settings.notifications.mutedAccountIDs = ["acct-1", "acct-2"]
+
+        let returned = try await store.save(settings)
+
+        // What `save` reports and what the next launch reads have to agree: the settings screen
+        // renders the former and the user judges it by the latter.
+        XCTAssertEqual(returned, settings)
+        let reopened = await SettingsStore(directory: directory).settings()
+        XCTAssertFalse(reopened.showSubscriptionTier)
+        XCTAssertTrue(reopened.showRenewalTime)
+        XCTAssertTrue(reopened.accountsManuallyOrdered)
+        XCTAssertEqual(reopened.notifications.mutedAccountIDs, ["acct-1", "acct-2"])
+    }
+
+    /// A file from before these preferences existed must keep every value it does state, and
+    /// take the defaults only for what it does not.
+    func testAFileWithoutTheDisplayPreferencesTakesTheirDefaults() async throws {
+        let json = #"{"syncIntervalMinutes": 60}"#
+        try Data(json.utf8).write(to: directory.appendingPathComponent("settings.json"))
+
+        let settings = await SettingsStore(directory: directory).settings()
+
+        XCTAssertEqual(settings.syncIntervalMinutes, 60)
+        XCTAssertTrue(settings.showSubscriptionTier)
+        XCTAssertFalse(settings.showRenewalTime)
+        XCTAssertFalse(settings.accountsManuallyOrdered)
+        XCTAssertTrue(settings.notifications.mutedAccountIDs.isEmpty)
+    }
+
     func testDefaultsRatherThanAFailureWhenNothingIsStored() async {
         let settings = await SettingsStore(directory: directory).settings()
 
@@ -272,4 +310,57 @@ final class PreferencesAndLedgerTests: XCTestCase {
         XCTAssertEqual(stored.heldResetCredits, 2)
         XCTAssertEqual(stored.spendableResetCredits, 0)
     }
+    // MARK: - Arithmetic on a decoded interval
+
+    /// `2 * minutes * 60` is Int arithmetic and trapped past Int.max / 120. The interval comes
+    /// off a settings file with a floor and no ceiling, so a hand-edited or corrupt file could
+    /// crash every launch. Against the Int version this test aborts the process.
+    func testAHugeSyncIntervalDoesNotOverflowTheStaleThreshold() {
+        XCTAssertEqual(
+            Severity.staleAfter(syncIntervalMinutes: Int.max),
+            TimeInterval(Int.max) * 120)
+    }
+
+    // MARK: - One ledger step
+
+    /// A failed commit must leave the transition retryable.
+    ///
+    /// Split across save-then-claim, a failed first write left the ledger's cache advanced
+    /// (lastProcessedFetchedAt moved) and its file not; the retry then read the same snapshot
+    /// as a replay and skipped its quota edges. The warning was consumed and never returned,
+    /// with no crash and nothing posted.
+    func testAFailedLedgerWriteDoesNotConsumeTheTransition() async throws {
+        // A directory that does not exist yet: the first write fails, and creating it afterwards
+        // is "write access restored".
+        let missing = directory.appendingPathComponent("not-yet")
+        let ledger = NotificationLedger(directory: missing)
+        let now = Date(timeIntervalSince1970: 1_757_000_000)
+        let low = AccountSummary(
+            accountId: "acct", label: "Account acct",
+            snapshot: UsageSnapshot(
+                accountID: "acct", fetchedAt: now, status: .ok,
+                windows: [UsageWindow(
+                    id: "w", label: "5h limit", category: .fiveHour, usedPercent: 85,
+                    periodSeconds: 18_000, resetAt: nil, exhausted: false)]))
+
+        do {
+            _ = try await ledger.evaluateAndClaim(accounts: [low], settings: NotificationSettings(), at: now)
+            XCTFail("the first write must fail: the directory does not exist")
+        } catch {
+            // Expected.
+        }
+
+        try FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        let retried = try await ledger.evaluateAndClaim(
+            accounts: [low], settings: NotificationSettings(), at: now)
+
+        XCTAssertEqual(
+            retried.map(\.line), ["Account acct · 5h limit: less than 20% remaining"],
+            "the transition must still be announced once the write succeeds")
+        // And once more, to prove the claim then holds.
+        let again = try await ledger.evaluateAndClaim(
+            accounts: [low], settings: NotificationSettings(), at: now.addingTimeInterval(1))
+        XCTAssertTrue(again.isEmpty)
+    }
+
 }

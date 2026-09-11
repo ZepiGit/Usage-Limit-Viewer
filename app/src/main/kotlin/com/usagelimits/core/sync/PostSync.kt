@@ -28,6 +28,6 @@ suspend fun AppContainer.publishAfterSync(context: Context) {
     // Widgets read the cache, so they only need waking once the cache has moved.
     WidgetUpdater.refreshAll(context)
 
-    NotificationPublisher(context, settingsStore, notificationDao)
+    NotificationPublisher(context, settingsStore, notificationDao, transactions = transactions)
         .publishFor(repository.accountUsageOnce())
 }
