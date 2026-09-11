@@ -1,9 +1,9 @@
 import Foundation
 
-/// The authorisation-code half of sign-in, for the two providers that redirect to loopback.
+/// The authorisation-code half of sign-in, for the providers that redirect to loopback.
 ///
-/// Claude and Antigravity issue their code to `http://localhost:PORT/...` because their official
-/// clients are desktop CLIs. That is not an obstacle to a phone once you notice what RFC 8252
+/// Codex, Claude and Antigravity issue their code to `http://localhost:PORT/...` because their
+/// official clients are desktop CLIs. That is not an obstacle to a phone once you notice what RFC 8252
 /// §7.3 actually says: loopback IS the redirect for a native app that cannot register a scheme,
 /// and an iOS app can bind 127.0.0.1. It works because `ASWebAuthenticationSession` presents in
 /// process — the app stays foregrounded and the socket stays alive while the user signs in.
@@ -188,7 +188,28 @@ public struct LoopbackLogin: Sendable {
                 endpoint: "google token",
                 now: now())
 
-        case .codex, .xai, .kimi:
+        case .codex:
+            return try await TokenExchange.post(
+                httpClient,
+                url: ProviderEndpoints.Codex.tokenURL,
+                headers: [
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": ProviderEndpoints.Codex.userAgent,
+                ],
+                body: TokenExchange.formBody([
+                    "grant_type": "authorization_code",
+                    "client_id": ProviderEndpoints.Codex.clientID,
+                    "code": code,
+                    // The loopback redirect the code was issued against — not the device
+                    // callback the fallback flow exchanges on.
+                    "redirect_uri": challenge.redirectURI,
+                    "code_verifier": challenge.verifier,
+                ]),
+                endpoint: "codex token",
+                now: now())
+
+        case .xai, .kimi:
             throw DeviceLoginError.unsupportedOnThisPlatform(
                 "This provider signs in with a device code, not a redirect.")
         }
@@ -256,7 +277,11 @@ public struct LoopbackLogin: Sendable {
                 plan: tier,
                 attributes: ["project_id": projectID])
 
-        case .codex, .xai, .kimi:
+        case .codex:
+            // The ID token names the account; the same reading the device flow uses.
+            return try await CodexDeviceLogin(httpClient: httpClient, now: now).profile(credentials)
+
+        case .xai, .kimi:
             throw DeviceLoginError.unsupportedOnThisPlatform(
                 "This provider signs in with a device code, not a redirect.")
         }
@@ -332,33 +357,37 @@ public struct LoopbackLogin: Sendable {
 
     static func redirect(for provider: ProviderID) -> Redirect? {
         switch provider {
+        case .codex: return Redirect(ProviderEndpoints.Codex.redirectURI)
         case .claude: return Redirect(ProviderEndpoints.Claude.redirectURI)
         case .antigravity: return Redirect(ProviderEndpoints.Antigravity.redirectURI)
-        case .codex, .xai, .kimi: return nil
+        case .xai, .kimi: return nil
         }
     }
 
     private static func authorizeEndpoint(for provider: ProviderID) -> String {
         switch provider {
+        case .codex: return ProviderEndpoints.Codex.authorizeURL
         case .claude: return ProviderEndpoints.Claude.authorizeURL
         case .antigravity: return ProviderEndpoints.Antigravity.authEndpoint
-        case .codex, .xai, .kimi: return ""
+        case .xai, .kimi: return ""
         }
     }
 
     private static func clientID(for provider: ProviderID) -> String {
         switch provider {
+        case .codex: return ProviderEndpoints.Codex.clientID
         case .claude: return ProviderEndpoints.Claude.clientID
         case .antigravity: return ProviderEndpoints.Antigravity.clientID
-        case .codex, .xai, .kimi: return ""
+        case .xai, .kimi: return ""
         }
     }
 
     private static func scope(for provider: ProviderID) -> String {
         switch provider {
+        case .codex: return ProviderEndpoints.Codex.authorizeScope
         case .claude: return ProviderEndpoints.Claude.scope
         case .antigravity: return ProviderEndpoints.Antigravity.scopes.joined(separator: " ")
-        case .codex, .xai, .kimi: return ""
+        case .xai, .kimi: return ""
         }
     }
 
@@ -369,7 +398,10 @@ public struct LoopbackLogin: Sendable {
             // consent without `prompt=consent`. Without them the account works for one hour and
             // then signs itself out, which reads to a user as the app being broken.
             return ["access_type": "offline", "prompt": "consent"]
-        case .claude, .codex, .xai, .kimi:
+        case .codex:
+            // What the Codex CLI sends; the authorize page shapes its response by them.
+            return ProviderEndpoints.Codex.authorizeExtraParameters
+        case .claude, .xai, .kimi:
             return [:]
         }
     }

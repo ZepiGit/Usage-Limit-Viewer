@@ -11,6 +11,9 @@ import com.usagelimits.core.network.JsonSupport
 import com.usagelimits.core.network.ProviderEndpoints.Codex
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.core.oauth.JwtClaims
+import com.usagelimits.core.oauth.LoopbackServer
+import com.usagelimits.core.oauth.Pkce
+import com.usagelimits.core.oauth.PkceCodes
 import com.usagelimits.providers.LoginChallenge
 import com.usagelimits.providers.ProviderProfile
 import com.usagelimits.providers.UsageProvider
@@ -19,21 +22,24 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.net.URLEncoder
 import java.util.UUID
 
 /**
  * OpenAI Codex / ChatGPT subscription.
  *
- * Login uses OpenAI's device authorization flow rather than the authorization-code flow the
- * desktop client uses. The desktop flow redirects to `http://localhost:1455/auth/callback`,
- * which on Android would mean binding a fixed port and surviving the app being backgrounded
- * mid-browser. The device flow needs neither: the user types a short code on
- * auth.openai.com and the app polls. See docs/provider-auth-research.md for the comparison.
+ * Login is the authorization-code flow the Codex CLI itself runs: sign in on the provider's
+ * page, get redirected to `http://localhost:1455/auth/callback`, done — the same shape as
+ * Claude and Antigravity, on the same [LoopbackServer]. The device flow, which was the only
+ * one for a while, stays as the fallback for the one thing the browser flow needs and cannot
+ * guarantee: the registered port being free. It asks the user to carry a code from this app
+ * into the browser, which is exactly the step the browser flow removes.
  *
- * One wrinkle: OpenAI's device endpoint returns the PKCE verifier *and* challenge alongside
- * the authorization code, so the app exchanges a pair it did not generate. The verifier still
- * never crosses an untrusted channel, but it means PKCE here is not the client-binding
- * guarantee it normally is — noted in the research doc.
+ * One wrinkle in the fallback: OpenAI's device endpoint returns the PKCE verifier *and*
+ * challenge alongside the authorization code, so the app exchanges a pair it did not
+ * generate. The verifier still never crosses an untrusted channel, but it means PKCE there is
+ * not the client-binding guarantee it normally is — noted in the research doc. The browser
+ * flow generates its own pair, as PKCE intends.
  */
 class CodexProvider(
     private val http: HttpClient,
@@ -43,7 +49,52 @@ class CodexProvider(
     override val providerId = ProviderId.CODEX
     override val supportsResetCredits = true
 
+    // The browser flow's half-open state, held across the round-trip like Claude's: in memory
+    // only, never persisted or logged, cleared the moment the redirect comes back.
+    private var server: LoopbackServer? = null
+    private var pendingCodes: PkceCodes? = null
+    private var pendingState: String? = null
+
     override suspend fun beginLogin(): LoginChallenge {
+        // Bind the port BEFORE the authorization URL is handed back, so a conflict is known
+        // now — and answered with the device flow — rather than after the browser has minted
+        // a code that then has nowhere to land.
+        val boundServer = try {
+            LoopbackServer(Codex.REDIRECT_PORT).also { it.start() }
+        } catch (e: ProviderException) {
+            return beginDeviceLogin()
+        }
+
+        val codes = Pkce.generate()
+        val state = Pkce.generateState()
+        pendingCodes = codes
+        pendingState = state
+        server = boundServer
+
+        val params = linkedMapOf(
+            "response_type" to "code",
+            "client_id" to Codex.CLIENT_ID,
+            "redirect_uri" to Codex.REDIRECT_URI,
+            "scope" to Codex.AUTHORIZE_SCOPE,
+            "code_challenge" to codes.codeChallenge,
+            "code_challenge_method" to codes.codeChallengeMethod,
+            "state" to state,
+        )
+        params.putAll(Codex.AUTHORIZE_EXTRA_PARAMS)
+
+        val authorizationUrl = params.entries.joinToString(
+            separator = "&",
+            prefix = "${Codex.AUTHORIZE_URL}?",
+        ) { (name, value) -> "${urlEncode(name)}=${urlEncode(value)}" }
+
+        return LoginChallenge.Redirect(
+            authorizationUrl = authorizationUrl,
+            redirectUri = Codex.REDIRECT_URI,
+        )
+    }
+
+    /** The device flow: no port to bind, a code to carry. Used only when the port is taken. */
+    private suspend fun beginDeviceLogin(): LoginChallenge {
         val response = http.request(
             url = Codex.DEVICE_USER_CODE_URL,
             method = "POST",
@@ -81,8 +132,48 @@ class CodexProvider(
     override suspend fun completeLogin(
         challenge: LoginChallenge,
         userInput: String?,
-    ): OAuthCredentials {
-        require(challenge is LoginChallenge.DeviceCode) { "Codex uses the device flow" }
+    ): OAuthCredentials = when (challenge) {
+        is LoginChallenge.Redirect -> completeBrowserLogin()
+        is LoginChallenge.DeviceCode -> completeDeviceLogin(challenge)
+        is LoginChallenge.ApiKey -> throw ProviderException.Unexpected("Codex does not use a key")
+    }
+
+    private suspend fun completeBrowserLogin(): OAuthCredentials {
+        val codes = pendingCodes
+        val expectedState = pendingState
+        val listener = server
+        if (codes == null || expectedState == null || listener == null) {
+            throw ProviderException.Unexpected("Login was not started on this provider instance")
+        }
+
+        val response = try {
+            listener.awaitRedirect(REDIRECT_TIMEOUT_MS)
+        } finally {
+            // One redirect, one attempt: the port is released and the verifier discarded even
+            // when the browser never comes back.
+            listener.close()
+            server = null
+            pendingCodes = null
+            pendingState = null
+        }
+
+        response.error?.let { error ->
+            throw ProviderException.LoginCancelled(response.errorDescription ?: error)
+        }
+        // The CSRF control for the whole flow: the state the browser brought back has to be
+        // the one this instance generated, checked before the code is looked at.
+        val returnedState = response.state
+            ?: throw ProviderException.LoginCancelled("Redirect carried no state")
+        if (!Pkce.constantTimeEquals(expectedState, returnedState)) {
+            throw ProviderException.Unexpected("state mismatch")
+        }
+        val code = response.code
+            ?: throw ProviderException.LoginCancelled("No authorization code was returned")
+
+        return exchangeCode(code, codes.codeVerifier, Codex.REDIRECT_URI)
+    }
+
+    private suspend fun completeDeviceLogin(challenge: LoginChallenge.DeviceCode): OAuthCredentials {
         val (userCode, deviceAuthId) = splitChallenge(challenge.userCode)
 
         val authorization = pollForAuthorization(userCode, deviceAuthId, challenge)
@@ -92,7 +183,7 @@ class CodexProvider(
         val verifier = JsonSupport.string(authorization, "code_verifier", "codeVerifier")
             ?: throw ProviderException.MalformedPayload("device token response had no code verifier")
 
-        return exchangeCode(code, verifier)
+        return exchangeCode(code, verifier, Codex.DEVICE_EXCHANGE_REDIRECT_URI)
     }
 
     /**
@@ -132,6 +223,12 @@ class CodexProvider(
                 // 404 while the code is unclaimed also means "keep waiting".
                 if (e.message?.contains("404") != true) throw e
                 delay(challenge.pollIntervalMs)
+            } catch (e: ProviderException.Offline) {
+                // One poll that did not get through is not a failed login. The user is in the
+                // browser and the phone may be mid-handover; the deadline above bounds this.
+                delay(challenge.pollIntervalMs)
+            } catch (e: ProviderException.ServerError) {
+                delay(challenge.pollIntervalMs)
             }
         }
         throw ProviderException.LoginCancelled("Device login expired before it was approved")
@@ -139,7 +236,11 @@ class CodexProvider(
 
     // Internal so the one-time-grant rule on this exchange can be tested directly; the only
     // other route in is a complete device or loopback login, which no unit test can drive.
-    internal suspend fun exchangeCode(code: String, codeVerifier: String): OAuthCredentials {
+    internal suspend fun exchangeCode(
+        code: String,
+        codeVerifier: String,
+        redirectUri: String = Codex.DEVICE_EXCHANGE_REDIRECT_URI,
+    ): OAuthCredentials {
         val response = http.request(
             url = Codex.TOKEN_URL,
             method = "POST",
@@ -149,9 +250,10 @@ class CodexProvider(
                     "grant_type" to "authorization_code",
                     "client_id" to Codex.CLIENT_ID,
                     "code" to code,
-                    // Must match what the device endpoint issued the code against, even
-                    // though the app never navigates there.
-                    "redirect_uri" to Codex.DEVICE_EXCHANGE_REDIRECT_URI,
+                    // Must match what the code was issued against: the loopback redirect for
+                    // the browser flow, the device callback — never navigated to — for the
+                    // device flow.
+                    "redirect_uri" to redirectUri,
                     "code_verifier" to codeVerifier,
                 ),
             ),
@@ -329,6 +431,8 @@ class CodexProvider(
         )
     }
 
+    private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
+
     private fun splitChallenge(value: String): Pair<String, String> {
         val parts = value.split(CODE_SEPARATOR)
         require(parts.size == 2) { "malformed device challenge" }
@@ -345,6 +449,9 @@ class CodexProvider(
         private const val CODE_SEPARATOR = "|"
         private const val DEFAULT_POLL_SECONDS = 5L
         private const val DEVICE_TIMEOUT_MS = 15L * 60 * 1000
+
+        /** How long the user has in the browser before the loopback listener gives up. */
+        private const val REDIRECT_TIMEOUT_MS = 5L * 60 * 1000
 
         /** The user-visible half of the packed challenge code. */
         fun displayCode(packed: String): String = packed.substringBefore(CODE_SEPARATOR)

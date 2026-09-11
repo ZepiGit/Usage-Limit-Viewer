@@ -8,21 +8,40 @@ public enum XaiBillingParser: Sendable {
     // A nominal 30-day month keeps calendar months of different lengths categorised alike.
     private static let billingPeriodSeconds: Int64 = 2_592_000
 
-    // xAI supplies absolute period ends, so neither parser needs the caller's clock.
-    public static func parseCredits(_ payload: [String: Any], now _: Date) -> [UsageWindow] {
+    // `now` decides whether the reported period is the CURRENT one, which is what makes an
+    // absent percentage readable as zero — see below.
+    public static func parseCredits(_ payload: [String: Any], now: Date) -> [UsageWindow] {
         let body = config(payload)
 
-        // An absent or invalid percentage must not turn into an assumed-zero credit bar.
-        guard let usedPercent = JSONSupport.double(
-            body, "creditUsagePercent", "credit_usage_percent"
-        ), usedPercent.isFinite else {
+        // Two spellings of the period: nested `currentPeriod{type,start,end}` in the credit
+        // view, and the flat `usagePeriodType/Start/End` trio the unified-billing view carries
+        // beside its monthly figures.
+        let period = JSONSupport.object(body, "currentPeriod", "current_period")
+        let start = date(period, "start") ?? date(body, "usagePeriodStart", "usage_period_start")
+        let end = date(period, "end") ?? date(body, "usagePeriodEnd", "usage_period_end")
+        let periodType = (JSONSupport.string(period, "type")
+            ?? JSONSupport.string(body, "usagePeriodType", "usage_period_type"))?.lowercased()
+
+        // An ABSENT percentage is a zero when the period is live, and unknown otherwise.
+        //
+        // xAI's billing message is proto3, and `credit_usage_percent` is an implicit-presence
+        // float there: a value of exactly zero is not written to the wire at all. So the one
+        // week in which the user has spent nothing — the first week, the week after a reset —
+        // arrives with the field missing, and reading that as "no credit window" is how the
+        // weekly row vanished from the app the moment it read 100 % remaining. The provider's
+        // own web client reads the omitted scalar as zero; so does this, but only when the
+        // payload proves it describes the period that contains now. A period in the past, or
+        // none at all, is a payload this parser does not understand, and that stays a missing
+        // row rather than an invented bar.
+        let reported = JSONSupport.double(body, "creditUsagePercent", "credit_usage_percent")
+            .flatMap { $0.isFinite ? $0 : nil }
+        let periodIsLive: Bool = {
+            guard let start, let end else { return false }
+            return start <= now && now <= end
+        }()
+        guard let usedPercent = reported ?? (periodIsLive ? 0.0 : nil) else {
             return []
         }
-
-        let period = JSONSupport.object(body, "currentPeriod", "current_period")
-        let start = date(period, "start")
-        let end = date(period, "end")
-        let periodType = JSONSupport.string(period, "type")?.lowercased()
 
         var periodSeconds: Int64?
         if let start, let end {
@@ -67,8 +86,15 @@ public enum XaiBillingParser: Sendable {
         ]
     }
 
-    public static func parseBilling(_ payload: [String: Any], now _: Date) -> [UsageWindow] {
+    public static func parseBilling(_ payload: [String: Any], now: Date) -> [UsageWindow] {
         let body = config(payload)
+
+        // The unified-billing shape of this view carries the weekly figures too —
+        // `creditUsagePercent` with the flat `usagePeriod*` trio — so the weekly row is read
+        // from here as well. It costs nothing when both views answer (merge keeps the credit
+        // view's copy) and keeps the row when the credit view alone stops answering.
+        let weekly = parseCredits(payload, now: now)
+
         let monthlyLimit = cents(body, "monthlyLimit", "monthly_limit")
         // Every name the production shape carries for spend — see the Kotlin twin for why
         // reading `used` alone rendered a 90 %-spent account as untouched.
@@ -77,7 +103,7 @@ public enum XaiBillingParser: Sendable {
             ?? cents(body, "totalUsed", "total_used")
 
         guard monthlyLimit != nil || used != nil else {
-            return []
+            return weekly
         }
 
         let resetAt = date(body, "billingPeriodEnd", "billing_period_end")
@@ -89,7 +115,7 @@ public enum XaiBillingParser: Sendable {
             used.flatMap { percentOf(amount: min($0, limit), total: limit) }
         }
 
-        var windows = [
+        var windows = weekly + [
             UsageWindow(
                 id: monthlyWindowID,
                 label: "Monthly included",
