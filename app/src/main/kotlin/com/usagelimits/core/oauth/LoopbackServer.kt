@@ -63,7 +63,10 @@ class LoopbackServer(private val port: Int) : Closeable {
      * abandoned login therefore parked an IO thread forever and left the pinned port bound
      * for the life of the process, so every later login on that provider failed to bind.
      */
-    suspend fun awaitRedirect(timeoutMs: Long): AuthorizationResponse = withContext(Dispatchers.IO) {
+    suspend fun awaitRedirect(
+        timeoutMs: Long,
+        isExpected: (AuthorizationResponse) -> Boolean = { true },
+    ): AuthorizationResponse = withContext(Dispatchers.IO) {
         val socket = serverSocket ?: throw ProviderException.Unexpected("server not started")
         socket.soTimeout = ACCEPT_POLL_MS
 
@@ -74,13 +77,13 @@ class LoopbackServer(private val port: Int) : Closeable {
             if (System.nanoTime() - deadline >= 0) {
                 throw ProviderException.LoginCancelled("Login timed out")
             }
-            response = acceptOnce(socket)
+            response = acceptOnce(socket, isExpected)
         }
         response
     }
 
     /** One bounded accept. Null when the poll window elapsed with nothing connecting. */
-    private fun acceptOnce(socket: ServerSocket): AuthorizationResponse? {
+    private fun acceptOnce(socket: ServerSocket, isExpected: (AuthorizationResponse) -> Boolean): AuthorizationResponse? {
         val client = try {
             socket.accept()
         } catch (e: SocketTimeoutException) {
@@ -107,6 +110,12 @@ class LoopbackServer(private val port: Int) : Closeable {
                 return@use null
             }
             val parsed = parseRequestLine(requestLine)
+            if (!isExpected(parsed)) {
+                connection.getOutputStream().write(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(),
+                )
+                return@use null
+            }
             connection.getOutputStream().write(httpResponse(parsed).toByteArray(Charsets.UTF_8))
             connection.getOutputStream().flush()
 

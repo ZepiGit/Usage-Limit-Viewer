@@ -147,7 +147,9 @@ class CodexProvider(
         }
 
         val response = try {
-            listener.awaitRedirect(REDIRECT_TIMEOUT_MS)
+            listener.awaitRedirect(REDIRECT_TIMEOUT_MS) { response ->
+                response.state?.let { Pkce.constantTimeEquals(expectedState, it) } == true
+            }
         } finally {
             // One redirect, one attempt: the port is released and the verifier discarded even
             // when the browser never comes back.

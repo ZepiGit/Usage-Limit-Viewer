@@ -632,12 +632,9 @@ private enum DeviceTokenPoll {
         let failedStatus: Bool
         do {
             let response = try await client.request(
-                url: url, method: "POST", headers: headers, body: body, retries: 0)
+                url: url, method: "POST", headers: headers, body: body, retries: 0, devicePoll: true)
             text = response.body
-            failedStatus = false
-        } catch HTTPError.status(let code, let body) where code == 400 || code == 403 {
-            text = body
-            failedStatus = true
+            failedStatus = !(200...299).contains(response.status)
         } catch HTTPError.status(let code, _) where (500...599).contains(code) {
             return nil
         } catch HTTPError.transport {
