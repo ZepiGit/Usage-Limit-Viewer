@@ -1,6 +1,10 @@
 package com.usagelimits.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
+import com.usagelimits.ui.theme.LocalMotionEnabled
 import com.usagelimits.core.model.percentLabel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,8 +57,12 @@ fun UsageBar(
     height: androidx.compose.ui.unit.Dp = 8.dp,
 ) {
     val target = ((remainingPercent ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
-    val fraction by animateFloatAsState(targetValue = target, label = "usageBar")
-    val color = SeverityPalette.barColor(remainingPercent, severity)
+    val motionEnabled = LocalMotionEnabled.current
+    val animatedFraction by animateFloatAsState(targetValue = target, animationSpec = if (motionEnabled) tween(240) else snap(), label = "usageBar")
+    val targetColor = SeverityPalette.barColor(remainingPercent, severity)
+    val animatedColor by animateColorAsState(targetValue = targetColor, animationSpec = if (motionEnabled) tween(240) else snap(), label = "usageColor")
+    val fraction = if (motionEnabled) animatedFraction else target
+    val color = if (motionEnabled) animatedColor else targetColor
 
     Box(
         modifier = modifier

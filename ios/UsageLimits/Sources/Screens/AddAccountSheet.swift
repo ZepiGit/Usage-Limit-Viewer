@@ -14,6 +14,7 @@ import UsageLimitsKit
 /// sentence instead of offering a control that starts something which cannot finish.
 struct AddAccountSheet: View {
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var store: UsageStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -52,7 +53,11 @@ struct AddAccountSheet: View {
                         failure(provider, message)
                     }
                 }
+                .id(stageIdentity)
+                .transition(AnyTransition.opacity)
+                .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.18), value: stage)
                 .padding(16)
+                .readableWidth()
             }
             .background(UsageColors.background)
             .navigationTitle("Add account")
@@ -71,12 +76,23 @@ struct AddAccountSheet: View {
         .onDisappear { login?.cancel() }
     }
 
+    private var stageIdentity: Int {
+        switch stage {
+        case .choosing: return 0
+        case .starting: return 1
+        case .waiting: return 2
+        case .awaitingKey: return 3
+        case .failed: return 4
+        }
+    }
+
     // MARK: - Choosing
 
     private var chooser: some View {
         ForEach(ProviderID.allCases, id: \.self) { provider in
             Button { start(provider) } label: {
                 UsageCard {
+                    ProviderBadge(provider: provider)
                     Text(provider.displayName)
                         .font(.headline)
                         .foregroundStyle(UsageColors.terracotta)
@@ -100,7 +116,7 @@ struct AddAccountSheet: View {
                 .font(.headline)
                 .foregroundStyle(UsageColors.textPrimary)
             HStack(spacing: 8) {
-                ProgressView()
+                if reduceMotion { Text("...") } else { ProgressView() }
                 Text("Asking \(provider.displayName) for a code…")
                     .font(.footnote)
                     .foregroundStyle(UsageColors.textSecondary)
@@ -147,7 +163,7 @@ struct AddAccountSheet: View {
             }
 
             HStack(spacing: 8) {
-                ProgressView()
+                if reduceMotion { Text("...") } else { ProgressView() }
                 Text("Waiting for you to approve it…")
                     .font(.footnote)
                     .foregroundStyle(UsageColors.textSecondary)
@@ -309,6 +325,7 @@ struct AddAccountSheet: View {
                         _ = try await container.completeLoopbackLogin(
                             code: code, challenge: challenge)
                     } catch LoopbackListener.ListenError.portUnavailable where provider == .codex {
+                        try Task.checkCancellation()
                         // The CLI's port is taken, and Codex alone has a second way in: its
                         // device flow needs no port at all, at the price of a code to carry
                         // into the browser — the step the browser flow exists to remove.
@@ -325,7 +342,9 @@ struct AddAccountSheet: View {
                 await store.refresh()
                 dismiss()
             } catch is CancellationError {
-                // The sheet was closed. Not a failure, and nothing left to show it on.
+                // Dismissing only the browser leaves this sheet open. A cancelled
+                // task belongs to a closed sheet or an older attempt instead.
+                if !Task.isCancelled { stage = .choosing }
             } catch {
                 stage = .failed(provider, error.localizedDescription)
             }

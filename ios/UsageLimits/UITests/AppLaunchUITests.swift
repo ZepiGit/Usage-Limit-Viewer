@@ -22,10 +22,10 @@ final class AppLaunchUITests: XCTestCase {
     /// Swipes until the element materialises, or gives up rather than swiping for ever.
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         for _ in 0..<6 {
-            if element.exists { return true }
+            if element.isHittable { return true }
             app.swipeUp()
         }
-        return element.waitForExistence(timeout: 2)
+        return element.waitForExistence(timeout: 2) && element.isHittable
     }
 
     private func launch() -> XCUIApplication {
@@ -110,8 +110,31 @@ final class AppLaunchUITests: XCTestCase {
 
         for provider in ["OpenAI Codex", "Claude", "Antigravity", "Grok", "Kimi"] {
             XCTAssertTrue(
-                app.staticTexts[provider].waitForExistence(timeout: 5),
+                scrollTo(app.staticTexts[provider], in: app),
                 "\(provider) should be offered")
         }
+    }
+
+    func testLandscapeAndLargeTextKeepTheProviderPickerReachable() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ui-testing", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let accounts = app.buttons["Accounts"]
+        XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+        accounts.tap()
+        let add = app.staticTexts["+ Add account"]
+        XCTAssertTrue(scrollTo(add, in: app))
+        add.tap()
+        XCTAssertTrue(app.navigationBars["Add account"].waitForExistence(timeout: 10))
+        XCTAssertTrue(scrollTo(app.staticTexts["Kimi"], in: app))
+        XCTAssertTrue(app.buttons["Cancel"].isHittable)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Landscape provider picker with large text"
+        screenshot.lifetime = .keepAlways
+        self.add(screenshot)
+        app.buttons["Cancel"].tap()
+        XCTAssertEqual(app.state, .runningForeground)
     }
 }

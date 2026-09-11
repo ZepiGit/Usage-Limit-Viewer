@@ -58,6 +58,7 @@ struct SettingsScreen: View {
                         .foregroundStyle(UsageColors.textSecondary)
                 }
             }
+            .readableWidth()
             .scrollContentBackground(.hidden)
             .background(UsageColors.background)
             .navigationTitle("Settings")

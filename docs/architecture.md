@@ -312,3 +312,18 @@ Revisit when: scoped bindings appear (a per-login or per-account graph), build v
 different implementations, the container passes roughly a dozen entries, or `WorkManager`
 needs constructor-injected workers — the first genuinely awkward case, since `SyncWorker`
 currently reaches the graph through the application object rather than being given it.
+
+## Native motion
+
+Android's theme observes the system animator duration scale once per composition. The observer
+is removed when that composition ends. At scale zero, bars use their target length and colour
+immediately, list motion is disabled, and the sign-in crossfade has zero duration. Enabled
+bar changes settle in 240 ms and sign-in changes in 180 ms. Lazy lists use Compose's item
+animation; the actively dragged overview card keeps its finger position without a competing
+placement spring.
+
+SwiftUI reads `accessibilityReduceMotion` in each animated view. Bars, list changes and edit
+mode pass no animation when it is enabled; sign-in stages use an opacity transition. WidgetKit
+owns widget refresh motion, including numeric text transitions on iOS 17 and later. No new
+animation has a timer or an indefinitely repeating transition. The existing dark palette and
+widget layouts are retained. iOS provider badges use Android's existing glyphs and colours.
