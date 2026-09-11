@@ -210,7 +210,8 @@ class SyncEngine(
         if (!currentWasRejected && !current.needsRefresh(nowMs())) return current
 
         return withCredentialLock(reference) {
-            val latest = credentialStore.load(reference) ?: current
+            val latest = credentialStore.load(reference)
+                ?: throw ProviderException.Unauthorized("Account was removed while waiting to refresh")
             val latestWasRejected = rejectedAccessToken != null &&
                 latest.accessToken == rejectedAccessToken
             // Whoever held the lock may have rotated already. If what they saved is not the

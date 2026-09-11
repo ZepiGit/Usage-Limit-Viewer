@@ -10,6 +10,7 @@ import com.usagelimits.core.database.UsageSnapshotEntity
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.network.HttpClient
+import com.usagelimits.core.network.ProviderException
 import com.usagelimits.providers.ProviderRegistry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -148,5 +149,15 @@ class RefreshAfterRemovalTest {
 
         assertEquals("rotated-access", refreshed.accessToken)
         assertEquals(listOf("codex_U1"), store.saves)
+    }
+
+    @Test
+    fun `removal before the refresh lock is acquired ends the request`() = runBlocking {
+        val store = ScriptedStore(expiring, loadsBeforeRemoval = 1)
+        val failure = runCatching { engine(store).validCredentials(account) }.exceptionOrNull()
+
+        assertTrue("a deleted credential cannot authorize a refresh", failure is ProviderException.Unauthorized)
+        assertEquals("stop at the in-lock read, before the exchange", 2, store.loads)
+        assertTrue(store.saves.isEmpty())
     }
 }
