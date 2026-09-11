@@ -177,4 +177,14 @@ public enum ProviderEndpoints {
             "x-grok-client-version": clientVersion,
         ]
     }
+
+    /// Kimi Code.
+    ///
+    /// No OAuth here, deliberately — see docs/providers-kimi.md. The user brings a key from
+    /// their own console because the device flow's client id belongs to `kimi-cli` and the
+    /// model API gates on an `X-Msh-Platform` allowlist.
+    public enum Kimi {
+        public static let usageEndpoint = "https://api.kimi.com/coding/v1/usages"
+        public static let consoleURL = "https://www.kimi.com/code"
+    }
 }

@@ -587,3 +587,47 @@ public struct XaiClient: SyncProvider, Sendable {
         return ProviderError.noData("both billing routes failed")
     }
 }
+
+
+/// Kimi Code, authenticated with a key the user pasted.
+///
+/// The only one of the five that does not sign in with OAuth, and deliberately so: Kimi Code's
+/// device flow is bound to `kimi-cli`'s client id and `api.kimi.com` gates on an
+/// `X-Msh-Platform` allowlist that answers anything else with `403 access_terminated`. Driving
+/// it would mean presenting another program's identity to pass a check the provider put there
+/// on purpose. See docs/providers-kimi.md.
+public struct KimiClient: SyncProvider, Sendable {
+    public let providerID = "kimi"
+
+    let httpClient: UsageHTTPClient
+
+    public init(httpClient: UsageHTTPClient) {
+        self.httpClient = httpClient
+    }
+
+    public func fetchUsage(
+        credentials: OAuthCredentials,
+        attributes: [String: String]
+    ) async throws -> UsageResult {
+        let response = try await ProviderHTTP.request(
+            httpClient,
+            url: ProviderEndpoints.Kimi.usageEndpoint,
+            headers: [
+                "Authorization": "Bearer \(credentials.accessToken)",
+                "Accept": "application/json",
+            ],
+            endpoint: "kimi usages")
+        let payload = try ProviderHTTP.decodeObject(response.body, endpoint: "kimi usages")
+        return UsageResult(windows: KimiUsageParser.parse(payload))
+    }
+
+    /// Nothing to refresh: an API key carries no expiry and no refresh grant.
+    ///
+    /// Returned unchanged rather than thrown, because the engine calls this whenever it
+    /// suspects staleness and for this provider that suspicion is never right. A revoked key
+    /// surfaces as a 401 on the usage call, which is the path that already marks an account as
+    /// needing attention.
+    public func refresh(credentials: OAuthCredentials) async throws -> OAuthCredentials {
+        credentials
+    }
+}

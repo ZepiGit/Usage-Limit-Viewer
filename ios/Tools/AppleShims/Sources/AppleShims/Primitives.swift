@@ -510,3 +510,25 @@ public typealias CGFloat = Double
 /// Foundation constants the app uses that swift-corelibs does not surface here.
 public let NSEC_PER_SEC: UInt64 = 1_000_000_000
 public let NSEC_PER_MSEC: UInt64 = 1_000_000
+
+
+/// Text entry, for the one screen that has any: pasting a Kimi Code key.
+public struct TextField: View {
+    public init(_ title: String, text: Binding<String>) {}
+    public init(_ title: String, text: Binding<String>, prompt: Any?) {}
+    public var body: some View { ShimLeaf() }
+}
+
+public struct TextFieldStyleShim {
+    public static let roundedBorder = TextFieldStyleShim()
+    public static let plain = TextFieldStyleShim()
+    public static let automatic = TextFieldStyleShim()
+}
+
+/// `.never` is the only case the app uses; the rest exist so a later change type-checks.
+public struct TextInputAutocapitalizationShim {
+    public static let never = TextInputAutocapitalizationShim()
+    public static let words = TextInputAutocapitalizationShim()
+    public static let sentences = TextInputAutocapitalizationShim()
+    public static let characters = TextInputAutocapitalizationShim()
+}
