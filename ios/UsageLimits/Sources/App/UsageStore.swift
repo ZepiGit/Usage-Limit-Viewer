@@ -29,7 +29,11 @@ final class UsageStore: ObservableObject {
                 // The stored value can differ from the one written — the sync interval is
                 // floored at what the platform will honour — so the screen is corrected to
                 // what will actually happen rather than left showing what was asked for.
-                if let stored = try? await container.save(settings: value) {
+                // Applied only if no NEWER edit has landed meanwhile. Two toggles in quick
+                // succession are two saves in flight; the first's acknowledgement arriving
+                // second used to reinstall its older value over the second toggle — and the next
+                // edit then copied that reverted value forward, so the loss became permanent.
+                if let stored = try? await container.save(settings: value), self?.settings == value {
                     self?.applyLoaded(stored)
                 }
                 BackgroundRefresh.schedule(after: value.syncIntervalMinutes)
@@ -139,9 +143,6 @@ final class UsageStore: ObservableObject {
         }
         settings = updated
     }
-
-    /// One account, reduced for the notification evaluator.
-    var summaries: [AccountSummary] { accounts.map(AccountSummary.init) }
 
     /// The plan tier for one account, as a label, or nil when the provider never stated one.
     ///
