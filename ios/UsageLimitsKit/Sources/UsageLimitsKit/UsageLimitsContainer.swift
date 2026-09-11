@@ -168,10 +168,20 @@ public actor UsageLimitsContainer {
             expiresAt: nil)
 
         // Throws if the key is not usable, which is the whole point of doing it here.
-        _ = try await client.fetchUsage(credentials: credentials, attributes: [:])
+        let usage = try await client.fetchUsage(credentials: credentials, attributes: [:])
 
         let profile = ProviderProfile(
-            externalAccountID: Self.pastedKeyIdentity(trimmed),
+            // The provider's own id where the response states one, and a digest of the key only
+            // where it does not.
+            //
+            // The digest alone was wrong in a way that only shows up later: a user who rotates
+            // their key in the provider's console comes back with a different digest, so the
+            // app files a SECOND account for the same subscription and leaves the first behind
+            // holding a key that no longer works. The provider's id survives a rotation. Same
+            // preference order as the Android provider, so one payload names one account on
+            // both platforms.
+            externalAccountID: usage.accountIdentity?.trimmingCharacters(in: .whitespaces)
+                .nilIfEmpty ?? Self.pastedKeyIdentity(trimmed),
             email: nil,
             displayName: nil,
             plan: nil)
@@ -514,4 +524,10 @@ public actor UsageLimitsContainer {
         WidgetCenter.shared.reloadAllTimelines()
         #endif
     }
+}
+
+private extension String {
+    /// Nil for a string with nothing in it, so an empty field in a payload is treated as an
+    /// absent one rather than as an account named "".
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

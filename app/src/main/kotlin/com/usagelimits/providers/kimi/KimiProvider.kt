@@ -111,7 +111,23 @@ class KimiProvider(private val http: HttpClient) : UsageProvider {
      * It only has to be stable and unique: pasting the same key again then updates the account
      * it belongs to instead of creating a second one beside it.
      */
-    private fun identity(payload: JsonObject, key: String): String {
+    /**
+     * The account this key belongs to: Kimi's own id where the payload states one, a one-way
+     * digest of the key where it does not.
+     *
+     * The preference order is not cosmetic. A digest changes when the key does, so naming the
+     * account after one means a user who rotates their key in the console comes back as a
+     * SECOND account for the same subscription — with the first left behind holding a key that
+     * no longer works. Kimi's id survives the rotation.
+     *
+     * The digest is the fallback rather than the rule because a payload that names nobody still
+     * has to produce a stable account, and the key is then the only thing left to derive one
+     * from. It is truncated SHA-256 and never reversible into the key.
+     *
+     * Internal rather than private so it can be tested directly. The behaviour only shows up
+     * on the second sign-in with a rotated key, which is not a state a parser test can reach.
+     */
+    internal fun identity(payload: JsonObject, key: String): String {
         JsonSupport.string(payload, "userId", "user_id", "accountId", "account_id")
             ?.takeIf { it.isNotBlank() }
             ?.let { return it }

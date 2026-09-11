@@ -616,4 +616,54 @@ final class UsageLimitsContainerTests: XCTestCase {
         func removeAll() async throws { throw Refused() }
         func allReferences() async throws -> [String] { Array(stored.keys) }
     }
+    // MARK: - Signing in with a pasted key
+
+    private static let kimiUsage = #"""
+        {"user_id": "kimi-user-7", "usage": [
+          {"name": "5h limit", "used": 30, "limit": 100, "reset_time": 1757003600}
+        ]}
+        """#
+
+    /// The account is filed under the id KIMI states, not under a digest of the key.
+    ///
+    /// The difference only shows up later, which is why it needs a test rather than a reading:
+    /// a user who rotates their key in the console comes back with a different digest, so a
+    /// digest-named account is a SECOND account for the same subscription — with the first left
+    /// behind holding a key that no longer works. This fails against the version that always
+    /// digested.
+    func testAPastedKeyAccountIsNamedByTheProviderNotByTheKey() async throws {
+        let (subject, _) = container([(200, Self.kimiUsage)])
+
+        let account = try await subject.completePastedKeyLogin(provider: .kimi, key: "sk-synthetic-1")
+
+        XCTAssertEqual(account.externalAccountID, "kimi-user-7")
+        XCTAssertEqual(account.provider, .kimi)
+    }
+
+    /// The same subscription, a rotated key: one account, not two.
+    func testRotatingTheKeyKeepsOneAccount() async throws {
+        let (subject, _) = container([(200, Self.kimiUsage), (200, Self.kimiUsage)])
+
+        _ = try await subject.completePastedKeyLogin(provider: .kimi, key: "sk-synthetic-1")
+        _ = try await subject.completePastedKeyLogin(provider: .kimi, key: "sk-synthetic-2")
+
+        let ids = await subject.usage().map(\.account.id)
+        XCTAssertEqual(ids, ["kimi:kimi-user-7"], "a rotated key must not mint a second account")
+    }
+
+    /// A payload that names nobody still has to produce a stable account, and the only thing
+    /// left to derive one from is the key itself — one way, never reversible into it.
+    func testAPayloadWithoutAnIdentityFallsBackToADigestOfTheKey() async throws {
+        let anonymous = #"{"usage": [{"name": "5h limit", "used": 30, "limit": 100}]}"#
+        let (subject, _) = container([(200, anonymous)])
+
+        let account = try await subject.completePastedKeyLogin(provider: .kimi, key: "sk-synthetic-1")
+
+        XCTAssertEqual(
+            account.externalAccountID, UsageLimitsContainer.pastedKeyIdentity("sk-synthetic-1"))
+        XCTAssertFalse(
+            account.externalAccountID.contains("sk-synthetic-1"),
+            "the key itself must never become the account id")
+    }
+
 }

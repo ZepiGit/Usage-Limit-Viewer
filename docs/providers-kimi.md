@@ -80,3 +80,29 @@ Moonshot / Kimi Open Platform is a different surface: API-key only, and its
 `GET /v1/users/me/balance` reports a cash and voucher **balance**, not a per-window quota.
 This app is about limits and when they reset, so that surface is out of scope; an account with
 one has nothing for the overview to draw.
+
+## Which account a key belongs to
+
+A pasted key carries no identity of its own, so the account has to be named from something
+else. Two candidates, and the order between them decides what happens on the day the user
+rotates their key:
+
+1. **The id Kimi states in its usage response** — `userId`, `user_id`, `accountId`,
+   `account_id`, or `user.id` nested. This survives a rotation.
+2. **A one-way digest of the key** — truncated SHA-256 on Android, FNV-1a on iOS. The two
+   differ, which is harmless: the id is local to a device and nothing compares them across
+   platforms. It does NOT survive a rotation.
+
+The provider's id wins wherever the response states one. Naming the account after the digest
+instead looks correct until the second sign-in: a user who creates a fresh key in the console
+comes back with a different digest, so the app files a SECOND account for the same
+subscription — and leaves the first one behind holding a key that no longer works, failing on
+every sync with nothing on screen explaining why.
+
+The digest stays as the fallback because a response that names nobody still has to produce a
+stable account, and the key is then the only thing left to derive one from. It is never
+reversible into the key, and the key itself never becomes an account id.
+
+Both halves are pinned by tests that fail against a digest-only implementation:
+`KimiIdentityTest` on Android, `testAPastedKeyAccountIsNamedByTheProviderNotByTheKey` and
+`testRotatingTheKeyKeepsOneAccount` in the kit.
