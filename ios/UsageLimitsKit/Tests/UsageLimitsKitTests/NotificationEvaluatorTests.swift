@@ -505,6 +505,98 @@ final class NotificationEvaluatorTests: XCTestCase {
         XCTAssertEqual(spoken, 1, "an unchanged account must be warned once, not once per sync")
     }
 
+    // MARK: - Muting one account
+
+    /// A muted account says NOTHING — not a quota tier, not a credit deadline, not a standing
+    /// finding.
+    ///
+    /// Asserted as "no events at all" rather than "no event mentioning low", because the keys
+    /// spell the tier as `warning`/`critical` and a search for the word the user reads passes
+    /// against an implementation that mutes nothing. That exact vacuous assertion is what the
+    /// Android test started as.
+    func testAMutedAccountRaisesNothingAtAll() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let credit = ResetCredit(
+            id: "c1", grantedAt: now.addingTimeInterval(-1_000),
+            expiresAt: now.addingTimeInterval(3_600), status: "available")
+        let summary = account(remaining: 5, exhausted: false, credits: [credit])
+
+        let loud = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: settings, states: [:], now: now)
+        XCTAssertFalse(loud.events.isEmpty, "precondition: this account has something to say")
+        XCTAssertFalse(loud.standingFindings.isEmpty, "precondition: and a standing fact too")
+
+        let silent = NotificationEvaluator.evaluate(
+            accounts: [summary], settings: muted, states: [:], now: now)
+
+        XCTAssertTrue(silent.events.isEmpty, "muted: \(silent.events.map(\.key))")
+        XCTAssertTrue(silent.standingFindings.isEmpty, "muted: \(silent.standingFindings)")
+    }
+
+    /// A failed sign-in is a standing fact, and the one most tempting to exempt from a mute.
+    /// It is not exempt: the user asked this account not to speak.
+    func testAMutedAccountDoesNotReportItsExpiredSignIn() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let summary = account(
+            remaining: nil, failed: true, errorMessage: "credentials expired")
+
+        XCTAssertEqual(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: settings, states: [:], now: now
+            ).standingFindings,
+            ["Account acct needs to be reconnected"],
+            "precondition")
+
+        XCTAssertTrue(
+            NotificationEvaluator.evaluate(
+                accounts: [summary], settings: muted, states: [:], now: now
+            ).standingFindings.isEmpty)
+    }
+
+    func testMutingOneAccountLeavesItsNeighbourAlone() {
+        var muted = settings
+        muted.mutedAccountIDs = ["quiet"]
+
+        let outcome = NotificationEvaluator.evaluate(
+            accounts: [account("quiet", remaining: 5), account("loud", remaining: 5)],
+            settings: muted,
+            states: [:],
+            now: now)
+
+        XCTAssertTrue(
+            outcome.events.allSatisfy { $0.accountId == "loud" },
+            "\(outcome.events.map(\.accountId))")
+        XCTAssertFalse(outcome.events.isEmpty, "the unmuted account must still be heard")
+    }
+
+    /// Unmuting resumes; it does not replay.
+    ///
+    /// A muted account's state still advances — that is why the mute is checked where events
+    /// are raised and not by skipping the account — so switching it back on says what is true
+    /// NOW, once, rather than delivering the backlog it passed while silent.
+    func testAnUnmutedAccountSpeaksAgainWithoutReplayingTheBacklog() {
+        var muted = settings
+        muted.mutedAccountIDs = ["acct"]
+        let publisher = Publisher()
+
+        XCTAssertEqual(publisher.sync([account(remaining: 15)], muted, now), [])
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 5, fetchedAt: now.addingTimeInterval(60))],
+                muted, now.addingTimeInterval(60)),
+            [])
+
+        let spoken = publisher.sync(
+            [account(remaining: 5, fetchedAt: now.addingTimeInterval(120))],
+            settings, now.addingTimeInterval(120))
+
+        // One line, describing the tier it is at now — not one per threshold it crossed while
+        // the user had it switched off.
+        XCTAssertEqual(spoken, ["Account acct · 5h limit: less than 10% remaining"])
+    }
+
     func testStateForAnAccountMissingFromThisSyncIsCarriedThrough() {
         // The outcome is built from a map that must be SEEDED with everything handed in.
         // Starting it empty reads more naturally — the outcome is its values, and seeding
