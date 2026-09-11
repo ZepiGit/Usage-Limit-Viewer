@@ -464,4 +464,109 @@ class XaiBillingParserTest {
         ).single()
         assertEquals(90.0, included.usedPercent!!, 1e-9)
     }
+
+    // ---- absent percentage: proto3 implicit presence ----
+
+    private val liveNow = Instant.parse("2026-09-05T12:00:00Z").toEpochMilli()
+
+    /** The credit view as the wire carries it when nothing has been spent: no percentage. */
+    private val untouchedWeek = """
+        { "config": {
+            "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                               "start": "2026-09-02T00:00:00Z",
+                               "end":   "2026-09-09T00:00:00Z" },
+            "onDemandCap": { "val": 0 }, "onDemandUsed": { "val": 0 },
+            "isUnifiedBillingUser": true } }
+    """.trimIndent()
+
+    /**
+     * xAI's billing message is proto3 and `credit_usage_percent` has implicit presence: an
+     * exact zero is not written to the wire. The one week the user has spent nothing in used
+     * to be the week the row vanished — the account showed only its monthly limit.
+     */
+    @Test
+    fun `an absent percentage inside the live period is zero, not a missing row`() {
+        val windows = XaiBillingParser.parseCredits(JsonSupport.parseObject(untouchedWeek), liveNow)
+
+        assertEquals(1, windows.size)
+        val window = windows.single()
+        assertEquals(XaiBillingParser.CREDITS_WINDOW_ID, window.id)
+        assertEquals(0.0, window.usedPercent!!, 0.0)
+        assertEquals(WindowCategory.WEEKLY, window.category)
+        assertEquals(Instant.parse("2026-09-09T00:00:00Z").toEpochMilli(), window.resetAt)
+        assertFalse(window.exhausted)
+    }
+
+    @Test
+    fun `an absent percentage outside the reported period stays a missing row`() {
+        // The zero is only readable for the period that contains now: a stale period is a
+        // payload this parser does not understand, and inventing a bar for it would show
+        // "100 % remaining" for a week that has already ended.
+        val afterThePeriod = Instant.parse("2026-09-20T12:00:00Z").toEpochMilli()
+        assertTrue(XaiBillingParser.parseCredits(JsonSupport.parseObject(untouchedWeek), afterThePeriod).isEmpty())
+
+        // And with no period at all there is nothing to anchor the zero to.
+        val noPeriod = """{ "config": { "isUnifiedBillingUser": true, "onDemandCap": { "val": 0 } } }"""
+        assertTrue(XaiBillingParser.parseCredits(JsonSupport.parseObject(noPeriod), liveNow).isEmpty())
+    }
+
+    @Test
+    fun `the flat usagePeriod fields identify the weekly window`() {
+        val flat = """
+            { "creditUsagePercent": 12.0,
+              "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+              "usagePeriodStart": "2026-09-02T00:00:00Z",
+              "usagePeriodEnd":   "2026-09-09T00:00:00Z" }
+        """.trimIndent()
+
+        val window = XaiBillingParser.parseCredits(JsonSupport.parseObject(flat), liveNow).single()
+
+        assertEquals(12.0, window.usedPercent!!, 0.001)
+        assertEquals(WindowCategory.WEEKLY, window.category)
+        assertEquals(604_800L, window.periodSeconds)
+        assertEquals(Instant.parse("2026-09-09T00:00:00Z").toEpochMilli(), window.resetAt)
+
+        // The flat spelling anchors the implicit zero just as the nested one does.
+        val flatUntouched = """
+            { "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+              "usagePeriodStart": "2026-09-02T00:00:00Z",
+              "usagePeriodEnd":   "2026-09-09T00:00:00Z" }
+        """.trimIndent()
+        assertEquals(0.0, XaiBillingParser.parseCredits(JsonSupport.parseObject(flatUntouched), liveNow).single().usedPercent!!, 0.0)
+    }
+
+    @Test
+    fun `the unified billing view yields the weekly row beside the monthly one`() {
+        // The plain billing view of a unified-billing account carries the weekly figures
+        // too. Reading them here keeps the weekly row when the credit view alone stops
+        // answering, and merge keeps exactly one copy when both do.
+        val unified = """
+            { "monthlyLimit": 10000, "used": 4200, "onDemandCap": 0,
+              "creditUsagePercent": 41.0,
+              "usagePeriodType": "USAGE_PERIOD_TYPE_WEEKLY",
+              "usagePeriodStart": "2026-09-02T00:00:00Z",
+              "usagePeriodEnd":   "2026-09-09T00:00:00Z",
+              "billingPeriodStart": "2026-09-01T00:00:00Z",
+              "billingPeriodEnd":   "2026-10-01T00:00:00Z" }
+        """.trimIndent()
+
+        val fromBilling = XaiBillingParser.parseBilling(JsonSupport.parseObject(unified), liveNow)
+        assertEquals(
+            listOf(XaiBillingParser.CREDITS_WINDOW_ID, XaiBillingParser.MONTHLY_WINDOW_ID),
+            fromBilling.map { it.id },
+        )
+        assertEquals(41.0, fromBilling.first().usedPercent!!, 0.001)
+        assertEquals(42.0, fromBilling.last().usedPercent!!, 0.001)
+
+        val fromCredits = XaiBillingParser.parseCredits(JsonSupport.parseObject(creditsPayload), liveNow)
+        val merged = XaiBillingParser.merge(fromCredits, fromBilling)
+        assertEquals(1, merged.count { it.id == XaiBillingParser.CREDITS_WINDOW_ID })
+        assertEquals("the credit view's own figure wins", 34.0, merged.first().usedPercent!!, 0.001)
+
+        // A legacy billing view has no weekly figures and keeps yielding only its own rows.
+        assertEquals(
+            listOf(XaiBillingParser.MONTHLY_WINDOW_ID, XaiBillingParser.ON_DEMAND_WINDOW_ID),
+            billing(billingPayload).map { it.id },
+        )
+    }
 }
