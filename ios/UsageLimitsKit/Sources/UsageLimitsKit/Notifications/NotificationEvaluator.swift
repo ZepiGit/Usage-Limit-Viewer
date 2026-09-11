@@ -392,11 +392,20 @@ public enum NotificationEvaluator {
         let orderedStates = carried.values.sorted { $0.accountId < $1.accountId }
         return Outcome(
             states: orderedStates,
-            // Filtered here rather than at each `append`, as on Android: an emit site added
-            // later is covered by this without anyone remembering to guard it. Every event a
-            // muted account would have raised is dropped entirely — including the blank-line
-            // ones, which only exist to consume a key for a caller that will never see them.
-            events: events.filter { !settings.mutedAccountIDs.contains($0.accountId) },
+            // Silenced here rather than at each `append`, as on Android: an emit site added
+            // later is covered by this without anyone remembering to guard it.
+            //
+            // Silenced by BLANKING the line, not by dropping the event. A mute is a disabled
+            // setting scoped to one account, and it follows the rule every disabled setting
+            // here follows: the key is still claimed, so switching back on delivers what
+            // happens NEXT rather than a threshold crossed while the user had asked not to
+            // hear about it. Dropping the events left those keys unclaimed; the first sync
+            // after unmuting then found them, with text, and announced a dip from days ago.
+            events: events.map { event in
+                settings.mutedAccountIDs.contains(event.accountId)
+                    ? Event(accountId: event.accountId, key: event.key, line: "")
+                    : event
+            },
             standingFindings: findings)
     }
 

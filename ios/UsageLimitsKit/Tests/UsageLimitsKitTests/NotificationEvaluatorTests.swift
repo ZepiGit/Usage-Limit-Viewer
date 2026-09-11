@@ -530,7 +530,14 @@ final class NotificationEvaluatorTests: XCTestCase {
         let silent = NotificationEvaluator.evaluate(
             accounts: [summary], settings: muted, states: [:], now: now)
 
-        XCTAssertTrue(silent.events.isEmpty, "muted: \(silent.events.map(\.key))")
+        // Both halves matter. The events must still exist so the ledger can claim their keys —
+        // that is what stops the threshold being announced the day the mute is lifted — and
+        // every one must be blank so the shade stays quiet now. "No events" would pass an
+        // implementation that drops them, which is the replay-on-unmute bug.
+        XCTAssertFalse(silent.events.isEmpty, "the keys are still offered for claiming")
+        XCTAssertTrue(
+            silent.events.allSatisfy { $0.line.isEmpty },
+            "muted, but with text: \(silent.events.filter { !$0.line.isEmpty }.map(\.key))")
         XCTAssertTrue(silent.standingFindings.isEmpty, "muted: \(silent.standingFindings)")
     }
 
@@ -565,18 +572,25 @@ final class NotificationEvaluatorTests: XCTestCase {
             states: [:],
             now: now)
 
+        let spoken = outcome.events.filter { !$0.line.isEmpty }
         XCTAssertTrue(
-            outcome.events.allSatisfy { $0.accountId == "loud" },
-            "\(outcome.events.map(\.accountId))")
-        XCTAssertFalse(outcome.events.isEmpty, "the unmuted account must still be heard")
+            spoken.allSatisfy { $0.accountId == "loud" },
+            "\(spoken.map(\.accountId))")
+        XCTAssertFalse(spoken.isEmpty, "the unmuted account must still be heard")
+        XCTAssertTrue(
+            outcome.events.contains { $0.accountId == "quiet" },
+            "the silenced one still has its keys claimed")
     }
 
-    /// Unmuting resumes; it does not replay.
+    /// Unmuting resumes; it does not replay — and it does not restate either.
     ///
-    /// A muted account's state still advances — that is why the mute is checked where events
-    /// are raised and not by skipping the account — so switching it back on says what is true
-    /// NOW, once, rather than delivering the backlog it passed while silent.
-    func testAnUnmutedAccountSpeaksAgainWithoutReplayingTheBacklog() {
+    /// A mute is a disabled setting scoped to one account, and it follows the rule every
+    /// disabled setting here follows: the keys are claimed, blank, while it is off. So the
+    /// thresholds crossed during the mute are spent, and lifting it announces only what
+    /// happens NEXT. The first version of this test expected the current tier to be restated
+    /// once on unmute; that was the "drop the events" implementation describing itself, and
+    /// it contradicted the rule the rest of the evaluator is built on.
+    func testUnmutingDoesNotAnnounceAThresholdCrossedWhileMuted() {
         var muted = settings
         muted.mutedAccountIDs = ["acct"]
         let publisher = Publisher()
@@ -588,13 +602,19 @@ final class NotificationEvaluatorTests: XCTestCase {
                 muted, now.addingTimeInterval(60)),
             [])
 
-        let spoken = publisher.sync(
-            [account(remaining: 5, fetchedAt: now.addingTimeInterval(120))],
-            settings, now.addingTimeInterval(120))
+        // Unmuted, still at 5 %, newer snapshot: both tiers were claimed while silent.
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 5, fetchedAt: now.addingTimeInterval(120))],
+                settings, now.addingTimeInterval(120)),
+            [])
 
-        // One line, describing the tier it is at now — not one per threshold it crossed while
-        // the user had it switched off.
-        XCTAssertEqual(spoken, ["Account acct · 5h limit: less than 10% remaining"])
+        // A NEW edge after unmuting is still heard — silence is not permanent.
+        XCTAssertEqual(
+            publisher.sync(
+                [account(remaining: 0, fetchedAt: now.addingTimeInterval(180), exhausted: true)],
+                settings, now.addingTimeInterval(180)),
+            ["Account acct · 5h limit exhausted"])
     }
 
     func testStateForAnAccountMissingFromThisSyncIsCarriedThrough() {

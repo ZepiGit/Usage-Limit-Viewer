@@ -114,6 +114,18 @@ interface NotificationDao {
     @Query("SELECT * FROM notification_state")
     suspend fun allStates(): List<NotificationStateEntity>
 
+    /**
+     * The accounts that exist RIGHT NOW, read inside the publisher's transaction.
+     *
+     * The publisher is handed a list read moments earlier. An account disconnected in between
+     * — the user tapping "Disconnect" while a background sync is mid-pass — is still in that
+     * list, and both tables below carry a foreign key to it: inserting its event or upserting
+     * its state raises SQLITE_CONSTRAINT_FOREIGNKEY and aborts the whole publication, the
+     * surviving accounts' alerts included.
+     */
+    @Query("SELECT localId FROM accounts")
+    suspend fun existingAccountIds(): List<String>
+
     @Upsert
     suspend fun upsertStates(states: List<NotificationStateEntity>)
 

@@ -32,11 +32,14 @@ class AppContainer(context: Context) {
 
     private val database: UsageLimitsDatabase by lazy { UsageLimitsDatabase.build(appContext) }
 
+    /** One runner for everything that must serialise against the database's other writers. */
+    val transactions by lazy { RoomTransactionRunner(database) }
+
     val repository: UsageRepository by lazy {
         UsageRepository(
             database.accountDao(),
             database.usageSnapshotDao(),
-            transactions = RoomTransactionRunner(database),
+            transactions = transactions,
         )
     }
 
