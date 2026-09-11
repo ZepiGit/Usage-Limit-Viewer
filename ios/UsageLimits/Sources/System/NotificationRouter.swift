@@ -36,17 +36,22 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
+    /// The `async` form of the delegate method, not the completion-handler one.
+    ///
+    /// Under Swift 6 strict concurrency the completion-handler form cannot be written from a
+    /// main-actor class: the handler is not `Sendable`, so hopping to the main actor to read
+    /// `onAccountTapped` and then calling it is "sending 'completionHandler' risks causing data
+    /// races" — the exact error the real SDK build produced, which the Linux shim could not.
+    /// The `async` form has no handler to send. Only the extracted id, a `String`, crosses the
+    /// isolation boundary; `response` itself is read here and never escapes.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
-    ) {
+        didReceive response: UNNotificationResponse
+    ) async {
         let identifier = response.notification.request.content.userInfo["accountId"] as? String
-        Task { @MainActor in
-            if let identifier, !identifier.isEmpty {
-                NotificationRouter.shared.onAccountTapped?(identifier)
-            }
-            completionHandler()
+        guard let identifier, !identifier.isEmpty else { return }
+        await MainActor.run {
+            NotificationRouter.shared.onAccountTapped?(identifier)
         }
     }
 }
