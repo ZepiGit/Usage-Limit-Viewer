@@ -83,4 +83,31 @@ class JsonSupportParityTest {
         assertNull("a garbage expiry must be absent, not in the past", expiresAt)
     }
 
+    @Test
+    fun `a year that parses but does not fit epoch milliseconds is no instant, not an exception`() {
+        // The last parse attempt caught only the PARSE exception; toEpochMilli() throws an
+        // ArithmeticException for a year past the epoch's range, and that escaped a function
+        // whose contract is null.
+        assertNull(Instants.parse("+999999999-12-31T23:59:59"))
+    }
+
+    @Test
+    fun `seconds that overflow when converted are no duration`() {
+        // `long()` rightly accepts a real JSON integer; the multiply is where it went wrong.
+        // Long.MAX_VALUE * 1000 wraps to -1000, which is one second in the past.
+        assertNull(JsonSupport.secondsToMillis(Long.MAX_VALUE))
+        assertNull(JsonSupport.secondsToMillis(-1L))
+        assertNull(JsonSupport.secondsToMillis(null))
+        assertEquals(18_000_000L, JsonSupport.secondsToMillis(18_000L))
+    }
+
+    @Test
+    fun `an expiry that cannot be represented is unknown rather than already past`() {
+        val now = 1_757_000_000_000L
+
+        assertNull(JsonSupport.expiryAfterSeconds(Long.MAX_VALUE, now))
+        assertNull(JsonSupport.expiryAfterSeconds(Long.MAX_VALUE / 1000, now))
+        assertEquals(now + 3_600_000L, JsonSupport.expiryAfterSeconds(3_600L, now))
+    }
+
 }

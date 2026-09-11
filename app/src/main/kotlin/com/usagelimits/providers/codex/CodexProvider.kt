@@ -74,7 +74,7 @@ class CodexProvider(
             verificationUri = Codex.DEVICE_VERIFICATION_URL,
             verificationUriComplete = null,
             expiresAt = nowMs() + DEVICE_TIMEOUT_MS,
-            pollIntervalMs = intervalSeconds * 1000,
+            pollIntervalMs = JsonSupport.secondsToMillis(intervalSeconds) ?: DEFAULT_POLL_SECONDS * 1000,
         )
     }
 
@@ -137,7 +137,9 @@ class CodexProvider(
         throw ProviderException.LoginCancelled("Device login expired before it was approved")
     }
 
-    private suspend fun exchangeCode(code: String, codeVerifier: String): OAuthCredentials {
+    // Internal so the one-time-grant rule on this exchange can be tested directly; the only
+    // other route in is a complete device or loopback login, which no unit test can drive.
+    internal suspend fun exchangeCode(code: String, codeVerifier: String): OAuthCredentials {
         val response = http.request(
             url = Codex.TOKEN_URL,
             method = "POST",
@@ -153,6 +155,12 @@ class CodexProvider(
                     "code_verifier" to codeVerifier,
                 ),
             ),
+            // An authorization code is spent by ARRIVING at the endpoint, exactly like a
+            // rotating refresh grant — and the refresh path already says so. This one did
+            // not, so a 502 from something in front of the token endpoint had the client
+            // re-present the code, which the server then refused as consumed, and a sign-in
+            // that had in fact succeeded reported a failure.
+            oneTimeGrant = true,
         )
         return toCredentials(JsonSupport.parseObject(response.body))
     }
@@ -317,7 +325,7 @@ class CodexProvider(
             accessToken = accessToken,
             refreshToken = JsonSupport.string(payload, "refresh_token"),
             idToken = JsonSupport.string(payload, "id_token"),
-            expiresAt = expiresIn?.let { nowMs() + it * 1000 },
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs()),
         )
     }
 

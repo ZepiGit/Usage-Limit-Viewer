@@ -115,4 +115,38 @@ class OneTimeGrantRetryTest {
         assertTrue(response.body.contains("access_token"))
         assertEquals("one failure then one success", 2, calls.get())
     }
+    /**
+     * The authorization-code exchange is the same kind of request as a refresh: the code is
+     * spent by ARRIVING. All three exchanges omitted the flag, so a 502 from something in front
+     * of the token endpoint re-presented a code the endpoint had already consumed.
+     */
+    @Test
+    fun `an authorization-code exchange is presented once, whatever answers`() = runBlocking {
+        for ((name, exchange) in listOf<Pair<String, suspend (HttpClient) -> Unit>>(
+            "codex" to { c -> com.usagelimits.providers.codex.CodexProvider(c).exchangeCode("C1", "v"); Unit },
+            "claude" to { c -> com.usagelimits.providers.claude.ClaudeProvider(c).exchangeCode("C1", "v", "s"); Unit },
+            "antigravity" to { c -> com.usagelimits.providers.antigravity.AntigravityProvider(c).exchangeCode("C1", "v"); Unit },
+        )) {
+            val calls = AtomicInteger(0)
+            val client = HttpClient(
+                OkHttpClient.Builder()
+                    .addInterceptor { chain ->
+                        calls.incrementAndGet()
+                        Response.Builder()
+                            .request(chain.request())
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(502)
+                            .message("Bad Gateway")
+                            .body("".toResponseBody(HttpClient.JSON_MEDIA_TYPE))
+                            .build()
+                    }
+                    .build(),
+            )
+
+            runCatching { exchange(client) }
+
+            assertEquals("$name re-presented a consumed code", 1, calls.get())
+        }
+    }
+
 }
