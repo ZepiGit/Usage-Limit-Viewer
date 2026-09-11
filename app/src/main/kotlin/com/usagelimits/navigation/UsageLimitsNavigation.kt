@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.People
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +50,7 @@ import com.usagelimits.feature.settings.SettingsScreen
 import com.usagelimits.ui.ConstrainedContent
 import com.usagelimits.ui.NavigationLayout
 import com.usagelimits.ui.theme.UsageColors
+import com.usagelimits.ui.AppIcons
 
 /**
  * How often relative times refresh.
@@ -80,8 +79,8 @@ private data class TabItem(
 
 private val TABS = listOf(
     TabItem(Destination.Overview, "Overview", Icons.Default.Home),
-    TabItem(Destination.Accounts, "Accounts", Icons.Default.People),
-    TabItem(Destination.Resets, "Resets", Icons.Default.Schedule),
+    TabItem(Destination.Accounts, "Accounts", AppIcons.People),
+    TabItem(Destination.Resets, "Resets", AppIcons.Schedule),
     TabItem(Destination.Settings, "Settings", Icons.Default.Settings),
 )
 

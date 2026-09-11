@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -57,6 +56,7 @@ import com.usagelimits.ui.components.UsageCard
 import com.usagelimits.ui.components.UsageWindowRow
 import com.usagelimits.ui.theme.SeverityPalette
 import com.usagelimits.ui.theme.UsageColors
+import com.usagelimits.ui.AppIcons
 
 /** Short symbol standing in for a provider mark. */
 fun providerSymbol(provider: ProviderId): String = when (provider) {
@@ -467,7 +467,7 @@ fun AccountCard(
             }
             StatusPill(severity)
             Icon(
-                imageVector = Icons.Default.ChevronRight,
+                imageVector = AppIcons.ChevronRight,
                 contentDescription = null,
                 tint = UsageColors.TextTertiary,
             )
