@@ -369,7 +369,7 @@ public struct LoopbackLogin: Sendable {
             // consent without `prompt=consent`. Without them the account works for one hour and
             // then signs itself out, which reads to a user as the app being broken.
             return ["access_type": "offline", "prompt": "consent"]
-        case .claude, .codex, .xai:
+        case .claude, .codex, .xai, .kimi:
             return [:]
         }
     }
