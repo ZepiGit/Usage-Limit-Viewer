@@ -136,7 +136,9 @@ class ClaudeProvider(
         )
     }
 
-    private suspend fun exchangeCode(
+    // Internal so the one-time-grant rule on this exchange can be tested directly; the only
+    // other route in is a complete device or loopback login, which no unit test can drive.
+    internal suspend fun exchangeCode(
         code: String,
         codeVerifier: String,
         state: String,
@@ -159,6 +161,12 @@ class ClaudeProvider(
                     },
                 ),
             ),
+            // An authorization code is spent by ARRIVING at the endpoint, exactly like a
+            // rotating refresh grant — and the refresh path already says so. This one did
+            // not, so a 502 from something in front of the token endpoint had the client
+            // re-present the code, which the server then refused as consumed, and a sign-in
+            // that had in fact succeeded reported a failure.
+            oneTimeGrant = true,
         )
         return toCredentials(JsonSupport.parseObject(response.body))
     }
@@ -246,7 +254,7 @@ class ClaudeProvider(
             accessToken = accessToken,
             refreshToken = JsonSupport.string(payload, "refresh_token", "refreshToken"),
             idToken = JsonSupport.string(payload, "id_token", "idToken"),
-            expiresAt = expiresIn?.let { nowMs() + it * 1000 },
+            expiresAt = JsonSupport.expiryAfterSeconds(expiresIn, nowMs()),
         )
     }
 
