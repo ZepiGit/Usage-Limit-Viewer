@@ -37,8 +37,18 @@ object WidgetUpdater {
      * which is the case for one placed but never opened — so a fresh widget still shows
      * something useful.
      */
-    suspend fun loadSnapshot(context: Context, glanceId: GlanceId): WidgetSnapshot {
-        val app = context.applicationContext as? UsageLimitsApp ?: return WidgetSnapshot.Empty
+    /**
+     * What one placed widget needs to draw itself: its numbers, and how it was configured to
+     * look. Returned together because both come from the same two reads, and a second call to
+     * fetch the config would repeat them.
+     */
+    data class WidgetView(
+        val snapshot: WidgetSnapshot,
+        val transparent: Boolean = false,
+    )
+
+    suspend fun load(context: Context, glanceId: GlanceId): WidgetView {
+        val app = context.applicationContext as? UsageLimitsApp ?: return WidgetView(WidgetSnapshot.Empty)
         val container = app.container
 
         val appWidgetId = runCatching {
@@ -49,13 +59,16 @@ object WidgetUpdater {
 
         val interval = container.settingsStore.settings.first().syncIntervalMinutes
 
-        return WidgetDataBuilder.build(
-            all = container.repository.accountUsageOnce(),
-            nowMs = System.currentTimeMillis(),
-            scope = WidgetScope.fromName(config?.scope),
-            accountId = config?.accountId,
-            providerId = config?.provider,
-            staleAfterMs = Severity.staleAfterMs(interval),
+        return WidgetView(
+            snapshot = WidgetDataBuilder.build(
+                all = container.repository.accountUsageOnce(),
+                nowMs = System.currentTimeMillis(),
+                scope = WidgetScope.fromName(config?.scope),
+                accountId = config?.accountId,
+                providerId = config?.provider,
+                staleAfterMs = Severity.staleAfterMs(interval),
+            ),
+            transparent = config?.transparent ?: false,
         )
     }
 }

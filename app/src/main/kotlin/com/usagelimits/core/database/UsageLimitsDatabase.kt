@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotificationStateEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -120,12 +120,28 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * A placed widget may drop its own background and show the wallpaper instead.
+         *
+         * Defaults to 0 — opaque — so every widget already on a home screen keeps the look it
+         * was placed with rather than turning transparent under its owner.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE widget_configs ADD COLUMN transparent INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 UsageLimitsDatabase::class.java,
                 DATABASE_NAME,
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
+            ).addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+            ).build()
     }
 }
 

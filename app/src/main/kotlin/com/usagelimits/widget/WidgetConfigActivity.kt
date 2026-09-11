@@ -42,6 +42,7 @@ import com.usagelimits.feature.overview.providerTint
 import com.usagelimits.ui.components.IconBadge
 import com.usagelimits.ui.components.SectionHeader
 import com.usagelimits.ui.components.UsageCard
+import com.usagelimits.ui.components.ToggleRow
 import com.usagelimits.ui.theme.UsageColors
 import com.usagelimits.ui.theme.UsageLimitsTheme
 import kotlinx.coroutines.launch
@@ -86,7 +87,7 @@ class WidgetConfigActivity : ComponentActivity() {
 
                 WidgetConfigScreen(
                     accounts = accounts,
-                    onChoose = { scope, accountId, provider ->
+                    onChoose = { scope, accountId, provider, transparent ->
                         lifecycleScope.launch {
                             container.widgetConfigDao.upsert(
                                 WidgetConfigEntity(
@@ -95,6 +96,7 @@ class WidgetConfigActivity : ComponentActivity() {
                                     accountId = accountId,
                                     provider = provider?.id,
                                     updatedAt = System.currentTimeMillis(),
+                                    transparent = transparent,
                                 ),
                             )
                             // Repaint immediately so the widget lands showing the chosen
@@ -115,9 +117,14 @@ class WidgetConfigActivity : ComponentActivity() {
 @Composable
 private fun WidgetConfigScreen(
     accounts: List<AccountUsage>,
-    onChoose: (WidgetScope, String?, ProviderId?) -> Unit,
+    onChoose: (WidgetScope, String?, ProviderId?, Boolean) -> Unit,
 ) {
     val providers = accounts.map { it.account.provider }.distinct()
+
+    // Chosen BEFORE the scope, because picking a scope is what commits the whole
+    // configuration and closes this screen. A switch below the list the user never reaches
+    // would be a setting that exists and cannot be set.
+    var transparent by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -143,11 +150,22 @@ private fun WidgetConfigScreen(
         }
 
         item {
+            UsageCard {
+                ToggleRow(
+                    title = "Transparent background",
+                    subtitle = "Drop the panel and let the wallpaper through",
+                    checked = transparent,
+                    onChange = { transparent = it },
+                )
+            }
+        }
+
+        item {
             ChoiceRow(
                 symbol = "◈",
                 title = "Most important limits",
                 subtitle = "Automatically follows whatever is closest to running out",
-            ) { onChoose(WidgetScope.MOST_CRITICAL, null, null) }
+            ) { onChoose(WidgetScope.MOST_CRITICAL, null, null, transparent) }
         }
 
         item {
@@ -155,7 +173,7 @@ private fun WidgetConfigScreen(
                 symbol = "▤",
                 title = "All accounts",
                 subtitle = "Everything, combined",
-            ) { onChoose(WidgetScope.ALL_ACCOUNTS, null, null) }
+            ) { onChoose(WidgetScope.ALL_ACCOUNTS, null, null, transparent) }
         }
 
         if (providers.isNotEmpty()) {
@@ -167,7 +185,7 @@ private fun WidgetConfigScreen(
                     tintFor = provider,
                     title = provider.displayName,
                     subtitle = "All ${provider.displayName} accounts",
-                ) { onChoose(WidgetScope.PROVIDER, null, provider) }
+                ) { onChoose(WidgetScope.PROVIDER, null, provider, transparent) }
             }
         }
 
@@ -180,7 +198,7 @@ private fun WidgetConfigScreen(
                     tintFor = usage.account.provider,
                     title = usage.account.label,
                     subtitle = usage.account.provider.displayName,
-                ) { onChoose(WidgetScope.ACCOUNT, usage.account.localId, null) }
+                ) { onChoose(WidgetScope.ACCOUNT, usage.account.localId, null, transparent) }
             }
         }
 
