@@ -146,6 +146,8 @@ fun OverviewScreen(
                 usage = usage,
                 nowMs = nowMs,
                 staleAfterMs = state.staleAfterMs,
+                showTier = state.settings.showSubscriptionTier,
+                showRenewal = state.settings.showRenewalTime,
                 modifier = Modifier
                     // Above its neighbours while it is being carried, or the cards it passes
                     // over are drawn on top of it.
@@ -368,6 +370,32 @@ private fun SummaryStat(
 }
 
 /**
+ * When the account's LONG allowance comes back, as opposed to its next reset.
+ *
+ * The next reset is nearly always the short rolling window — five hours on Codex — and it is
+ * already on the card. What is not on the card is the date the weekly or monthly allowance
+ * starts over, which is the one people plan around.
+ *
+ * The provider does not state a subscription renewal date anywhere in the usage payload, so
+ * this is derived: the longest-period window's own reset. That makes it exactly "when the big
+ * bucket refills" and nothing more — it is not a billing date and does not claim to be.
+ *
+ * Null when there is only one window, since then the renewal IS the next reset and printing it
+ * twice under different names is worse than leaving it out.
+ */
+private fun renewalLabel(usage: AccountUsage, nowMs: Long): String? {
+    val windows = usage.snapshot?.windows.orEmpty()
+    if (windows.size < 2) return null
+    // `periodSeconds` is nullable — a provider that does not state a window's duration
+    // sorts below every window that does, rather than being treated as the longest.
+    val longest = windows.maxByOrNull { it.periodSeconds ?: -1L } ?: return null
+    val soonest = windows.mapNotNull { it.resetAt }.filter { it > nowMs }.minOrNull()
+    val renewsAt = longest.resetAt?.takeIf { it > nowMs } ?: return null
+    if (renewsAt == soonest) return null
+    return "${longest.label} renews ${Countdown.format(renewsAt - nowMs)}"
+}
+
+/**
  * One account: identity, status, and its quota rows.
  *
  * Windows are grouped when the provider supplies a group (Antigravity quota groups, Codex code
@@ -379,6 +407,8 @@ fun AccountCard(
     usage: AccountUsage,
     nowMs: Long,
     staleAfterMs: Long,
+    showTier: Boolean = true,
+    showRenewal: Boolean = false,
     // Before `onClick`, so the trailing-lambda call sites keep binding their lambda to the
     // click and not to this.
     modifier: Modifier = Modifier,
@@ -399,7 +429,11 @@ fun AccountCard(
                 Text(
                     text = buildString {
                         append(usage.account.provider.displayName)
-                        usage.account.plan?.takeIf { it.isNotBlank() }?.let { append(" ").append(it) }
+                        if (showTier) {
+                            usage.account.plan
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { append(" ").append(it) }
+                        }
                     },
                     style = MaterialTheme.typography.titleMedium,
                     color = UsageColors.TextPrimary,
@@ -411,6 +445,16 @@ fun AccountCard(
                     color = UsageColors.TextSecondary,
                     maxLines = 1,
                 )
+                if (showRenewal) {
+                    renewalLabel(usage, nowMs)?.let { renewal ->
+                        Text(
+                            text = renewal,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = UsageColors.TextTertiary,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             StatusPill(severity)
             Icon(
