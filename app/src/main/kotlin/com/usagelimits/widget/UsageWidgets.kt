@@ -16,6 +16,8 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.LinearProgressIndicator
 import androidx.compose.ui.unit.DpSize
 import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.lazy.LazyColumn
+import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -132,7 +134,8 @@ class CompactUsageWidget : GlanceAppWidget() {
     )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snapshot = WidgetUpdater.loadSnapshot(context, id)
+        val view = WidgetUpdater.load(context, id)
+        val snapshot = view.snapshot
 
         provideContent {
             GlanceTheme {
@@ -140,7 +143,7 @@ class CompactUsageWidget : GlanceAppWidget() {
                     modifier = GlanceModifier
                         .fillMaxSize()
                         .cornerRadius(24.dp)
-                        .background(W.Background)
+                        .background(if (view.transparent) Color.Transparent else W.Background)
                         .padding(10.dp)
                         .clickable(actionStartActivity<MainActivity>()),
                     verticalAlignment = Alignment.CenterVertically,
@@ -253,7 +256,8 @@ class DetailedUsageWidget : GlanceAppWidget() {
     )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snapshot = WidgetUpdater.loadSnapshot(context, id)
+        val view = WidgetUpdater.load(context, id)
+        val snapshot = view.snapshot
 
         provideContent {
             GlanceTheme {
@@ -261,7 +265,7 @@ class DetailedUsageWidget : GlanceAppWidget() {
                     modifier = GlanceModifier
                         .fillMaxSize()
                         .cornerRadius(24.dp)
-                        .background(W.Background)
+                        .background(if (view.transparent) Color.Transparent else W.Background)
                         .padding(12.dp)
                         .clickable(actionStartActivity<MainActivity>()),
                 ) {
@@ -277,19 +281,19 @@ class DetailedUsageWidget : GlanceAppWidget() {
                             ),
                         )
                     } else {
-                        snapshot.accounts.take(MAX_ACCOUNTS).forEach { account ->
-                            AccountCard(account)
-                            Spacer(GlanceModifier.height(6.dp))
-                        }
-                        val hidden = snapshot.accounts.size - MAX_ACCOUNTS
-                        if (hidden > 0) {
-                            Text(
-                                text = "+$hidden more",
-                                style = TextStyle(
-                                    color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                                    fontSize = 11.sp,
-                                ),
-                            )
+                        // Scrollable rather than capped. This used to render the first few
+                        // accounts and a "+N more" line, which is honest but useless: the
+                        // accounts it hid were hidden by list position, so an exhausted account
+                        // that happened to sort low was invisible on the surface whose whole
+                        // job is to show it. Glance's LazyColumn scrolls inside the host, so
+                        // eight accounts fit a 1x4 and all of them are reachable.
+                        LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
+                            items(snapshot.accounts, itemId = { it.accountId.hashCode().toLong() }) {
+                                Column {
+                                    AccountCard(it)
+                                    Spacer(GlanceModifier.height(6.dp))
+                                }
+                            }
                         }
                     }
                 }
@@ -457,10 +461,6 @@ class DetailedUsageWidget : GlanceAppWidget() {
                 }
             }
         }
-    }
-
-    private companion object {
-        const val MAX_ACCOUNTS = 3
     }
 }
 
