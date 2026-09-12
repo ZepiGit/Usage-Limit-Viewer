@@ -63,6 +63,13 @@ final class AppLaunchUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
     }
 
+    private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        // iPadOS exposes the floating tab cell and its child with the same label.
+        // Select the hittable match, then assert the destination after tapping it.
+        let matches = app.buttons.matching(identifier: label)
+        return matches.allElementsBoundByIndex.first { $0.isHittable } ?? matches.firstMatch
+    }
+
     func testTheAppLaunches() {
         let app = launch()
 
@@ -77,7 +84,7 @@ final class AppLaunchUITests: XCTestCase {
 
         for tab in ["Overview", "Accounts", "Resets", "Settings"] {
             XCTAssertTrue(
-                app.buttons[tab].waitForExistence(timeout: 10),
+                tabButton(tab, in: app).waitForExistence(timeout: 10),
                 "the \(tab) tab should be reachable")
         }
     }
@@ -88,9 +95,10 @@ final class AppLaunchUITests: XCTestCase {
         let app = launch()
 
         for tab in ["Accounts", "Resets", "Settings", "Overview"] {
-            let button = app.buttons[tab]
+            let button = tabButton(tab, in: app)
             XCTAssertTrue(button.waitForExistence(timeout: 10), "\(tab) should exist")
             button.tap()
+            XCTAssertTrue(app.navigationBars[tab].waitForExistence(timeout: 10))
             XCTAssertEqual(
                 app.state, .runningForeground, "the app should survive opening \(tab)")
         }
@@ -103,7 +111,7 @@ final class AppLaunchUITests: XCTestCase {
         // visible here.
         let app = launch()
 
-        let settings = app.buttons["Settings"]
+        let settings = tabButton("Settings", in: app)
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
 
@@ -122,7 +130,7 @@ final class AppLaunchUITests: XCTestCase {
         // each of them rather than dead-end.
         let app = launch()
 
-        let accounts = app.buttons["Accounts"]
+        let accounts = tabButton("Accounts", in: app)
         XCTAssertTrue(accounts.waitForExistence(timeout: 10))
         accounts.tap()
 
@@ -148,7 +156,7 @@ final class AppLaunchUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForOrientation(app, landscape: true)
         defer { XCUIDevice.shared.orientation = .portrait }
-        let accounts = app.buttons["Accounts"]
+        let accounts = tabButton("Accounts", in: app)
         XCTAssertTrue(accounts.waitForExistence(timeout: 10))
         accounts.tap()
         let add = app.staticTexts["+ Add account"]
