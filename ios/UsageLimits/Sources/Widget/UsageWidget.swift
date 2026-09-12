@@ -206,7 +206,7 @@ private extension GlanceSnapshot {
     }
 }
 
-private enum QuotaFormatting {
+enum QuotaFormatting {
 
     /// A nil percentage is *unknown*, not zero. It renders as an em dash over an
     /// empty bar; coercing it to "0 %" would cry wolf, and to "100 %" would invent
