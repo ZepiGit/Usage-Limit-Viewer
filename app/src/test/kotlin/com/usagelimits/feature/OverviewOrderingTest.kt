@@ -129,7 +129,7 @@ class OverviewOrderingTest {
      * urgency ranking was never built.
      */
     @Test
-    fun `urgency ranks the list until someone arranges it by hand`() {
+    fun `overview uses the same stored order before and after manual arrangement`() {
         // Deliberately handed over in the WRONG urgency order, as the repository would after a
         // reorder: it returns rows by sortOrder.
         val healthy = usageWith("healthy", 10.0)
@@ -138,8 +138,8 @@ class OverviewOrderingTest {
 
         val ranked = UsageUiState(accounts = accounts, settings = AppSettings())
         assertEquals(
-            "with no manual order, the exhausted account comes first",
-            listOf("exhausted", "healthy"),
+            "the overview and All accounts widgets share the stored order",
+            listOf("healthy", "exhausted"),
             ranked.orderedAccounts(now).map { it.account.localId },
         )
 

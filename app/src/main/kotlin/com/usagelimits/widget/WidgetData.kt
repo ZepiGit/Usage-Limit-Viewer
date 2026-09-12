@@ -1,5 +1,6 @@
 package com.usagelimits.widget
 
+import com.usagelimits.core.model.title
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
@@ -23,6 +24,8 @@ data class WidgetAccount(
     val subtitle: String?,
     val rows: List<WidgetRow>,
     val severity: Severity,
+    val providerId: String = "",
+    val requiresReauthentication: Boolean = false,
 )
 
 /**
@@ -75,11 +78,13 @@ object WidgetDataBuilder {
          * grey out every tile permanently.
          */
         staleAfterMs: Long = Severity.STALE_AFTER_MS,
+        customAccountIds: List<String> = emptyList(),
     ): WidgetSnapshot {
         val selected = when (scope) {
             WidgetScope.ACCOUNT -> all.filter { it.account.localId == accountId }
             WidgetScope.PROVIDER -> all.filter { it.account.provider.id == providerId }
-            WidgetScope.ALL_ACCOUNTS, WidgetScope.MOST_CRITICAL -> all
+            WidgetScope.CUSTOM -> customAccountIds.distinct().mapNotNull { id -> all.firstOrNull { it.account.localId == id } }
+            WidgetScope.ALL_ACCOUNTS, WidgetScope.MOST_CRITICAL, WidgetScope.CLOSEST_RESETS -> all
         }
 
         if (selected.isEmpty()) return WidgetSnapshot.Empty
@@ -91,6 +96,11 @@ object WidgetDataBuilder {
             accounts.sortedWith(
                 compareBy({ criticality(it.severity) }, { band(it.tightestRemaining()) }),
             )
+        } else if (scope == WidgetScope.CLOSEST_RESETS) {
+            accounts.sortedBy { account ->
+                selected.first { it.account.localId == account.accountId }.snapshot?.windows.orEmpty()
+                    .mapNotNull { it.resetAt }.filter { it > nowMs }.minOrNull() ?: Long.MAX_VALUE
+            }
         } else {
             accounts
         }
@@ -224,13 +234,12 @@ object WidgetDataBuilder {
 
         return WidgetAccount(
             accountId = account.localId,
-            title = buildString {
-                append(account.provider.displayName)
-                account.plan?.takeIf { it.isNotBlank() }?.let { append(" ").append(it) }
-            },
+            title = account.title(),
             subtitle = account.maskedEmail,
             rows = rows,
             severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE,
+            providerId = account.provider.id,
+            requiresReauthentication = snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED,
         )
     }
 

@@ -16,6 +16,7 @@ import com.usagelimits.navigation.UsageLimitsNavigation
 import com.usagelimits.ui.theme.UsageLimitsTheme
 
 class MainActivity : ComponentActivity() {
+    private val requestedAccount = androidx.compose.runtime.mutableStateOf<String?>(null)
 
 
     private val notificationPermission =
@@ -24,6 +25,7 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedAccount.value = intent?.getStringExtra("accountId")
         // The app keeps its dark palette even when Android uses a light theme.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -43,7 +45,7 @@ class MainActivity : ComponentActivity() {
             // split-screen or resizing a freeform window re-lays-out the shell immediately.
             val windowSizeClass = calculateWindowSizeClass(this)
             UsageLimitsTheme {
-                UsageLimitsNavigation(container, windowSizeClass)
+                UsageLimitsNavigation(container, windowSizeClass, requestedAccount.value) { requestedAccount.value = null }
             }
         }
     }
@@ -52,5 +54,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Coming back to the app is a strong signal the user wants current numbers.
         SyncWorker.syncNow(this)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        requestedAccount.value = intent.getStringExtra("accountId")
     }
 }

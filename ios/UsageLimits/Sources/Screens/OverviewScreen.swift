@@ -122,7 +122,7 @@ private struct SummaryCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(healthyLabel)
                     .font(.system(size: 30, weight: .bold))
-                    .foregroundStyle(SeverityPalette.text(snapshot.overallSeverity))
+                    .foregroundStyle(snapshot.accounts.contains { $0.connectionStatus == .reconnectRequired } ? UsageColors.red : UsageColors.textPrimary)
                 Spacer()
                 Text(freshness)
                     .font(.footnote)
@@ -146,15 +146,13 @@ private struct SummaryCard: View {
     /// Counted through `severity(at:staleAfter:)` rather than the stored value, so an account
     /// whose numbers went stale while this screen was open stops counting as healthy.
     private var healthyLabel: String {
-        let healthy = snapshot.accounts.filter {
-            $0.severity(at: now, staleAfter: snapshot.staleAfter) == .healthy
-        }.count
-        return "\(healthy)/\(snapshot.accountCount)"
+        let connected = snapshot.accounts.filter { $0.connectionStatus == .connected }.count
+        return "\(connected)/\(snapshot.accountCount) connected"
     }
 
     private var subtitle: String {
         let accounts = snapshot.accountCount == 1 ? "1 account" : "\(snapshot.accountCount) accounts"
-        guard let next = snapshot.nextResetAt else { return accounts }
+        guard let next = snapshot.accounts.flatMap(\.rows).compactMap(\.resetAt).filter({ $0 > now }).min() else { return accounts }
         return "\(accounts) · next reset \(Countdown.format(until: next, from: now))"
     }
 

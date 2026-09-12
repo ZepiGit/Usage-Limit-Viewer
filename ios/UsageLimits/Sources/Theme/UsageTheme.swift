@@ -155,40 +155,31 @@ struct UsageBar: View {
 struct ProviderBadge: View {
     let provider: ProviderID
 
-    private var symbol: String {
-        switch provider {
-        case .codex: return "⬡"
-        case .claude: return "✳︎"
-        case .antigravity: return "◆"
-        case .xai: return "✕"
-        case .kimi: return "☾"
-        }
-    }
-
-    private var tint: Color {
-        switch provider {
-        case .codex: return UsageColors.teal
-        case .claude: return UsageColors.terracotta
-        case .antigravity: return UsageColors.green
-        case .xai: return UsageColors.textPrimary
-        case .kimi: return Color(hex: 0x7C86D9)
-        }
-    }
-
     var body: some View {
-        Text(symbol)
-            .font(.title2)
-            .foregroundStyle(tint)
+        Image(provider.assetName).resizable().scaledToFit().padding(8)
             .frame(width: 40, height: 40)
             .background(UsageColors.surfaceElevated)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .accessibilityHidden(true)
+            .accessibilityLabel(provider.displayName)
     }
+
 }
 
 /// Keeps quota rows legible in wide iPad and resizable windows while filling narrow panes.
 extension View {
     func readableWidth() -> some View {
         frame(maxWidth: 760).frame(maxWidth: .infinity)
+    }
+}
+
+extension ProviderID {
+    var assetName: String {
+        switch self {
+        case .codex: "ProviderCodex"
+        case .claude: "ProviderClaude"
+        case .antigravity: "ProviderAntigravity"
+        case .xai: "ProviderGrok"
+        case .kimi: "ProviderKimi"
+        }
     }
 }

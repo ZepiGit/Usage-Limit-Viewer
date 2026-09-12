@@ -1,5 +1,6 @@
 package com.usagelimits.feature.overview
 
+import com.usagelimits.core.model.title
 import com.usagelimits.ui.theme.LocalMotionEnabled
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -110,7 +111,9 @@ fun OverviewScreen(
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var liveOrder by remember { mutableStateOf<List<AccountUsage>?>(null) }
 
-    val shown = liveOrder ?: state.orderedAccounts(nowMs)
+    val shown = liveOrder?.mapNotNull { pending -> state.accounts.firstOrNull { it.account.localId == pending.account.localId } }
+        ?: state.orderedAccounts(nowMs)
+    val currentShown by androidx.compose.runtime.rememberUpdatedState(shown)
 
     LaunchedEffect(state.accounts, state.settings.accountsManuallyOrdered) {
         val pending = liveOrder ?: return@LaunchedEffect
@@ -171,7 +174,7 @@ fun OverviewScreen(
                             onDragStart = {
                                 draggingId = id
                                 dragOffset = 0f
-                                liveOrder = shown
+                                liveOrder = currentShown
                             },
                             onDrag = { change, amount ->
                                 change.consume()
@@ -231,11 +234,9 @@ private fun OverviewHeader(state: UsageUiState, nowMs: Long, onRefresh: () -> Un
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconBadge(
-            symbol = "▮",
-            tint = UsageColors.Terracotta,
-            container = UsageColors.TerracottaSurface,
-            size = 46.dp,
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(com.usagelimits.R.drawable.ic_launcher_foreground),
+            contentDescription = "Usage Limits", modifier = Modifier.size(48.dp)
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -289,7 +290,7 @@ private fun OverviewHeader(state: UsageUiState, nowMs: Long, onRefresh: () -> Un
  */
 @Composable
 private fun SummaryCard(state: UsageUiState, nowMs: Long) {
-    val severity = state.overallSeverityAt(nowMs)
+    val severity = if (state.accounts.any { it.snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED }) Severity.ERROR else if (state.healthyCountAt(nowMs) == state.accountCount) Severity.HEALTHY else Severity.STALE
     val critical = state.mostCritical
 
     UsageCard(borderColor = SeverityPalette.container(severity)) {
@@ -315,7 +316,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                     }
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = "Healthy accounts",
+                        text = "Connected accounts",
                         style = MaterialTheme.typography.titleMedium,
                         color = UsageColors.TextPrimary,
                     )
@@ -331,8 +332,7 @@ private fun SummaryCard(state: UsageUiState, nowMs: Long) {
                 container = UsageColors.TerracottaSurface,
                 // The reset of the account the card is ABOUT. Falls back to the fleet-wide
                 // soonest only when there is no most-depleted account to scope it to.
-                value = (critical?.first?.account?.localId?.let { state.nextResetAt(nowMs, it) }
-                    ?: critical?.let { null } ?: state.nextResetAt(nowMs))
+                value = state.nextResetAt(nowMs)
                     ?.let { Countdown.format(it - nowMs) } ?: "—",
                 label = "Next reset",
             )
@@ -432,22 +432,11 @@ fun AccountCard(
 
     UsageCard(modifier = modifier.clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(
-                symbol = providerSymbol(usage.account.provider),
-                tint = providerTint(usage.account.provider),
-                container = UsageColors.SurfaceElevated,
-            )
+            com.usagelimits.ui.ProviderBadge(provider = usage.account.provider)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = buildString {
-                        append(usage.account.provider.displayName)
-                        if (showTier) {
-                            usage.account.plan
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { append(" ").append(it) }
-                        }
-                    },
+                    text = usage.account.title(showTier),
                     style = MaterialTheme.typography.titleMedium,
                     color = UsageColors.TextPrimary,
                     maxLines = 1,
@@ -469,7 +458,7 @@ fun AccountCard(
                     }
                 }
             }
-            StatusPill(severity)
+            StatusPill(severity, label = if (snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED) "Reconnect" else null)
             Icon(
                 imageVector = AppIcons.ChevronRight,
                 contentDescription = null,

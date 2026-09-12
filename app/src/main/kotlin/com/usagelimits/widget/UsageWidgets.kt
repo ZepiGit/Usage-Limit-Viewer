@@ -1,6 +1,9 @@
 package com.usagelimits.widget
 
 import android.content.Context
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.glance.LocalSize
 import com.usagelimits.core.model.percentLabel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -50,6 +53,8 @@ import com.usagelimits.core.time.Countdown
  * the few colours the widgets need are restated here. Kept in one object so a palette change
  * is still a single edit on each side.
  */
+private val TransparentWidget = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 private object W {
     val Background = Color(0xFF0F0F0E)
     val Card = Color(0xFF1A1918)
@@ -148,13 +153,8 @@ private fun RefreshChip(
                 .background(W.Card),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "↻",
-                style = TextStyle(
-                    color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                    fontSize = fontSize,
-                ),
-            )
+            Image(ImageProvider(com.usagelimits.R.drawable.ic_refresh), "Refresh usage",
+                modifier = GlanceModifier.size(18.dp))
         }
     }
 }
@@ -164,20 +164,15 @@ class CompactUsageWidget : GlanceAppWidget() {
     // Responsive rather than Exact: the launcher picks the nearest declared size, so the
     // widget stays correct on tablets and unfolded foldables, whose grid cells are much wider
     // than a phone's, instead of being re-measured into a layout it was never designed for.
-    override val sizeMode = SizeMode.Responsive(
-        setOf(
-            DpSize(250.dp, 48.dp),
-            DpSize(320.dp, 48.dp),
-            DpSize(420.dp, 56.dp),
-        ),
-    )
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val view = WidgetUpdater.load(context, id)
-        val snapshot = view.snapshot
-
+        val initial = WidgetUpdater.load(context, id)
         provideContent {
+            val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val snapshot = view.snapshot
             GlanceTheme {
+                androidx.compose.runtime.CompositionLocalProvider(TransparentWidget provides view.transparent) {
                 Row(
                     modifier = GlanceModifier
                         .fillMaxSize()
@@ -233,9 +228,10 @@ class CompactUsageWidget : GlanceAppWidget() {
                     //
                     // No weight: the four tiles share the width and this takes what it needs,
                     // rather than a fifth of the row for one glyph.
-                    RefreshChip(touchSize = 32.dp, chipSize = 24.dp, fontSize = 13.sp)
+                    RefreshChip(touchSize = 40.dp, chipSize = 28.dp, fontSize = 13.sp)
                 }
             }
+        }
         }
     }
 
@@ -250,7 +246,7 @@ class CompactUsageWidget : GlanceAppWidget() {
         Column(
             modifier = modifier
                 .cornerRadius(16.dp)
-                .background(W.Card)
+                .background(if (TransparentWidget.current) Color.Transparent else W.Card)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
             Text(
@@ -293,19 +289,13 @@ class CompactUsageWidget : GlanceAppWidget() {
  */
 class DetailedUsageWidget : GlanceAppWidget() {
 
-    override val sizeMode = SizeMode.Responsive(
-        setOf(
-            DpSize(250.dp, 110.dp),
-            DpSize(320.dp, 150.dp),
-            DpSize(420.dp, 200.dp),
-        ),
-    )
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val view = WidgetUpdater.load(context, id)
-        val snapshot = view.snapshot
-
+        val initial = WidgetUpdater.load(context, id)
         provideContent {
+            val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val snapshot = view.snapshot
             GlanceTheme {
                 Column(
                     modifier = GlanceModifier
@@ -336,7 +326,7 @@ class DetailedUsageWidget : GlanceAppWidget() {
                         LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
                             items(snapshot.accounts, itemId = { it.accountId.hashCode().toLong() }) {
                                 Column {
-                                    AccountCard(it)
+                                    AccountCard(it, view.transparent)
                                     Spacer(GlanceModifier.height(6.dp))
                                 }
                             }
@@ -394,12 +384,12 @@ class DetailedUsageWidget : GlanceAppWidget() {
     }
 
     @androidx.compose.runtime.Composable
-    private fun AccountCard(account: WidgetAccount) {
+    private fun AccountCard(account: WidgetAccount, transparent: Boolean) {
         Column(
             modifier = GlanceModifier
                 .fillMaxWidth()
                 .cornerRadius(16.dp)
-                .background(W.Card)
+                .background(if (transparent) Color.Transparent else W.Card)
                 .padding(10.dp),
         ) {
             Text(
@@ -501,139 +491,6 @@ class DetailedUsageWidget : GlanceAppWidget() {
  * until it comes back. The percentage is deliberately absent — the ring IS the percentage, and
  * printing it twice would waste the space this widget exists to save.
  */
-class MinimalUsageWidget : GlanceAppWidget() {
-
-    override val sizeMode = SizeMode.Responsive(
-        setOf(
-            DpSize(120.dp, 120.dp),
-            DpSize(250.dp, 120.dp),
-            DpSize(250.dp, 200.dp),
-        ),
-    )
-
-    override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val view = WidgetUpdater.load(context, id)
-        val snapshot = view.snapshot
-
-        provideContent {
-            GlanceTheme {
-                Column(
-                    modifier = GlanceModifier
-                        .fillMaxSize()
-                        .cornerRadius(24.dp)
-                        .background(if (view.transparent) Color.Transparent else W.Background)
-                        .padding(10.dp)
-                        .clickable(actionStartActivity<MainActivity>()),
-                ) {
-                    if (snapshot.accounts.isEmpty()) {
-                        Text(
-                            text = "No accounts yet",
-                            style = TextStyle(
-                                color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                                fontSize = 12.sp,
-                            ),
-                        )
-                    } else {
-                        LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
-                            items(
-                                snapshot.accounts,
-                                itemId = { it.accountId.hashCode().toLong() },
-                            ) { account ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Ring(account)
-                                    Spacer(GlanceModifier.width(8.dp))
-                                    Column(modifier = GlanceModifier.defaultWeight()) {
-                                        Text(
-                                            text = account.title,
-                                            maxLines = 1,
-                                            style = TextStyle(
-                                                color = androidx.glance.unit.ColorProvider(
-                                                    W.TextPrimary,
-                                                ),
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium,
-                                            ),
-                                        )
-                                        Text(
-                                            // Absolute, like the other two widgets. A widget
-                                            // cannot tick: a relative countdown is frozen at the
-                                            // moment Glance last drew it and goes wrong in the one
-                                            // direction that matters — "in 20m" long after the
-                                            // reset has passed. A clock time was true when it was
-                                            // written and stays true.
-                                            text = ringRow(account)?.resetAt
-                                                ?.let {
-                                                    Countdown.absoluteResetLabel(
-                                                        it,
-                                                        System.currentTimeMillis(),
-                                                    )?.removePrefix("Resets ")
-                                                }
-                                                ?: "—",
-                                            maxLines = 1,
-                                            style = TextStyle(
-                                                color = androidx.glance.unit.ColorProvider(
-                                                    W.TextSecondary,
-                                                ),
-                                                fontSize = 11.sp,
-                                            ),
-                                        )
-                                    }
-                                }
-                                Spacer(GlanceModifier.height(6.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * The row the ring is about: whichever of the account's windows is closest to running out.
-     *
-     * Not the first one. Windows arrive in whatever order the provider lists them, and a ring
-     * drawn from a healthy weekly window while the five-hour window beside it is empty says
-     * precisely the opposite of the truth.
-     */
-    private fun ringRow(account: WidgetAccount): WidgetRow? =
-        account.rows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
-
-    @androidx.compose.runtime.Composable
-    private fun Ring(account: WidgetAccount) {
-        val row = ringRow(account)
-        // The row's colour only while the account itself is fine. A row's severity comes from
-        // its percentage and knows nothing about age, so a stale or failed account with a
-        // retained 80 % row drew a green ring — and the ring is the whole tile, with nothing
-        // beside it to say the number is a day old. The other two widgets apply this rule
-        // through their status word; the ring has only its colour.
-        val accent = when (account.severity) {
-            Severity.STALE, Severity.ERROR -> W.accent(account.severity)
-            else -> W.accent(row?.severity ?: account.severity)
-        }
-        Image(
-            provider = ImageProvider(
-                UsageRing.draw(
-                    sizePx = RING_PX,
-                    remainingPercent = row?.remainingPercent,
-                    argb = accent.toArgb(),
-                    trackArgb = W.Track.toArgb(),
-                ),
-            ),
-            contentDescription = account.title,
-            modifier = GlanceModifier.size(34.dp),
-        )
-    }
-
-    private companion object {
-        /** Drawn larger than it is shown, so the arc stays smooth on a dense screen. */
-        const val RING_PX = 132
-    }
-}
-
-class MinimalUsageWidgetReceiver : GlanceAppWidgetReceiver() {
-    override val glanceAppWidget: GlanceAppWidget = MinimalUsageWidget()
-}
-
 class CompactUsageWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = CompactUsageWidget()
 }

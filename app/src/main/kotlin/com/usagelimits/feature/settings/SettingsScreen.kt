@@ -152,8 +152,8 @@ fun SettingsScreen(
                     onChange = onNotifyResetApproaching,
                 )
                 ToggleRow(
-                    title = "Reset credit expiring",
-                    subtitle = "Before an unused Codex reset credit lapses",
+                    title = "Unused reset credit expires soon",
+                    subtitle = "Notify me when an unused Codex reset credit expires within 24 hours. A credit lets you reset an eligible usage limit.",
                     checked = settings.notifyOnResetCreditExpiring,
                     onChange = onNotifyCreditExpiring,
                 )

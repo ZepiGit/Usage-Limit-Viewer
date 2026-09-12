@@ -1,5 +1,6 @@
 package com.usagelimits.core.database
 
+import com.usagelimits.core.model.ConnectionStatus
 import com.usagelimits.core.model.ProviderAccount
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.ResetCredit
@@ -214,6 +215,7 @@ class UsageRepository(
                     ),
                     resetCreditCount = snapshot.resetCreditCount,
                     applicableResetCreditCount = snapshot.applicableResetCreditCount,
+                    connectionStatus = snapshot.connectionStatus.name,
                 ),
             )
             if (snapshot.status != SnapshotStatus.FAILED) {
@@ -230,7 +232,7 @@ class UsageRepository(
      *
      * No-ops for a removed account, for the same foreign-key reason as [saveSnapshot].
      */
-    suspend fun saveFailure(accountId: String, message: String, nowMs: Long) =
+    suspend fun saveFailure(accountId: String, message: String, nowMs: Long, requiresReauthentication: Boolean = false) =
         transactions.inTransaction {
             // Reading the previous row and replacing it must be one step. Between them a
             // concurrent successful sync can land, and this would then overwrite fresh
@@ -250,6 +252,8 @@ class UsageRepository(
                         resetCreditsJson = previous?.resetCreditsJson ?: "[]",
                         resetCreditCount = previous?.resetCreditCount,
                         applicableResetCreditCount = previous?.applicableResetCreditCount,
+                    connectionStatus = if (requiresReauthentication) ConnectionStatus.RECONNECT_REQUIRED.name
+                        else previous?.toDomain()?.connectionStatus?.name ?: ConnectionStatus.UNKNOWN.name,
                     ),
                 )
             }
@@ -300,6 +304,8 @@ class UsageRepository(
         resetCreditCount = resetCreditCount,
         applicableResetCreditCount = applicableResetCreditCount,
         errorMessage = errorMessage,
+        connectionStatus = ConnectionStatus.fromStored(connectionStatus,
+            runCatching { SnapshotStatus.valueOf(status) }.getOrDefault(SnapshotStatus.FAILED), errorMessage),
     )
 
     private fun UsageWindow.toStored() = StoredWindow(

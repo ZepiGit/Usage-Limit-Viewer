@@ -8,6 +8,8 @@ import Foundation
 public enum GlanceScope: String, Sendable, Codable {
     case allAccounts
     case mostCritical
+    case closestResets
+    case custom
     case account
     case provider
 }
@@ -61,6 +63,8 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
     /// Optional because a snapshot written by an earlier build has none, and such an account
     /// keeps exactly its previous behaviour rather than being declared stale on upgrade.
     public let fetchedAt: Date?
+    public let providerID: String?
+    public let connectionStatus: ConnectionStatus
 
     public init(
         id: String,
@@ -69,7 +73,9 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         rows: [GlanceRow],
         severity: Severity,
         baseSeverity: Severity? = nil,
-        fetchedAt: Date? = nil
+        fetchedAt: Date? = nil,
+        providerID: String? = nil,
+        connectionStatus: ConnectionStatus = .unknown
     ) {
         self.id = id
         self.title = title
@@ -78,10 +84,12 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         self.severity = severity
         self.baseSeverity = baseSeverity ?? severity
         self.fetchedAt = fetchedAt
+        self.providerID = providerID
+        self.connectionStatus = connectionStatus
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt
+        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt, providerID, connectionStatus
     }
 
     /// Lenient on the two new keys: a snapshot written before them must still decode, or every
@@ -95,6 +103,8 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         severity = try c.decode(Severity.self, forKey: .severity)
         baseSeverity = try c.decodeIfPresent(Severity.self, forKey: .baseSeverity) ?? severity
         fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
+        providerID = try c.decodeIfPresent(String.self, forKey: .providerID)
+        connectionStatus = try c.decodeIfPresent(ConnectionStatus.self, forKey: .connectionStatus) ?? .unknown
     }
 
     /// The severity to show at `now`, aged from the fetch instant rather than frozen.
@@ -209,7 +219,8 @@ public enum GlanceModel {
         scope: GlanceScope,
         accountID: String? = nil,
         providerID: String? = nil,
-        staleAfter: TimeInterval = Severity.staleAfter
+        staleAfter: TimeInterval = Severity.staleAfter,
+        customAccountIDs: [String] = []
     ) -> GlanceSnapshot {
         let selected: [AccountUsage]
         switch scope {
@@ -217,14 +228,26 @@ public enum GlanceModel {
             selected = all.filter { $0.account.id == accountID }
         case .provider:
             selected = all.filter { $0.account.provider.rawValue == providerID }
-        case .allAccounts, .mostCritical:
+        case .custom:
+            var seen = Set<String>()
+            selected = customAccountIDs.filter { seen.insert($0).inserted }.compactMap { id in all.first { $0.account.id == id } }
+        case .allAccounts, .mostCritical, .closestResets:
             selected = all
         }
 
         guard !selected.isEmpty else { return .empty }
 
         let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter) }
-        let ordered = scope == .mostCritical ? sortedByUrgency(accounts) : accounts
+        let ordered: [GlanceAccount]
+        if scope == .mostCritical { ordered = sortedByUrgency(accounts) }
+        else if scope == .closestResets {
+            let indexed = accounts.enumerated().map { index, account in
+                let next = selected.first { $0.account.id == account.id }?.snapshot?.windows
+                    .compactMap(\.resetAt).filter { $0 > now }.min() ?? .distantFuture
+                return (index, account, next)
+            }
+            ordered = indexed.sorted { $0.2 == $1.2 ? $0.0 < $1.0 : $0.2 < $1.2 }.map { $0.1 }
+        } else { ordered = accounts }
 
         // The headline belongs to ONE account — the one leading the list — not to a pool.
         //
@@ -385,8 +408,8 @@ public enum GlanceModel {
         // plan of "\n" survived as a plan and appended a blank line to a title in a
         // fixed-height tile. Kotlin's `isNotBlank` counts newlines, and the two must agree.
         if let plan = usage.account.plan,
-           !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            title += " \(plan)"
+           !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, plan.caseInsensitiveCompare(title) != .orderedSame {
+            title = plan.lowercased().hasPrefix(title.lowercased() + " ") ? plan : title + " \(plan)"
         }
 
         return GlanceAccount(
@@ -399,7 +422,8 @@ public enum GlanceModel {
             // The unaged judgement and the instant it was made, so a widget rendering this
             // hours later can age it itself instead of repeating a verdict from write time.
             baseSeverity: usage.snapshot?.severity ?? .stale,
-            fetchedAt: usage.snapshot?.fetchedAt)
+            fetchedAt: usage.snapshot?.fetchedAt, providerID: usage.account.provider.rawValue,
+            connectionStatus: usage.snapshot?.connectionStatus ?? .unknown)
     }
 
     private static func row(_ window: UsageWindow) -> GlanceRow {

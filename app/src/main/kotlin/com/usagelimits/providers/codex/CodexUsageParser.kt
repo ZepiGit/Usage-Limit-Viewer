@@ -240,7 +240,7 @@ object CodexUsageParser {
             usedPercent = usedPercent,
             periodSeconds = periodSeconds,
             resetAt = resetAt,
-            exhausted = limitReached || (usedPercent != null && usedPercent >= 100.0),
+            exhausted = (usedPercent != null && usedPercent >= 100.0) || (usedPercent == null && limitReached),
             group = group,
         )
     }

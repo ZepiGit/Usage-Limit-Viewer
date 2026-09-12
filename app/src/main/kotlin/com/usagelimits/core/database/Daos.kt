@@ -74,6 +74,8 @@ interface UsageSnapshotDao {
 
 @Dao
 interface WidgetConfigDao {
+    @Query("SELECT * FROM widget_configs WHERE appWidgetId = :appWidgetId")
+    fun observe(appWidgetId: Int): Flow<WidgetConfigEntity?>
 
     @Query("SELECT * FROM widget_configs WHERE appWidgetId = :appWidgetId")
     suspend fun get(appWidgetId: Int): WidgetConfigEntity?

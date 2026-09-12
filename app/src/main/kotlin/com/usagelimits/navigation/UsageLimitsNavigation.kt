@@ -91,12 +91,19 @@ private val TABS = listOf(
  * the clock itself, so every relative time on screen is consistent with the others.
  */
 @Composable
-fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeClass) {
+fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeClass,
+    requestedAccountId: String? = null, onAccountHandled: () -> Unit = {}) {
     val navController = rememberNavController()
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val viewModel: UsageViewModel =
         viewModel(factory = UsageViewModel.Factory(container, appContext))
     val state by viewModel.state.collectAsState()
+    LaunchedEffect(requestedAccountId, state.accounts) {
+        if (requestedAccountId != null && state.accounts.any { it.account.localId == requestedAccountId }) {
+            navController.navigate(Destination.AccountDetail.of(requestedAccountId)) { launchSingleTop = true }
+            onAccountHandled()
+        }
+    }
     val resetInFlight by viewModel.resetCreditInFlight.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -271,7 +278,8 @@ fun UsageLimitsNavigation(container: AppContainer, windowSizeClass: WindowSizeCl
                         nowMs = nowMs,
                         staleAfterMs = state.staleAfterMs,
                         resetInFlight = resetInFlight == accountId,
-                        supportsResetCredits = supportsCredits,
+                    supportsResetCredits = supportsCredits,
+                    onReconnect = { navController.navigate(Destination.AddAccount.route) },
                         onRefresh = { accountId?.let(viewModel::refreshAccount) },
                         onConsumeResetCredit = { accountId?.let(viewModel::consumeResetCredit) },
                         onRemove = {

@@ -94,7 +94,7 @@ final class UsageStore: ObservableObject {
     /// below it.
     var glance: GlanceSnapshot {
         GlanceModel.build(
-            accounts, now: now, scope: .mostCritical, staleAfter: settings.staleAfter)
+            accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter)
     }
 
     /// The accounts in the order the overview should show them.
@@ -109,7 +109,7 @@ final class UsageStore: ObservableObject {
     /// user dragging a healthy account to the top must not thereby change what the headline
     /// reports about the fleet.
     var orderedAccounts: [GlanceAccount] {
-        guard settings.accountsManuallyOrdered else { return glance.accounts }
+        // Repository order is shared by Overview and All accounts widgets.
         return GlanceModel.build(
             accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter).accounts
     }

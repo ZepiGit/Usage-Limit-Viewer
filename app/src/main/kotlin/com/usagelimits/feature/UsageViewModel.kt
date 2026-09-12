@@ -73,17 +73,10 @@ data class UsageUiState(
      * it. The repository already returns rows `ORDER BY sortOrder`, so the manual case is the
      * list exactly as it arrived.
      */
-    fun orderedAccounts(nowMs: Long): List<AccountUsage> =
-        if (settings.accountsManuallyOrdered) {
-            accounts
-        } else {
-            accounts.sortedBy {
-                it.snapshot?.severityAt(nowMs, staleAfterMs)?.urgency ?: Int.MAX_VALUE
-            }
-        }
+    fun orderedAccounts(nowMs: Long): List<AccountUsage> = accounts
 
     fun healthyCountAt(nowMs: Long): Int =
-        accounts.count { it.snapshot?.severityAt(nowMs, staleAfterMs) == Severity.HEALTHY }
+        accounts.count { it.snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.CONNECTED }
 
     /** Newest data wins for the "last updated" line — it describes the screen as a whole. */
     val lastUpdated: Long?
@@ -185,10 +178,18 @@ class UsageViewModel(
      * order without the flag would store an arrangement the overview then ignores, which reads
      * as the drag having done nothing.
      */
+    private val reorderMutex = kotlinx.coroutines.sync.Mutex()
+
     fun reorderAccounts(idsInOrder: List<String>) {
         viewModelScope.launch {
-            container.repository.reorderAccounts(idsInOrder)
-            container.settingsStore.setAccountsManuallyOrdered(true)
+            reorderMutex.lock()
+            try {
+                container.repository.reorderAccounts(idsInOrder.distinct())
+                container.settingsStore.setAccountsManuallyOrdered(true)
+                WidgetUpdater.refreshAll(appContext)
+            } finally {
+                reorderMutex.unlock()
+            }
         }
     }
 

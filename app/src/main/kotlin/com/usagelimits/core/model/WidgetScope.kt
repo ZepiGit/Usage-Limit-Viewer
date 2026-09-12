@@ -12,10 +12,13 @@ enum class WidgetScope {
     PROVIDER,
 
     /** Everything, aggregated. */
-    ALL_ACCOUNTS;
+    ALL_ACCOUNTS,
+    CLOSEST_RESETS,
+    CUSTOM;
 
     companion object {
         fun fromName(value: String?): WidgetScope =
-            entries.firstOrNull { it.name == value } ?: MOST_CRITICAL
+            if (value == MOST_CRITICAL.name) CLOSEST_RESETS
+            else entries.firstOrNull { it.name == value } ?: CLOSEST_RESETS
     }
 }

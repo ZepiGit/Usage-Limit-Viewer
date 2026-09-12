@@ -1,5 +1,6 @@
 package com.usagelimits.feature.accounts
 
+import com.usagelimits.core.model.title
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ fun AccountDetailScreen(
     notificationsEnabled: Boolean,
     onNotificationsChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onReconnect: () -> Unit = {},
 ) {
     if (usage == null) {
         Column(
@@ -87,12 +89,7 @@ fun AccountDetailScreen(
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconBadge(
-                    symbol = providerSymbol(usage.account.provider),
-                    tint = providerTint(usage.account.provider),
-                    container = UsageColors.SurfaceElevated,
-                    size = 46.dp,
-                )
+                com.usagelimits.ui.ProviderBadge(provider = usage.account.provider, size = 46.dp)
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -110,7 +107,9 @@ fun AccountDetailScreen(
                         color = UsageColors.TextSecondary,
                     )
                 }
-                snapshot?.severityAt(nowMs, staleAfterMs)?.let { StatusPill(it) }
+                snapshot?.severityAt(nowMs, staleAfterMs)?.let {
+                    StatusPill(it, label = if (snapshot.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED) "Reconnect" else null)
+                }
             }
         }
 
@@ -122,6 +121,13 @@ fun AccountDetailScreen(
             )
         }
 
+        if (snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED) {
+            item {
+                androidx.compose.material3.Button(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
+                    Text("Reconnect account")
+                }
+            }
+        }
         snapshot?.errorMessage?.let { error ->
             item {
                 UsageCard(borderColor = UsageColors.AmberSurface) {
