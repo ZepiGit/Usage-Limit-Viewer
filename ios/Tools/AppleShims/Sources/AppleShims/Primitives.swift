@@ -247,6 +247,7 @@ public struct Image: View {
     public init(_ name: String) {}
     public var body: some View { ShimLeaf() }
     public func resizable() -> Image { self }
+    public func scaledToFit() -> Image { self }
 }
 
 public struct Button: View {
