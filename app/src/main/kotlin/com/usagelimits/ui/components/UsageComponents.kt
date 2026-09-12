@@ -118,10 +118,12 @@ fun StatusPill(severity: Severity, modifier: Modifier = Modifier, label: String?
 fun UsageWindowRow(window: UsageWindow, nowMs: Long, modifier: Modifier = Modifier) {
     val remaining = window.remainingPercent
     val percent = percentLabel(remaining)
-    val label = when (window.category) {
-        com.usagelimits.core.model.WindowCategory.FIVE_HOUR -> "5h limit"
-        com.usagelimits.core.model.WindowCategory.WEEKLY -> "Weekly"
-        com.usagelimits.core.model.WindowCategory.MONTHLY -> "Monthly"
+    val label = when {
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.FIVE_HOUR -> "5h limit"
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.WEEKLY -> "Weekly"
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.MONTHLY -> "Monthly"
+        window.label.equals("Five Hour Limit Remaining", ignoreCase = true) -> "5h limit"
+        window.label.equals("Weekly Limit Remaining", ignoreCase = true) -> "Weekly"
         else -> window.label
     }
     val reset = Countdown.resetLabel(window.resetAt, nowMs)

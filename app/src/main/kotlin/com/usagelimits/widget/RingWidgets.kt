@@ -39,12 +39,12 @@ open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
             val columns = if (mini) grid.columns else WidgetLayout.accountColumns(size.width.value, size.height.value, view.metrics)
             val selected = if (mini) view.snapshot.accounts.take(grid.capacity) else view.snapshot.accounts
             val groups = selected.chunked(columns)
-            val rowHeight = if (mini) ((size.height.value - 8f) / grid.rows).coerceAtLeast(20f).dp else 60.dp
+            val rowHeight = if (mini) ((size.height.value - 8f) / grid.rows).coerceAtLeast(20f).dp else 44.dp
             val ringSize = if (mini) minOf((size.width.value - 8f) / columns, rowHeight.value).minus(8f).coerceIn(16f, 52f).dp else 36.dp
             Column(GlanceModifier.fillMaxSize().cornerRadius(24.dp)
                 .background(if (view.transparent) Color.Transparent else UsageColors.Background)
                 .padding(if (mini) 4.dp else 10.dp)) {
-                if (groups.isEmpty()) Text("No accounts selected", style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 12.sp))
+                if (groups.isEmpty()) Text("No matching accounts", style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 12.sp))
                 else if (mini) {
                     // Fixed visible capacity also avoids sharing a collection adapter between
                     // differently sized portrait and landscape RemoteViews.
@@ -71,10 +71,10 @@ private fun RingAccountRow(context: Context, group: List<WidgetAccount>, columns
                 RingMark(account, ringSize)
                 Spacer(GlanceModifier.width(8.dp))
                 Column(GlanceModifier.defaultWeight()) {
-                    Text(account.subtitle ?: account.title, maxLines = 1,
-                        style = TextStyle(color = ColorProvider(UsageColors.TextPrimary), fontSize = 12.sp, fontWeight = FontWeight.Medium))
+                    Text(account.accountLabel ?: account.subtitle ?: account.title, maxLines = 1,
+                        style = TextStyle(color = ColorProvider(UsageColors.TextPrimary), fontSize = 11.sp, fontWeight = FontWeight.Medium))
                     Text(if (account.requiresReauthentication) "Reconnect" else ringLimit(account)?.resetAt?.let {
-                        Countdown.absoluteResetLabel(it, System.currentTimeMillis())?.removePrefix("Resets ")
+                        compactRingReset(context, it)
                     } ?: "No reset time", maxLines = 1,
                         style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 11.sp))
                 }
@@ -86,6 +86,16 @@ private fun RingAccountRow(context: Context, group: List<WidgetAccount>, columns
 
 private fun ringLimit(account: WidgetAccount): WidgetRow? = account.rows.minWithOrNull(
     compareBy<WidgetRow> { if (it.severity == Severity.EXHAUSTED) -1.0 else it.remainingPercent ?: Double.MAX_VALUE })
+
+internal fun compactRingReset(context: Context, resetAt: Long): String {
+    val now = System.currentTimeMillis()
+    if (resetAt <= now) return "Reset due"
+    val zone = java.time.ZoneId.systemDefault()
+    val reset = java.time.Instant.ofEpochMilli(resetAt).atZone(zone)
+    return if (reset.toLocalDate() == java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()) {
+        android.text.format.DateFormat.getTimeFormat(context).format(java.util.Date(resetAt))
+    } else reset.format(java.time.format.DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault()))
+}
 
 @Composable
 private fun RingMark(account: WidgetAccount, size: androidx.compose.ui.unit.Dp) {

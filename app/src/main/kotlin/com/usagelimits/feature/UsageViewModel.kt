@@ -305,7 +305,8 @@ class UsageViewModel(
                 }
                 // A widget pinned to this account would otherwise render the empty snapshot
                 // for ever; dropping its config returns it to the automatic scope.
-                container.widgetConfigDao.deleteForAccount(accountId)
+                // Keep the widget's exact scope. A removed account must leave an empty
+                // widget, rather than silently exposing other accounts through auto mode.
                 WidgetUpdater.refreshAll(appContext)
             }
         }

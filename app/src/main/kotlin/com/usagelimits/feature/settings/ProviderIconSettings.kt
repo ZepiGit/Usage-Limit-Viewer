@@ -1,6 +1,8 @@
 package com.usagelimits.feature.settings
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
@@ -39,7 +41,7 @@ fun ProviderIconSettings(selected: Map<String, String>, onChoose: (ProviderId, S
     editing?.let { provider ->
         AlertDialog(onDismissRequest = { editing = null }, title = { Text("${provider.displayName} icon") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ProviderIconCatalog.choices(provider).forEach { choice ->
                         val checked = choice.id == ProviderIconCatalog.selected(provider, selected[provider.id]).id
                         Row(Modifier.fillMaxWidth().selectable(checked, role = Role.RadioButton,

@@ -1,5 +1,9 @@
 package com.usagelimits.widget
 
+import sh.calvin.reorderable.ReorderableItem
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+
 import androidx.compose.runtime.collectAsState
 import android.appwidget.AppWidgetManager
 import android.content.Intent
@@ -113,6 +117,17 @@ private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConf
     var order by rememberSaveable { mutableStateOf(savedIds) }
     val currentOrder = order.filter { id -> accounts.any { it.account.localId == id } } + accounts.map { it.account.localId }.filter { it !in order }
     val liveOrder by rememberUpdatedState(currentOrder)
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val reorderState = sh.calvin.reorderable.rememberReorderableLazyListState(listState) { from, to ->
+        val fromKey = from.key.toString()
+        val toKey = to.key.toString()
+        if (fromKey.startsWith("custom-") && toKey.startsWith("custom-")) {
+            val values = liveOrder.toMutableList()
+            val a = values.indexOf(fromKey.removePrefix("custom-"))
+            val b = values.indexOf(toKey.removePrefix("custom-"))
+            if (a >= 0 && b >= 0 && a != b) { values.add(b, values.removeAt(a)); order = values }
+        }
+    }
     val scope = WidgetScope.fromName(scopeName)
     val preview = WidgetDataBuilder.build(accounts, System.currentTimeMillis(), scope, accountId, providerId,
         customAccountIds = currentOrder.filter { it in selected })
@@ -137,7 +152,7 @@ private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConf
             }
         }
     }) { inset ->
-        LazyColumn(Modifier.fillMaxSize().padding(inset), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(inset), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Text(kind, style = MaterialTheme.typography.headlineLarge, color = UsageColors.TextPrimary) }
             item { ContentPreview(preview, kind, transparent) }
             item { UsageCard { ToggleRow("Transparent background", "Show your wallpaper behind the whole widget", transparent) { transparent = it } } }
@@ -154,26 +169,24 @@ private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConf
                 item { ScopeChoice("Custom", "Choose accounts and drag to reorder", scope == WidgetScope.CUSTOM) { scopeName = WidgetScope.CUSTOM.name } }
                 if (scope == WidgetScope.CUSTOM) items(currentOrder, key = { "custom-$it" }) { id ->
                     val account = accounts.first { it.account.localId == id }.account
-                    val step = with(LocalDensity.current) { 78.dp.toPx() }
-                    Row(Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(id in selected, onCheckedChange = { selected = if (it) selected + id else selected - id })
-                        ProviderLogo(account.provider, Modifier.size(24.dp))
-                        Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                            Text(account.label, maxLines = 1, color = UsageColors.TextPrimary)
-                            Text(account.provider.displayName, style = MaterialTheme.typography.bodySmall, color = UsageColors.TextSecondary)
+                    ReorderableItem(reorderState, key = "custom-$id") { _ ->
+                        Row(Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(id in selected, onCheckedChange = { selected = if (it) selected + id else selected - id },
+                                modifier = Modifier.semantics { contentDescription = "Show ${account.label}" })
+                            ProviderLogo(account.provider, Modifier.size(24.dp))
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(account.label, maxLines = 1, color = UsageColors.TextPrimary)
+                                Text(account.provider.displayName, style = MaterialTheme.typography.bodySmall, color = UsageColors.TextSecondary)
+                            }
+                            TextButton(onClick = { move(id, -1) }, enabled = currentOrder.first() != id,
+                                modifier = Modifier.size(40.dp).semantics { contentDescription = "Move up ${account.label}" }) { Text("↑") }
+                            TextButton(onClick = { move(id, 1) }, enabled = currentOrder.last() != id,
+                                modifier = Modifier.size(40.dp).semantics { contentDescription = "Move down ${account.label}" }) { Text("↓") }
+                            Box(Modifier.size(44.dp).draggableHandle().semantics { contentDescription = "Move ${account.label}" },
+                                contentAlignment = Alignment.Center) {
+                                Icon(com.usagelimits.ui.AppIcons.DragHandle, null, tint = UsageColors.TextSecondary)
+                            }
                         }
-                        TextButton(onClick = { move(id, -1) }, enabled = currentOrder.first() != id, modifier = Modifier.size(40.dp)) { Text("↑") }
-                        TextButton(onClick = { move(id, 1) }, enabled = currentOrder.last() != id, modifier = Modifier.size(40.dp)) { Text("↓") }
-                        Box(Modifier.size(44.dp).pointerInput(id) {
-                            var travel = 0f
-                            detectDragGesturesAfterLongPress(onDragStart = { travel = 0f }, onDrag = { change, amount ->
-                                change.consume(); travel += amount.y
-                                while (kotlin.math.abs(travel) >= step) {
-                                    val direction = if (travel > 0) 1 else -1
-                                    move(id, direction); travel -= direction * step
-                                }
-                            })
-                        }, contentAlignment = Alignment.Center) { Text("≡", color = UsageColors.TextSecondary) }
                     }
                 }
             }

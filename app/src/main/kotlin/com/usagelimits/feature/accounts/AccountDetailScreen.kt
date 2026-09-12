@@ -93,11 +93,7 @@ fun AccountDetailScreen(
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = buildString {
-                            append(usage.account.provider.displayName)
-                            usage.account.plan?.takeIf { it.isNotBlank() }
-                                ?.let { append(" ").append(it) }
-                        },
+                        text = usage.account.title(),
                         style = MaterialTheme.typography.titleLarge,
                         color = UsageColors.TextPrimary,
                     )

@@ -27,6 +27,7 @@ data class WidgetAccount(
     val providerId: String = "",
     val requiresReauthentication: Boolean = false,
     val iconChoiceId: String? = null,
+    val accountLabel: String? = null,
     val resetTimes: List<Long> = rows.mapNotNull { it.resetAt },
 )
 
@@ -243,6 +244,7 @@ object WidgetDataBuilder {
             severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE,
             providerId = account.provider.id,
             iconChoiceId = providerIcons[account.provider.id],
+            accountLabel = account.label,
             requiresReauthentication = snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED,
             resetTimes = windows.mapNotNull { it.resetAt },
         )

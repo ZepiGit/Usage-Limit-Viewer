@@ -113,7 +113,7 @@ private fun UsageBar(row: WidgetRow, modifier: GlanceModifier = GlanceModifier) 
 
     LinearProgressIndicator(
         progress = fraction,
-        modifier = modifier.fillMaxWidth().height(6.dp),
+        modifier = modifier.height(6.dp),
         color = ColorProvider(W.bar(row)),
         backgroundColor = ColorProvider(W.Track),
     )
@@ -266,7 +266,7 @@ class CompactUsageWidget : GlanceAppWidget() {
             )
             if (row != null) {
                 Spacer(GlanceModifier.height(5.dp))
-                UsageBar(row)
+                UsageBar(row, GlanceModifier.fillMaxWidth())
             }
         }
     }
@@ -288,7 +288,6 @@ class CompactUsageWidget : GlanceAppWidget() {
  * a "+N more" line is honest about what is hidden.
  */
 class DetailedUsageWidget : GlanceAppWidget() {
-
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -297,38 +296,26 @@ class DetailedUsageWidget : GlanceAppWidget() {
             val view by WidgetUpdater.observe(context, id).collectAsState(initial)
             val snapshot = view.snapshot
             GlanceTheme {
-                Column(
-                    modifier = GlanceModifier
-                        .fillMaxSize()
-                        .cornerRadius(24.dp)
-                        .background(if (view.transparent) Color.Transparent else W.Background)
-                        .padding(12.dp)
-                        .clickable(actionStartActivity<MainActivity>()),
-                ) {
-                    Header(snapshot)
-                    Spacer(GlanceModifier.height(8.dp))
-
-                    if (snapshot.accounts.isEmpty()) {
-                        Text(
-                            text = "No accounts yet — tap to add one",
-                            style = TextStyle(
-                                color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                                fontSize = 13.sp,
-                            ),
-                        )
-                    } else {
-                        // Scrollable rather than capped. This used to render the first few
-                        // accounts and a "+N more" line, which is honest but useless: the
-                        // accounts it hid were hidden by list position, so an exhausted account
-                        // that happened to sort low was invisible on the surface whose whole
-                        // job is to show it. Glance's LazyColumn scrolls inside the host, so
-                        // eight accounts fit a 1x4 and all of them are reachable.
-                        LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
-                            items(snapshot.accounts, itemId = { it.accountId.hashCode().toLong() }) {
-                                Column {
-                                    AccountCard(it, view.transparent)
-                                    Spacer(GlanceModifier.height(6.dp))
-                                }
+                Column(GlanceModifier.fillMaxSize().cornerRadius(24.dp)
+                    .background(if (view.transparent) Color.Transparent else W.Background).padding(8.dp)
+                    .clickable(actionStartActivity<MainActivity>())) {
+                    if (snapshot.accounts.size != 1) {
+                        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(GlanceModifier.defaultWeight()) {
+                                Text("Usage Limits", style = TextStyle(color = ColorProvider(W.TextPrimary), fontSize = 15.sp, fontWeight = FontWeight.Bold))
+                                Text("${snapshot.accountCount} accounts", style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 11.sp))
+                            }
+                            RefreshChip(40.dp, 26.dp, 14.sp)
+                        }
+                        Spacer(GlanceModifier.height(6.dp))
+                    }
+                    if (snapshot.accounts.isEmpty()) Text("No matching accounts. Edit this widget to choose an account.",
+                        style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 12.sp))
+                    else LazyColumn(GlanceModifier.fillMaxSize()) {
+                        items(snapshot.accounts, itemId = { it.accountId.hashCode().toLong() }) { account ->
+                            Column {
+                                AccountCard(context, account, view.transparent, snapshot.accounts.size == 1)
+                                Spacer(GlanceModifier.height(6.dp))
                             }
                         }
                     }
@@ -338,159 +325,47 @@ class DetailedUsageWidget : GlanceAppWidget() {
     }
 
     @androidx.compose.runtime.Composable
-    private fun Header(snapshot: WidgetSnapshot) {
-        Row(
-            modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = GlanceModifier.defaultWeight()) {
-                Text(
-                    text = "Usage Limits",
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                )
-                Text(
-                    text = "${snapshot.accountCount} accounts monitored",
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                        fontSize = 11.sp,
-                    ),
-                )
+    private fun AccountCard(context: Context, account: WidgetAccount, transparent: Boolean, single: Boolean) {
+        val openAccount = androidx.glance.appwidget.action.actionStartActivity(
+            android.content.Intent(context, MainActivity::class.java).putExtra("accountId", account.accountId))
+        Column(GlanceModifier.fillMaxWidth().cornerRadius(16.dp)
+            .background(if (transparent || single) Color.Transparent else W.Card).padding(if (single) 4.dp else 8.dp)
+            .clickable(openAccount)) {
+            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                com.usagelimits.core.model.ProviderId.fromId(account.providerId)?.let { provider ->
+                    Image(ImageProvider(com.usagelimits.ui.providerLogoResource(provider, account.iconChoiceId)), null, GlanceModifier.size(22.dp))
+                    Spacer(GlanceModifier.width(8.dp))
+                }
+                Column(GlanceModifier.defaultWeight()) {
+                    Text(account.title, maxLines = 1, style = TextStyle(color = ColorProvider(W.TextPrimary), fontSize = 13.sp, fontWeight = FontWeight.Bold))
+                    Text(account.accountLabel ?: account.subtitle.orEmpty(), maxLines = 1,
+                        style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 10.sp))
+                }
+                if (single) RefreshChip(36.dp, 26.dp, 14.sp)
             }
-            Text(
-                // "As of 12:40", not "2m ago": an age composed once and left on the home screen
-                // for three hours goes on claiming the numbers are two minutes old.
-                // And the DATE once it is no longer today. "09:15" on a Wednesday afternoon
-                // reads as this morning; the numbers were from Monday.
-                text = Countdown.asOfLabel(snapshot.updatedAt, nowMs = System.currentTimeMillis())
-                    .removePrefix("As of "),
-                style = TextStyle(
-                    color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                    fontSize = 11.sp,
-                ),
-            )
-            // Triggers the same background sync the app uses; it never touches credentials
-            // here, it only asks WorkManager to run a pass.
-            //
-            // The clickable box is 48dp — the platform minimum touch target — while the chip
-            // inside stays 26dp, so the control is reachable on a home screen without the
-            // header reading as a button bar. Its transparent margin also supplies the gap to
-            // the freshness label, which is why no spacer precedes it.
-            RefreshChip(touchSize = 48.dp, chipSize = 26.dp, fontSize = 14.sp)
-        }
-    }
-
-    @androidx.compose.runtime.Composable
-    private fun AccountCard(account: WidgetAccount, transparent: Boolean) {
-        Column(
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .cornerRadius(16.dp)
-                .background(if (transparent) Color.Transparent else W.Card)
-                .padding(10.dp),
-        ) {
-            Text(
-                text = account.title,
-                style = TextStyle(
-                    color = androidx.glance.unit.ColorProvider(W.TextPrimary),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-                maxLines = 1,
-            )
-            // The one line that carries staleness. Row severities never do — they are computed
-            // from the percentage alone — so without this a two-day-old snapshot rendered every
-            // bar in healthy green with nothing on the tile saying the numbers were old. The
-            // compact widget already surfaces this; the larger one did not.
-            when (account.severity) {
-                Severity.STALE -> Text(
-                    text = "Stale — not refreshed recently",
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.textColor(Severity.STALE)),
-                        fontSize = 11.sp,
-                    ),
-                    maxLines = 1,
-                )
-                Severity.ERROR -> Text(
-                    text = "Refresh failed — showing last known numbers",
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.textColor(Severity.ERROR)),
-                        fontSize = 11.sp,
-                    ),
-                    maxLines = 1,
-                )
-                else -> Unit
-            }
-            // Provider and plan are not unique: two accounts on the same plan render an
-            // identical title, and the masked address is the only thing that tells them apart.
-            account.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
-                Text(
-                    text = subtitle,
-                    style = TextStyle(
-                        color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                        fontSize = 11.sp,
-                    ),
-                    maxLines = 1,
-                )
+            if (account.requiresReauthentication || account.severity == Severity.ERROR || account.severity == Severity.STALE) {
+                Text(if (account.requiresReauthentication) "Reconnect account" else if (account.severity == Severity.ERROR) "Update failed · last known data" else "Data is out of date",
+                    style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 10.sp))
             }
             account.rows.forEach { row ->
-                Spacer(GlanceModifier.height(5.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = row.label,
-                        style = TextStyle(
-                            color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                            fontSize = 11.sp,
-                        ),
-                        modifier = GlanceModifier.width(52.dp),
-                        maxLines = 1,
-                    )
+                Spacer(GlanceModifier.height(6.dp))
+                Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(row.label, GlanceModifier.defaultWeight(), maxLines = 1,
+                        style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 11.sp))
+                    Text(percentText(row), style = TextStyle(color = ColorProvider(W.barText(row)), fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                }
+                Spacer(GlanceModifier.height(3.dp))
+                Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     UsageBar(row, GlanceModifier.defaultWeight())
                     Spacer(GlanceModifier.width(8.dp))
-                    Text(
-                        text = percentText(row),
-                        style = TextStyle(
-                            color = androidx.glance.unit.ColorProvider(W.barText(row)),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        modifier = GlanceModifier.width(42.dp),
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = row.resetAt
-                            ?.let {
-                                Countdown.absoluteResetLabel(it, System.currentTimeMillis())
-                                    ?.removePrefix("Resets ")
-                            }
-                            ?: "—",
-                        style = TextStyle(
-                            color = androidx.glance.unit.ColorProvider(W.TextSecondary),
-                            fontSize = 11.sp,
-                        ),
-                        maxLines = 1,
-                    )
+                    Text(row.resetAt?.let { compactRingReset(context, it) } ?: "—", modifier = GlanceModifier.width(54.dp), maxLines = 1,
+                        style = TextStyle(color = ColorProvider(W.TextSecondary), fontSize = 10.sp))
                 }
             }
         }
     }
 }
 
-/**
- * The smallest widget: one ring per account, and nothing else.
- *
- * The other two answer "how much is left" with a number and a bar, which costs a row of height
- * per account and runs out of room at three or four. This answers it with a shape, so a dozen
- * accounts fit where three did — and the thing you actually scan for, a ring that is nearly
- * empty, is legible at a glance without reading anything.
- *
- * Inside each ring is what a number could not tell you: which account it is, and how long
- * until it comes back. The percentage is deliberately absent — the ring IS the percentage, and
- * printing it twice would waste the space this widget exists to save.
- */
 class CompactUsageWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = CompactUsageWidget()
 }
