@@ -203,6 +203,26 @@ jobs:
             -maximum-test-execution-time-allowance 180 \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Run adaptive UI checks on an iPad
+        working-directory: ios/UsageLimits
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPad")))] | last | .udid')
+          test -n "$udid" && test "$udid" != "null"
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+          xcodebuild test \
+            -scheme UsageLimits \
+            -destination "platform=iOS Simulator,id=$udid" \
+            -resultBundlePath "$GITHUB_WORKSPACE/ios-ipad-tests.xcresult" \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 180 \
+            -only-testing:UsageLimitsUITests/AppLaunchUITests/testEachScreenOpensWithNoAccountsConnected \
+            -only-testing:UsageLimitsUITests/AppLaunchUITests/testLandscapeAndLargeTextKeepTheProviderPickerReachable \
+            CODE_SIGNING_ALLOWED=NO
+
       # Kept on failure only, because a UI test that fails is unreadable from console output
       # alone: the bundle carries the screenshot and the view hierarchy at the moment it broke.
       - name: Upload the test results
@@ -210,5 +230,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-ui-test-results
-          path: ios-tests.xcresult
+          path: |
+            ios-tests.xcresult
+            ios-ipad-tests.xcresult
           if-no-files-found: ignore
