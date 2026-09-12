@@ -55,7 +55,7 @@ private struct WidgetPresetEditor: View {
     @Environment(\.dismiss) private var dismiss
     let preset: WidgetPreset
     let accounts: [AccountUsage]
-    let onSave: ([WidgetPreset].Element) async throws -> Void
+    let onSave: @MainActor (WidgetPreset) async throws -> Void
     @State private var name: String
     @State private var order: [String]
     @State private var selected: Set<String>
@@ -63,7 +63,7 @@ private struct WidgetPresetEditor: View {
     @State private var saving = false
     @State private var editMode: EditMode = .active
 
-    init(preset: WidgetPreset, accounts: [AccountUsage], onSave: @escaping (WidgetPreset) async throws -> Void) {
+    init(preset: WidgetPreset, accounts: [AccountUsage], onSave: @escaping @MainActor (WidgetPreset) async throws -> Void) {
         self.preset = preset; self.accounts = accounts; self.onSave = onSave
         _name = State(initialValue: preset.name)
         _selected = State(initialValue: Set(preset.accountIDs))

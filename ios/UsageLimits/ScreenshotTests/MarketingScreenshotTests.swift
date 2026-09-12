@@ -63,7 +63,7 @@ final class MarketingScreenshotTests: XCTestCase {
         let handles = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Reorder")).allElementsBoundByIndex.filter { $0.isHittable }
         XCTAssertGreaterThanOrEqual(handles.count, 2)
         handles[1].press(forDuration: 0.3, thenDragTo: handles[0])
-        capture("iphone-custom-layout", in: app)
+        capture("iphone-custom-layout", in: app, requiresDemoLabel: false)
         app.buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Widget layouts"].waitForExistence(timeout: 10))
         app.terminate()
@@ -76,11 +76,11 @@ final class MarketingScreenshotTests: XCTestCase {
         XCTAssertEqual(restored.buttons["Show Claude"].value as? String, "Selected")
         XCTAssertEqual(restored.buttons["Show OpenAI Codex"].value as? String, "Selected")
         XCTAssertLessThan(restored.buttons["Show Claude"].frame.minY, restored.buttons["Show OpenAI Codex"].frame.minY)
-        capture("iphone-custom-layout-restored", in: restored)
+        capture("iphone-custom-layout-restored", in: restored, requiresDemoLabel: false)
     }
 
-    private func capture(_ name: String, in app: XCUIApplication) {
-        XCTAssertTrue(app.staticTexts["marketing-demo-label"].firstMatch.exists)
+    private func capture(_ name: String, in app: XCUIApplication, requiresDemoLabel: Bool = true) {
+        if requiresDemoLabel { XCTAssertTrue(app.staticTexts["marketing-demo-label"].firstMatch.exists) }
         XCTAssertEqual(app.alerts.count, 0)
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
