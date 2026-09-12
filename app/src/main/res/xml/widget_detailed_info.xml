@@ -8,11 +8,12 @@
     android:minHeight="110dp"
     android:minResizeWidth="180dp"
     android:minResizeHeight="110dp"
-    android:targetCellWidth="4"
+    android:targetCellWidth="3"
     android:targetCellHeight="2"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:description="@string/widget_detailed_description"
+    android:previewImage="@drawable/widget_bars_preview"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:configure="com.usagelimits.widget.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

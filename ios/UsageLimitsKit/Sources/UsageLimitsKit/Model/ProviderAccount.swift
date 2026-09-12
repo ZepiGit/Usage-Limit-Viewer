@@ -109,6 +109,17 @@ public struct ProviderAccount: Sendable, Codable, Identifiable, Equatable {
 }
 
 /// Why a snapshot looks the way it does. Drives the stale and failed banners.
+public enum ConnectionStatus: String, Sendable, Codable {
+    case connected, reconnectRequired, unknown
+
+    public static func legacy(status: SnapshotStatus, message: String?) -> ConnectionStatus {
+        if message == "Sign-in expired — reconnect this account" || message == "This account needs signing in again." {
+            return .reconnectRequired
+        }
+        return status == .failed ? .unknown : .connected
+    }
+}
+
 public enum SnapshotStatus: String, Sendable, Codable {
     case ok
     case partial
@@ -134,6 +145,7 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
     public let applicableResetCreditCount: Int?
 
     public let errorMessage: String?
+    public let connectionStatus: ConnectionStatus
 
     public init(
         accountID: String,
@@ -143,7 +155,8 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         resetCredits: [ResetCredit] = [],
         resetCreditCount: Int? = nil,
         applicableResetCreditCount: Int? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        connectionStatus: ConnectionStatus? = nil
     ) {
         self.accountID = accountID
         self.fetchedAt = fetchedAt
@@ -153,6 +166,7 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
         self.resetCreditCount = resetCreditCount
         self.applicableResetCreditCount = applicableResetCreditCount
         self.errorMessage = errorMessage
+        self.connectionStatus = connectionStatus ?? .legacy(status: status, message: errorMessage)
     }
 
     /// Decoded field by field so a cache written before `applicableResetCreditCount` existed
@@ -171,7 +185,8 @@ public struct UsageSnapshot: Sendable, Codable, Equatable {
                 Int.self, forKey: .resetCreditCount),
             applicableResetCreditCount: try container.decodeIfPresent(
                 Int.self, forKey: .applicableResetCreditCount),
-            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage))
+            errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage),
+            connectionStatus: try container.decodeIfPresent(ConnectionStatus.self, forKey: .connectionStatus))
     }
 
     /// Whether the last fetch failed.

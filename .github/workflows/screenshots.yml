@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check screenshot export names
+        run: python3 -m unittest discover -s ios/Tools -p 'test_export_screenshots.py'
       - name: Install XcodeGen and generate the project
         working-directory: ios/UsageLimits
         run: |
@@ -68,7 +71,7 @@ jobs:
               -test-timeouts-enabled YES \
               -maximum-test-execution-time-allowance 180 \
               -only-testing:"UsageLimitsScreenshotTests/MarketingScreenshotTests/$test_name" \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
             xcrun xcresulttool export attachments \
               --path "$GITHUB_WORKSPACE/$form-screenshots.xcresult" \
               --output-path "$GITHUB_WORKSPACE/$form-attachments"
@@ -76,7 +79,8 @@ jobs:
           done
           python3 ../Tools/export-screenshots.py \
             "$GITHUB_WORKSPACE/iphone-attachments" "$GITHUB_WORKSPACE/ios-marketing-screenshots" \
-            iphone-overview iphone-accounts iphone-resets iphone-settings
+            iphone-overview iphone-accounts iphone-resets iphone-settings \
+            iphone-custom-layout iphone-custom-layout-restored
           python3 ../Tools/export-screenshots.py \
             "$GITHUB_WORKSPACE/ipad-attachments" "$GITHUB_WORKSPACE/ios-marketing-screenshots" \
             ipad-overview

@@ -122,7 +122,7 @@ private struct SummaryCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(healthyLabel)
                     .font(.system(size: 30, weight: .bold))
-                    .foregroundStyle(SeverityPalette.text(snapshot.overallSeverity))
+                    .foregroundStyle(snapshot.accounts.contains { $0.connectionStatus == .reconnectRequired } ? UsageColors.red : UsageColors.textPrimary)
                 Spacer()
                 Text(freshness)
                     .font(.footnote)
@@ -146,15 +146,13 @@ private struct SummaryCard: View {
     /// Counted through `severity(at:staleAfter:)` rather than the stored value, so an account
     /// whose numbers went stale while this screen was open stops counting as healthy.
     private var healthyLabel: String {
-        let healthy = snapshot.accounts.filter {
-            $0.severity(at: now, staleAfter: snapshot.staleAfter) == .healthy
-        }.count
-        return "\(healthy)/\(snapshot.accountCount)"
+        let connected = snapshot.accounts.filter { $0.connectionStatus == .connected }.count
+        return "\(connected)/\(snapshot.accountCount) connected"
     }
 
     private var subtitle: String {
         let accounts = snapshot.accountCount == 1 ? "1 account" : "\(snapshot.accountCount) accounts"
-        guard let next = snapshot.nextResetAt else { return accounts }
+        guard let next = snapshot.accounts.flatMap(\.resetDates).filter({ $0 > now }).min() else { return accounts }
         return "\(accounts) · next reset \(Countdown.format(until: next, from: now))"
     }
 
@@ -194,7 +192,7 @@ private struct AccountCard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(account.title)
+                        Text(provider?.displayName ?? account.title)
                             .font(.headline)
                             .foregroundStyle(UsageColors.textPrimary)
                         if let tier {
@@ -222,7 +220,7 @@ private struct AccountCard: View {
 
                 Spacer()
 
-                StatusPill(severity: account.severity)
+                StatusPill(severity: account.severity, label: account.connectionStatus == .reconnectRequired ? "Reconnect" : nil)
             }
 
             ForEach(Array(account.rows.enumerated()), id: \.offset) { _, row in
@@ -277,9 +275,10 @@ struct WindowRow: View {
 struct StatusPill: View {
 
     let severity: Severity
+    var label: String? = nil
 
     var body: some View {
-        Text(SeverityPalette.label(severity))
+        Text(label ?? SeverityPalette.label(severity))
             .font(.caption.weight(.semibold))
             .foregroundStyle(SeverityPalette.text(severity))
             .padding(.horizontal, 10)

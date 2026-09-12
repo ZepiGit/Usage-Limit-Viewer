@@ -145,12 +145,7 @@ private fun ResetRow(reset: UpcomingReset, nowMs: Long, zone: ZoneId) {
                     .background(SeverityPalette.accent(reset.severity)),
             )
             Spacer(Modifier.width(12.dp))
-            IconBadge(
-                symbol = providerSymbol(reset.provider),
-                tint = providerTint(reset.provider),
-                container = UsageColors.SurfaceElevated,
-                size = 32.dp,
-            )
+            com.usagelimits.ui.ProviderBadge(provider = reset.provider, size = 32.dp)
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

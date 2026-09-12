@@ -12,6 +12,10 @@ import UsageLimitsKit
 final class UsageStore: ObservableObject {
 
     @Published private(set) var accounts: [AccountUsage] = []
+    @Published private var pendingAccountOrder: [String]?
+    @Published var focusedAccountID: String?
+    private var orderWrite: Task<Void, Never>?
+    private var orderGeneration = 0
 
     /// Writable, because the settings screen binds straight to it.
     ///
@@ -94,7 +98,7 @@ final class UsageStore: ObservableObject {
     /// below it.
     var glance: GlanceSnapshot {
         GlanceModel.build(
-            accounts, now: now, scope: .mostCritical, staleAfter: settings.staleAfter)
+            accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter, providerIcons: settings.providerIcons)
     }
 
     /// The accounts in the order the overview should show them.
@@ -109,32 +113,42 @@ final class UsageStore: ObservableObject {
     /// user dragging a healthy account to the top must not thereby change what the headline
     /// reports about the fleet.
     var orderedAccounts: [GlanceAccount] {
-        guard settings.accountsManuallyOrdered else { return glance.accounts }
-        return GlanceModel.build(
-            accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter).accounts
+        let values = GlanceModel.build(accounts, now: now, scope: .allAccounts, staleAfter: settings.staleAfter, providerIcons: settings.providerIcons).accounts
+        guard let order = pendingAccountOrder else { return values }
+        let byID = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0) })
+        return order.compactMap { byID[$0] } + values.filter { !order.contains($0.id) }
     }
 
-    /// Persists the order the user dragged the cards into.
-    ///
-    /// Latches `accountsManuallyOrdered` at the same time: writing the order without the flag
-    /// would store an arrangement the overview then ignores, which reads as the drag having done
-    /// nothing. The flag is set FIRST so the list renders in the new order even if the write
-    /// fails — and a failed write says so rather than silently reverting on the next launch.
     func reorderAccounts(ids: [String]) async {
         guard let container else { return }
-        settings.accountsManuallyOrdered = true
-        do {
-            accounts = try await container.reorder(ids: ids)
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription
+        var seen = Set<String>()
+        let order = ids.filter { seen.insert($0).inserted }
+        pendingAccountOrder = order
+        orderGeneration += 1
+        let generation = orderGeneration
+        let previous = orderWrite
+        let write = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            do {
+                let updated = try await container.reorder(ids: order)
+                if self.orderGeneration == generation {
+                    self.accounts = updated
+                    self.pendingAccountOrder = nil
+                    self.settings.accountsManuallyOrdered = true
+                    self.lastError = nil
+                }
+            } catch {
+                if self.orderGeneration == generation {
+                    self.pendingAccountOrder = nil
+                    self.lastError = "Could not save account order. Try again."
+                }
+            }
         }
+        orderWrite = write
+        await write.value
     }
 
-    /// Whether this account is allowed to notify.
-    ///
-    /// Phrased positively — the switch on screen reads "Notifications", not "Muted" — while the
-    /// stored set names the muted ones, so that an account added later is not silent by default.
     func notificationsEnabled(accountID: String) -> Bool {
         !settings.notifications.mutedAccountIDs.contains(accountID)
     }
@@ -157,7 +171,10 @@ final class UsageStore: ObservableObject {
     /// Named `tierLabel` rather than `planLabel` so the call to the kit's free `planLabel(_:)`
     /// inside it cannot be misread as recursion.
     func tierLabel(accountID: String) -> String? {
-        accounts.first { $0.account.id == accountID }.flatMap { planLabel($0.account.plan) }
+        accounts.first { $0.account.id == accountID }.flatMap { usage in
+            guard let tier = planLabel(usage.account.plan), tier.caseInsensitiveCompare(usage.account.provider.displayName) != .orderedSame else { return nil }
+            return tier
+        }
     }
 
     /// When this account's LONGEST allowance comes back, when that is not simply the next reset.

@@ -81,6 +81,11 @@ class SyncEngine(
     }
 
     suspend fun syncAccount(account: ProviderAccount): SyncOutcome = accountLock(account.localId).withLock {
+        // Emulator fixtures never contact a provider. R8 removes this branch from release APKs.
+        if (com.usagelimits.BuildConfig.DEBUG && account.attributes["screenshotFixture"] == "true") {
+            repository.snapshot(account.localId)?.let { repository.saveSnapshot(it.copy(fetchedAt = nowMs())) }
+            return@withLock SyncOutcome(account.localId, success = true)
+        }
         try {
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")
@@ -130,7 +135,7 @@ class SyncEngine(
             // the scope is checked before anything is persisted — otherwise a cancelled sync
             // records "No network connection" against an account with a working connection.
             currentCoroutineContext().ensureActive()
-            recordFailure(account.localId, e.userMessage())
+            recordFailure(account.localId, e.userMessage(), e is ProviderException.Unauthorized)
             SyncOutcome(account.localId, success = false, message = e.userMessage())
         } catch (e: Exception) {
             // A provider bug must not take the whole sync pass down with it.
@@ -148,9 +153,9 @@ class SyncEngine(
      * [syncAccount] — documented as never throwing — and cancel the sibling accounts sharing
      * the [syncAll] scope, discarding their freshly fetched numbers.
      */
-    private suspend fun recordFailure(accountId: String, message: String) {
+    private suspend fun recordFailure(accountId: String, message: String, requiresReauthentication: Boolean = false) {
         try {
-            repository.saveFailure(accountId, message, nowMs())
+            repository.saveFailure(accountId, message, nowMs(), requiresReauthentication)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

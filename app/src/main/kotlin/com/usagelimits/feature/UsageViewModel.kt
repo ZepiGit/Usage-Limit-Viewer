@@ -73,17 +73,10 @@ data class UsageUiState(
      * it. The repository already returns rows `ORDER BY sortOrder`, so the manual case is the
      * list exactly as it arrived.
      */
-    fun orderedAccounts(nowMs: Long): List<AccountUsage> =
-        if (settings.accountsManuallyOrdered) {
-            accounts
-        } else {
-            accounts.sortedBy {
-                it.snapshot?.severityAt(nowMs, staleAfterMs)?.urgency ?: Int.MAX_VALUE
-            }
-        }
+    fun orderedAccounts(nowMs: Long): List<AccountUsage> = accounts
 
     fun healthyCountAt(nowMs: Long): Int =
-        accounts.count { it.snapshot?.severityAt(nowMs, staleAfterMs) == Severity.HEALTHY }
+        accounts.count { it.snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.CONNECTED }
 
     /** Newest data wins for the "last updated" line — it describes the screen as a whole. */
     val lastUpdated: Long?
@@ -185,10 +178,32 @@ class UsageViewModel(
      * order without the flag would store an arrangement the overview then ignores, which reads
      * as the drag having done nothing.
      */
+    private val reorderMutex = kotlinx.coroutines.sync.Mutex()
+
     fun reorderAccounts(idsInOrder: List<String>) {
         viewModelScope.launch {
-            container.repository.reorderAccounts(idsInOrder)
-            container.settingsStore.setAccountsManuallyOrdered(true)
+            reorderMutex.lock()
+            try {
+                container.repository.reorderAccounts(idsInOrder.distinct())
+                container.settingsStore.setAccountsManuallyOrdered(true)
+                WidgetUpdater.refreshAll(appContext)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                transientMessage.value = "Could not save account order. Try again."
+            } finally {
+                reorderMutex.unlock()
+            }
+        }
+    }
+
+    fun setProviderIcon(provider: ProviderId, iconId: String) {
+        viewModelScope.launch {
+            try {
+                container.settingsStore.setProviderIcon(provider.id, iconId)
+                WidgetUpdater.refreshAll(appContext)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { transientMessage.value = "Could not save the icon choice. Try again." }
         }
     }
 
@@ -290,7 +305,8 @@ class UsageViewModel(
                 }
                 // A widget pinned to this account would otherwise render the empty snapshot
                 // for ever; dropping its config returns it to the automatic scope.
-                container.widgetConfigDao.deleteForAccount(accountId)
+                // Keep the widget's exact scope. A removed account must leave an empty
+                // widget, rather than silently exposing other accounts through auto mode.
                 WidgetUpdater.refreshAll(appContext)
             }
         }

@@ -30,6 +30,7 @@ public struct AppSettings: Sendable, Equatable, Codable {
     /// are about to run out of, and a second date competing with the next reset is the kind of
     /// detail that makes a glanceable tile unglanceable.
     public var showRenewalTime: Bool
+    public var providerIcons: [String: String]
 
     public static let minimumSyncIntervalMinutes = 15
     public static let defaultSyncIntervalMinutes = 30
@@ -39,13 +40,15 @@ public struct AppSettings: Sendable, Equatable, Codable {
         notifications: NotificationSettings = NotificationSettings(),
         accountsManuallyOrdered: Bool = false,
         showSubscriptionTier: Bool = true,
-        showRenewalTime: Bool = false
+        showRenewalTime: Bool = false,
+        providerIcons: [String: String] = [:]
     ) {
         self.syncIntervalMinutes = max(syncIntervalMinutes, AppSettings.minimumSyncIntervalMinutes)
         self.notifications = notifications
         self.accountsManuallyOrdered = accountsManuallyOrdered
         self.showSubscriptionTier = showSubscriptionTier
         self.showRenewalTime = showRenewalTime
+        self.providerIcons = providerIcons
     }
 
     /// Decoded leniently, for the same reason as `NotificationSettings`: a missing key is a
@@ -65,7 +68,8 @@ public struct AppSettings: Sendable, Equatable, Codable {
             showSubscriptionTier: try container.decodeIfPresent(
                 Bool.self, forKey: .showSubscriptionTier) ?? true,
             showRenewalTime: try container.decodeIfPresent(
-                Bool.self, forKey: .showRenewalTime) ?? false)
+                Bool.self, forKey: .showRenewalTime) ?? false,
+            providerIcons: try container.decodeIfPresent([String: String].self, forKey: .providerIcons) ?? [:])
     }
 
     /// This value with every rule the initialiser enforces applied to it.

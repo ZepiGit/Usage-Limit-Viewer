@@ -84,7 +84,7 @@ fun UsageBar(
 
 /** The "Healthy" / "Low" chip: a dot plus a word, so status never rests on colour alone. */
 @Composable
-fun StatusPill(severity: Severity, modifier: Modifier = Modifier) {
+fun StatusPill(severity: Severity, modifier: Modifier = Modifier, label: String? = null) {
     Row(
         modifier = modifier
             .clip(CircleShape)
@@ -100,7 +100,7 @@ fun StatusPill(severity: Severity, modifier: Modifier = Modifier) {
                 .background(SeverityPalette.accent(severity)),
         )
         Text(
-            text = SeverityPalette.label(severity),
+            text = label ?: SeverityPalette.label(severity),
             style = MaterialTheme.typography.labelMedium,
             // textColor, not accent: the dot can be the raw accent, the word cannot.
             color = SeverityPalette.textColor(severity),
@@ -115,71 +115,34 @@ fun StatusPill(severity: Severity, modifier: Modifier = Modifier) {
  * hearing four disconnected fragments per window is unusable once an account has five of them.
  */
 @Composable
-fun UsageWindowRow(
-    window: UsageWindow,
-    nowMs: Long,
-    modifier: Modifier = Modifier,
-) {
+fun UsageWindowRow(window: UsageWindow, nowMs: Long, modifier: Modifier = Modifier) {
     val remaining = window.remainingPercent
-    val percentText = percentLabel(remaining)
-    val qualifier = if (remaining != null && remaining >= 99.5) "available" else "remaining"
-    val resetText = Countdown.resetLabel(window.resetAt, nowMs)
-
-    val spoken = buildString {
-        append(window.label)
-        append(", ")
-        append(if (remaining != null) "$percentText $qualifier" else "usage unknown")
-        resetText?.let { append(", ").append(it) }
+    val percent = percentLabel(remaining)
+    val label = when {
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.FIVE_HOUR -> "5h limit"
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.WEEKLY -> "Weekly"
+        window.group != null && window.category == com.usagelimits.core.model.WindowCategory.MONTHLY -> "Monthly"
+        window.label.equals("Five Hour Limit Remaining", ignoreCase = true) -> "5h limit"
+        window.label.equals("Weekly Limit Remaining", ignoreCase = true) -> "Weekly"
+        else -> window.label
     }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = spoken },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // Every region is proportional. Fixed widths summed to more than a 360dp phone can
-        // give, which starved the weighted bar to zero — the one element the screen exists to
-        // show. Weights keep the bar visible from the narrowest phone to a tablet.
-        Text(
-            text = window.label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = UsageColors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.26f),
-        )
-        UsageBar(
-            remainingPercent = remaining,
-            severity = window.severity,
-            modifier = Modifier.weight(0.24f),
-        )
-        Text(
-            text = percentText,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = SeverityPalette.barColor(remaining, window.severity),
-            maxLines = 1,
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(0.14f),
-        )
-        Text(
-            // Countdown.resetLabel already returns a complete phrase ("Reset in 1h 16m" or
-            // "Reset due"); rewriting it here produced "Reset Reset due" once an instant had
-            // passed, which is reachable whenever a stale snapshot is on screen.
-            text = resetText ?: qualifier,
-            style = MaterialTheme.typography.bodyMedium,
-            color = UsageColors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(0.30f),
-        )
+    val reset = Countdown.resetLabel(window.resetAt, nowMs)
+    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+        contentDescription = "$label, $percent remaining" + (reset?.let { ", $it" } ?: "")
+    }, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+                color = UsageColors.TextSecondary, maxLines = 2)
+            Text(percent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold,
+                color = SeverityPalette.textColor(window.severity))
+        }
+        UsageBar(remaining, window.severity, Modifier.fillMaxWidth(), height = 6.dp)
+        if (reset != null) Text(reset, style = MaterialTheme.typography.bodySmall, color = UsageColors.TextTertiary)
+        Spacer(Modifier.height(3.dp))
     }
 }
 
-/** The app's standard card: large radius, lifted surface, hairline border. */
 @Composable
 fun UsageCard(
     modifier: Modifier = Modifier,
@@ -278,6 +241,7 @@ fun ToggleRow(
         Spacer(Modifier.width(12.dp))
         Switch(
             checked = checked,
+            modifier = Modifier.semantics { contentDescription = title },
             onCheckedChange = onChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = UsageColors.Background,

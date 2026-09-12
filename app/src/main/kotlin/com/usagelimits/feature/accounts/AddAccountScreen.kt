@@ -347,11 +347,7 @@ private fun ProviderRow(provider: ProviderId, onClick: () -> Unit) {
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconBadge(
-            symbol = providerSymbol(provider),
-            tint = providerTint(provider),
-            container = UsageColors.SurfaceElevated,
-        )
+        com.usagelimits.ui.ProviderBadge(provider = provider)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

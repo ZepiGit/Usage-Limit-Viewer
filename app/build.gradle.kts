@@ -102,7 +102,14 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// Robolectric's native font zip filesystem is process-wide on Windows, while
+// Android sandboxes are not. A fresh worker avoids sharing that native state.
+tasks.withType<Test>().configureEach {
+    if (System.getProperty("os.name").startsWith("Windows")) forkEvery = 1
+}
+
 dependencies {
+    implementation("sh.calvin.reorderable:reorderable:3.1.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

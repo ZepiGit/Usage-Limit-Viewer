@@ -8,6 +8,8 @@ import Foundation
 public enum GlanceScope: String, Sendable, Codable {
     case allAccounts
     case mostCritical
+    case closestResets
+    case custom
     case account
     case provider
 }
@@ -61,6 +63,10 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
     /// Optional because a snapshot written by an earlier build has none, and such an account
     /// keeps exactly its previous behaviour rather than being declared stale on upgrade.
     public let fetchedAt: Date?
+    public let providerID: String?
+    public let iconAssetName: String?
+    public let resetDates: [Date]
+    public let connectionStatus: ConnectionStatus
 
     public init(
         id: String,
@@ -69,7 +75,11 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         rows: [GlanceRow],
         severity: Severity,
         baseSeverity: Severity? = nil,
-        fetchedAt: Date? = nil
+        fetchedAt: Date? = nil,
+        providerID: String? = nil,
+        connectionStatus: ConnectionStatus = .unknown,
+        resetDates: [Date]? = nil,
+        iconAssetName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -78,10 +88,14 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         self.severity = severity
         self.baseSeverity = baseSeverity ?? severity
         self.fetchedAt = fetchedAt
+        self.providerID = providerID
+        self.iconAssetName = iconAssetName
+        self.connectionStatus = connectionStatus
+        self.resetDates = resetDates ?? rows.compactMap(\.resetAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt
+        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt, providerID, connectionStatus, resetDates, iconAssetName
     }
 
     /// Lenient on the two new keys: a snapshot written before them must still decode, or every
@@ -95,6 +109,10 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         severity = try c.decode(Severity.self, forKey: .severity)
         baseSeverity = try c.decodeIfPresent(Severity.self, forKey: .baseSeverity) ?? severity
         fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
+        providerID = try c.decodeIfPresent(String.self, forKey: .providerID)
+        iconAssetName = try c.decodeIfPresent(String.self, forKey: .iconAssetName)
+        connectionStatus = try c.decodeIfPresent(ConnectionStatus.self, forKey: .connectionStatus) ?? .unknown
+        resetDates = try c.decodeIfPresent([Date].self, forKey: .resetDates) ?? rows.compactMap(\.resetAt)
     }
 
     /// The severity to show at `now`, aged from the fetch instant rather than frozen.
@@ -209,7 +227,9 @@ public enum GlanceModel {
         scope: GlanceScope,
         accountID: String? = nil,
         providerID: String? = nil,
-        staleAfter: TimeInterval = Severity.staleAfter
+        staleAfter: TimeInterval = Severity.staleAfter,
+        customAccountIDs: [String] = [],
+        providerIcons: [String: String] = [:]
     ) -> GlanceSnapshot {
         let selected: [AccountUsage]
         switch scope {
@@ -217,14 +237,26 @@ public enum GlanceModel {
             selected = all.filter { $0.account.id == accountID }
         case .provider:
             selected = all.filter { $0.account.provider.rawValue == providerID }
-        case .allAccounts, .mostCritical:
+        case .custom:
+            var seen = Set<String>()
+            selected = customAccountIDs.filter { seen.insert($0).inserted }.compactMap { id in all.first { $0.account.id == id } }
+        case .allAccounts, .mostCritical, .closestResets:
             selected = all
         }
 
         guard !selected.isEmpty else { return .empty }
 
-        let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter) }
-        let ordered = scope == .mostCritical ? sortedByUrgency(accounts) : accounts
+        let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter, providerIcons: providerIcons) }
+        let ordered: [GlanceAccount]
+        if scope == .mostCritical { ordered = sortedByUrgency(accounts) }
+        else if scope == .closestResets {
+            let indexed = accounts.enumerated().map { index, account in
+                let next = selected.first { $0.account.id == account.id }?.snapshot?.windows
+                    .compactMap(\.resetAt).filter { $0 > now }.min() ?? .distantFuture
+                return (index, account, next)
+            }
+            ordered = indexed.sorted { $0.2 == $1.2 ? $0.0 < $1.0 : $0.2 < $1.2 }.map { $0.1 }
+        } else { ordered = accounts }
 
         // The headline belongs to ONE account — the one leading the list — not to a pool.
         //
@@ -247,7 +279,7 @@ public enum GlanceModel {
             // fetch replaces it, so once one had passed the minimum was anchored in the past:
             // the summary read "next reset now" for hours while the real next rollover was
             // never shown. The Android view model already drops passed instants.
-            nextResetAt: lead?.rows.compactMap(\.resetAt).filter { $0 > now }.min(),
+            nextResetAt: lead?.resetDates.filter { $0 > now }.min(),
             // Deliberately NOT the leading account's severity. This answers "is anything wrong
             // anywhere", which is a different question from "what should I look at first" —
             // and it is the only thing that still surfaces a broken account once the ordering
@@ -369,7 +401,7 @@ public enum GlanceModel {
     }
 
     private static func glanceAccount(
-        _ usage: AccountUsage, now: Date, staleAfter: TimeInterval
+        _ usage: AccountUsage, now: Date, staleAfter: TimeInterval, providerIcons: [String: String]
     ) -> GlanceAccount {
         let windows = usage.snapshot?.windows ?? []
 
@@ -385,8 +417,8 @@ public enum GlanceModel {
         // plan of "\n" survived as a plan and appended a blank line to a title in a
         // fixed-height tile. Kotlin's `isNotBlank` counts newlines, and the two must agree.
         if let plan = usage.account.plan,
-           !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            title += " \(plan)"
+           !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, plan.caseInsensitiveCompare(title) != .orderedSame {
+            title = plan.lowercased().hasPrefix(title.lowercased() + " ") ? plan : title + " \(plan)"
         }
 
         return GlanceAccount(
@@ -399,7 +431,10 @@ public enum GlanceModel {
             // The unaged judgement and the instant it was made, so a widget rendering this
             // hours later can age it itself instead of repeating a verdict from write time.
             baseSeverity: usage.snapshot?.severity ?? .stale,
-            fetchedAt: usage.snapshot?.fetchedAt)
+            fetchedAt: usage.snapshot?.fetchedAt, providerID: usage.account.provider.rawValue,
+            connectionStatus: usage.snapshot?.connectionStatus ?? .unknown,
+            resetDates: usage.snapshot?.windows.compactMap(\.resetAt),
+            iconAssetName: ProviderIconCatalog.selected(for: usage.account.provider, id: providerIcons[usage.account.provider.rawValue]).assetName)
     }
 
     private static func row(_ window: UsageWindow) -> GlanceRow {

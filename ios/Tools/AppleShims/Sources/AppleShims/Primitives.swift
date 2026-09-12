@@ -181,8 +181,14 @@ public struct List: View {
     public var body: some View { ShimLeaf() }
 }
 
+public enum Axis {
+    public struct Set: Sendable {
+        public static let horizontal = Set()
+        public static let vertical = Set()
+    }
+}
 public struct ScrollView: View {
-    public init(_ axes: Any? = nil, showsIndicators: Bool = true,
+    public init(_ axes: Axis.Set = .vertical, showsIndicators: Bool = true,
                 @ViewBuilder content: () -> any View) {}
     public var body: some View { ShimLeaf() }
 }
@@ -247,6 +253,7 @@ public struct Image: View {
     public init(_ name: String) {}
     public var body: some View { ShimLeaf() }
     public func resizable() -> Image { self }
+    public func scaledToFit() -> Image { self }
 }
 
 public struct Button: View {
@@ -386,6 +393,19 @@ extension App {
     public static func main() {}
 }
 
+public struct NavigationLink: View {
+    public init(_ title: String, @ViewBuilder destination: () -> any View) {}
+    public var body: some View { ShimLeaf() }
+}
+
+public struct ScrollViewProxy {
+    public func scrollTo<ID: Hashable>(_ id: ID, anchor: Alignment? = nil) {}
+}
+public struct ScrollViewReader: View {
+    public init(@ViewBuilder content: (ScrollViewProxy) -> any View) {}
+    public var body: some View { ShimLeaf() }
+}
+
 public struct NavigationStack: View {
     public init(@ViewBuilder root: () -> any View) {}
     public var body: some View { ShimLeaf() }
@@ -497,7 +517,15 @@ public struct ToolbarItemPlacement {
 
 public enum TextSelectability { case enabled, disabled }
 
+public protocol EnvironmentKey {
+    associatedtype Value
+    static var defaultValue: Value { get }
+}
 public struct EnvironmentValues {
+    public subscript<Key: EnvironmentKey>(_ key: Key.Type) -> Key.Value {
+        get { Key.defaultValue }
+        set {}
+    }
     public var accessibilityReduceMotion = false
     public var dismiss = DismissAction()
     public var openURL = OpenURLAction()

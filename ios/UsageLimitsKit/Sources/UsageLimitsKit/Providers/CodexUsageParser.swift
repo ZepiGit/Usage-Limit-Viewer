@@ -268,7 +268,7 @@ public enum CodexUsageParser: Sendable {
             usedPercent: usedPercent,
             periodSeconds: period,
             resetAt: resetAt,
-            exhausted: limitReached || (usedPercent.map { $0 >= 100.0 } ?? false),
+            exhausted: (usedPercent.map { $0 >= 100.0 } ?? false) || (usedPercent == nil && limitReached),
             group: group
         )
     }

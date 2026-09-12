@@ -1,5 +1,6 @@
 package com.usagelimits.widget
 
+import com.usagelimits.core.model.title
 import com.usagelimits.core.database.AccountUsage
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
@@ -23,6 +24,11 @@ data class WidgetAccount(
     val subtitle: String?,
     val rows: List<WidgetRow>,
     val severity: Severity,
+    val providerId: String = "",
+    val requiresReauthentication: Boolean = false,
+    val iconChoiceId: String? = null,
+    val accountLabel: String? = null,
+    val resetTimes: List<Long> = rows.mapNotNull { it.resetAt },
 )
 
 /**
@@ -75,22 +81,30 @@ object WidgetDataBuilder {
          * grey out every tile permanently.
          */
         staleAfterMs: Long = Severity.STALE_AFTER_MS,
+        customAccountIds: List<String> = emptyList(),
+        providerIcons: Map<String, String> = emptyMap(),
     ): WidgetSnapshot {
         val selected = when (scope) {
             WidgetScope.ACCOUNT -> all.filter { it.account.localId == accountId }
             WidgetScope.PROVIDER -> all.filter { it.account.provider.id == providerId }
-            WidgetScope.ALL_ACCOUNTS, WidgetScope.MOST_CRITICAL -> all
+            WidgetScope.CUSTOM -> customAccountIds.distinct().mapNotNull { id -> all.firstOrNull { it.account.localId == id } }
+            WidgetScope.ALL_ACCOUNTS, WidgetScope.MOST_CRITICAL, WidgetScope.CLOSEST_RESETS -> all
         }
 
         if (selected.isEmpty()) return WidgetSnapshot.Empty
 
-        val accounts = selected.map { it.toWidgetAccount(nowMs, staleAfterMs) }
+        val accounts = selected.map { it.toWidgetAccount(nowMs, staleAfterMs, providerIcons) }
 
         // For the auto scope, lead with whatever is closest to running out — see [criticality].
         val ordered = if (scope == WidgetScope.MOST_CRITICAL) {
             accounts.sortedWith(
                 compareBy({ criticality(it.severity) }, { band(it.tightestRemaining()) }),
             )
+        } else if (scope == WidgetScope.CLOSEST_RESETS) {
+            accounts.sortedBy { account ->
+                selected.first { it.account.localId == account.accountId }.snapshot?.windows.orEmpty()
+                    .mapNotNull { it.resetAt }.filter { it > nowMs }.minOrNull() ?: Long.MAX_VALUE
+            }
         } else {
             accounts
         }
@@ -116,7 +130,7 @@ object WidgetDataBuilder {
             // replaces it, so once one had passed the minimum was anchored in the past and the
             // compact widget's tile named a reset that was already over. The overview's view
             // model drops passed instants for the same reason.
-            nextResetAt = lead?.rows?.mapNotNull { it.resetAt }?.filter { it > nowMs }?.minOrNull(),
+            nextResetAt = lead?.resetTimes?.filter { it > nowMs }?.minOrNull(),
             // Deliberately NOT the leading account's severity. This answers "is anything wrong
             // anywhere", which is a different question from "what should I look at first" —
             // and it is the only thing that still surfaces a broken account once the ordering
@@ -212,7 +226,7 @@ object WidgetDataBuilder {
         else -> 2
     }
 
-    private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long): WidgetAccount {
+    private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long, providerIcons: Map<String, String>): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
 
         // Show the two horizons that matter, not every window an account reports — a widget
@@ -224,13 +238,15 @@ object WidgetDataBuilder {
 
         return WidgetAccount(
             accountId = account.localId,
-            title = buildString {
-                append(account.provider.displayName)
-                account.plan?.takeIf { it.isNotBlank() }?.let { append(" ").append(it) }
-            },
+            title = account.title(),
             subtitle = account.maskedEmail,
             rows = rows,
             severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE,
+            providerId = account.provider.id,
+            iconChoiceId = providerIcons[account.provider.id],
+            accountLabel = account.label,
+            requiresReauthentication = snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED,
+            resetTimes = windows.mapNotNull { it.resetAt },
         )
     }
 

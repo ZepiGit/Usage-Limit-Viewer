@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotificationStateEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 6,
+    version = 8,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -134,6 +134,19 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE usage_snapshots ADD COLUMN connectionStatus TEXT")
+                db.execSQL("ALTER TABLE widget_configs ADD COLUMN customAccountIdsJson TEXT NOT NULL DEFAULT '[]'")
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE widget_configs ADD COLUMN layoutMetricsJson TEXT NOT NULL DEFAULT '{}'")
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
@@ -141,6 +154,8 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
                 DATABASE_NAME,
             ).addMigrations(
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
             ).build()
     }
 }

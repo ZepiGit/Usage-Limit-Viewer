@@ -145,7 +145,7 @@ struct UsageProvider: TimelineProvider {
 /// and the headline rows could not be shown at all because the format did not carry them.
 ///
 /// The snapshot is already the reduced, decided view. It travels whole.
-private enum SnapshotCache {
+enum SnapshotCache {
 
     /// The App Group identifier shared by the app and this extension. One named constant, so
     /// the container can never be opened under two spellings.
@@ -206,7 +206,7 @@ private extension GlanceSnapshot {
     }
 }
 
-private enum QuotaFormatting {
+enum QuotaFormatting {
 
     /// A nil percentage is *unknown*, not zero. It renders as an em dash over an
     /// empty bar; coercing it to "0 %" would cry wolf, and to "100 %" would invent
@@ -1045,6 +1045,13 @@ struct UsageRingEntryView: View {
 @main
 struct UsageWidgets: WidgetBundle {
     var body: some Widget {
+        #if canImport(AppIntents)
+        if #available(iOS 17.0, *) {
+            ConfiguredUsageWidget()
+            ConfiguredRingWidget(mini: false)
+            ConfiguredRingWidget(mini: true)
+        }
+        #endif
         UsageWidget()
         UsageClearWidget()
         UsageRingWidget()

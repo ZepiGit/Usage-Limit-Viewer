@@ -198,7 +198,9 @@ public actor AccountRepository {
                 resetCredits: previous?.resetCredits ?? [],
                 resetCreditCount: previous?.resetCreditCount,
                 applicableResetCreditCount: previous?.applicableResetCreditCount,
-                errorMessage: message)
+                errorMessage: message,
+                connectionStatus: ConnectionStatus.legacy(status: .failed, message: message) == .reconnectRequired
+                    ? .reconnectRequired : (previous?.connectionStatus ?? .unknown))
             updated[accountID] = stored
         }
 

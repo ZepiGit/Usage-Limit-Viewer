@@ -32,12 +32,16 @@ struct SettingsScreen: View {
                     Toggle("Limit exhausted", isOn: $store.settings.notifications.notifyOnExhausted)
                     Toggle("Reset approaching", isOn: $store.settings.notifications.notifyOnResetApproaching)
                     Toggle(
-                        "Reset credit expiring",
+                        "Unused reset credit expires soon",
                         isOn: $store.settings.notifications.notifyOnResetCreditExpiring)
+                    Text("Notify me when an unused Codex reset credit expires within 24 hours. A credit lets you reset an eligible usage limit.")
+                        .font(.footnote).foregroundStyle(UsageColors.textSecondary)
                     Toggle("Sign-in expired", isOn: $store.settings.notifications.notifyOnAuthExpired)
                 }
 
                 Section("Display") {
+                    NavigationLink("Provider icons") { ProviderIconsScreen() }
+                    NavigationLink("Widget layouts") { WidgetPresetsScreen() }
                     Toggle(
                         "Show subscription tier",
                         isOn: $store.settings.showSubscriptionTier)
