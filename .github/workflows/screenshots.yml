@@ -68,7 +68,7 @@ jobs:
               -test-timeouts-enabled YES \
               -maximum-test-execution-time-allowance 180 \
               -only-testing:"UsageLimitsScreenshotTests/MarketingScreenshotTests/$test_name" \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
             xcrun xcresulttool export attachments \
               --path "$GITHUB_WORKSPACE/$form-screenshots.xcresult" \
               --output-path "$GITHUB_WORKSPACE/$form-attachments"
