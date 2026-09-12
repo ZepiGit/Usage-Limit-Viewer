@@ -419,7 +419,7 @@ public enum OAuthFlows {
 
         // 1. Anti-CSRF first, in constant time — see `timingSafeEqual`.
         guard let returnedState = parameters["state"],
-              timingSafeEqual(expectedState, returnedState) else {
+              stateMatches(expected: expectedState, returned: returnedState) else {
             throw OAuthCallbackError.stateMismatch
         }
 
@@ -567,6 +567,23 @@ extension OAuthFlows {
     /// pattern could leak.
     static func timingSafeEqual(_ expected: String, _ received: String) -> Bool {
         timingSafeEqual(Array(expected.utf8), Array(received.utf8))
+    }
+
+    /// Whether a returned `state` answers the request that issued `expected`.
+    ///
+    /// Exact equality, or `expected` followed by a `.`-separated suffix. OpenAI's authorize
+    /// endpoint appends onboarding metadata to the state it echoes for some accounts — the
+    /// Codex CLI accepts `<state>.onboarding_entrypoint=…` for the same reason — and an exact
+    /// comparison turned every such sign-in into a redirect the listener ignored until it
+    /// timed out. The random part is still required in full, so a forged redirect gains
+    /// nothing from the tolerance.
+    static func stateMatches(expected: String, returned: String) -> Bool {
+        if timingSafeEqual(expected, returned) { return true }
+        let expectedBytes = Array(expected.utf8)
+        let returnedBytes = Array(returned.utf8)
+        guard returnedBytes.count > expectedBytes.count,
+              returnedBytes[expectedBytes.count] == UInt8(ascii: ".") else { return false }
+        return timingSafeEqual(expectedBytes, Array(returnedBytes[0..<expectedBytes.count]))
     }
 
     /// Digest-fold comparison for byte strings; see `timingSafeEqual(_:_:)`

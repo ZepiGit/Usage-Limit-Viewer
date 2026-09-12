@@ -3,6 +3,7 @@ package com.usagelimits.feature
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.semantics.SemanticsActions
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.feature.accounts.AddAccountScreen
@@ -33,6 +34,35 @@ class SignInTransitionTest {
         compose.onNodeWithText("Sign in with a device code").assertExists()
         compose.runOnIdle { provider.value = ProviderId.CODEX }
         compose.onNodeWithText("Sign in in your browser").assertExists()
+    }
+
+    @Test fun `the browser wait offers the device code and a failed code attempt retries the code`() {
+        val state = mutableStateOf<AddAccountState>(
+            AddAccountState.AwaitingBrowser(ProviderId.CODEX, deviceCodeAlternative = true, authorizationUrl = "https://example.test/auth"),
+        )
+        var browserStarts = 0
+        var codeStarts = 0
+        compose.setContent {
+            UsageLimitsTheme {
+                AddAccountScreen(
+                    state = state.value, providers = listOf(ProviderId.CODEX),
+                    onStart = { browserStarts++ }, onCancel = {}, onDone = {}, onSubmitApiKey = {},
+                    onStartWithDeviceCode = { codeStarts++ },
+                )
+            }
+        }
+        compose.onNodeWithText("Use a device code").assertExists().performClick()
+        compose.runOnIdle { assertEquals(1, codeStarts) }
+
+        compose.runOnIdle {
+            state.value = AddAccountState.Failed(ProviderId.CODEX, "Device login expired", deviceCodeAlternative = true, viaDeviceCode = true)
+        }
+        compose.onNodeWithText("Try again").performClick()
+        compose.onNodeWithText("Use the browser").assertExists()
+        compose.runOnIdle {
+            assertEquals("try again repeats the flow that failed", 2, codeStarts)
+            assertEquals(0, browserStarts)
+        }
     }
 
     @Test fun `the outgoing provider chooser cannot start another login`() {

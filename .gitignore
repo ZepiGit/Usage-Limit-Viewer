@@ -15,6 +15,11 @@ local.properties
 *.class
 *.jks
 *.keystore
+# The ONE keystore that is repository content: the shared debug key. Its password is the
+# Android default and it signs nothing distributed; it exists so every debug-signed build,
+# from any machine or CI run, can update the one before it instead of forcing a reinstall
+# that wipes the user's accounts. See docs/release.md.
+!/app/debug.keystore
 __pycache__/
 *.pyc
 

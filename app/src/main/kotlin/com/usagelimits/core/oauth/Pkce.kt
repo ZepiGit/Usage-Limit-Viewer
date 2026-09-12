@@ -55,6 +55,23 @@ object Pkce {
         return diff == 0
     }
 
+    /**
+     * Whether a returned `state` answers the request that issued [expected].
+     *
+     * Exact equality, or [expected] followed by a `.`-separated suffix. OpenAI's authorize
+     * endpoint appends onboarding metadata to the state it echoes for some accounts — the
+     * Codex CLI accepts `<state>.onboarding_entrypoint=…` for the same reason — and an exact
+     * comparison turned every such sign-in into a redirect the listener answered with 400 and
+     * then waited on until it timed out. The random part is still required in full, so this
+     * gives a forged redirect nothing: a stranger has to know all 256 bits either way.
+     */
+    fun stateMatches(expected: String, returned: String): Boolean {
+        if (constantTimeEquals(expected, returned)) return true
+        if (returned.length <= expected.length) return false
+        return returned[expected.length] == '.' &&
+            constantTimeEquals(expected, returned.substring(0, expected.length))
+    }
+
     /** base64url without padding, as the spec requires. */
     private fun encode(bytes: ByteArray): String =
         Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)

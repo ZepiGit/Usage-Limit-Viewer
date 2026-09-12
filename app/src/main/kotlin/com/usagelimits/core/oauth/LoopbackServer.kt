@@ -40,7 +40,12 @@ class LoopbackServer(private val port: Int) : Closeable {
     fun start() {
         if (serverSocket != null) return
         serverSocket = try {
-            ServerSocket(port, 1, InetAddress.getByName("127.0.0.1"))
+            // A backlog with room for the browser's speculative connections. Chrome opens
+            // sockets it may never speak on ahead of a navigation it predicts, and with a
+            // backlog of one the connection carrying the real redirect could be refused while
+            // two idle ones sat in the queue — the browser then showed "can't reach this page"
+            // for a listener that was running.
+            ServerSocket(port, ACCEPT_BACKLOG, InetAddress.getByName("127.0.0.1"))
         } catch (e: Exception) {
             throw ProviderException.Unexpected(
                 "Cannot listen on port $port for the login redirect. " +
@@ -246,6 +251,9 @@ class LoopbackServer(private val port: Int) : Closeable {
     private companion object {
         /** How long one accept() blocks before cancellation and the deadline are re-checked. */
         const val ACCEPT_POLL_MS = 200
+
+        /** Pending connections the kernel may hold while one is being read. */
+        const val ACCEPT_BACKLOG = 8
 
         /** Far above any real redirect line, far below anything that could exhaust memory. */
         const val MAX_REQUEST_LINE_BYTES = 8 * 1024

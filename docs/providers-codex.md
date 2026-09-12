@@ -68,8 +68,32 @@ from this app into the browser, which is exactly the step the browser flow remov
    time) before reading the code, then exchanges the code exactly as in step 7 below, with
    `redirect_uri=http://localhost:1455/auth/callback` and the verifier it generated itself.
 
+   The check accepts the state exactly, or the state followed by a `.`-separated suffix.
+   OpenAI appends onboarding metadata to the value it echoes for some accounts —
+   `<state>.onboarding_entrypoint=life_sciences` is the form the Codex CLI itself tolerates
+   in `login_callback_result_from_state` — and an exact comparison answered those redirects
+   with `400` and then waited for one that never came. The random part is still required in
+   full, so the tolerance gives a forged redirect nothing (`Pkce.stateMatches`).
+
 PKCE here works as intended: the verifier is created on the device and never leaves it, so a
 code intercepted on its way back is worthless on its own.
+
+Two things around the flow, both found by a sign-in that stopped working on a phone:
+
+- **A retry starts clean.** `AddAccountViewModel.startLogin` waits for the previous attempt
+  to finish unwinding before it begins the next one. Cancelling alone was not enough: the old
+  attempt's listener is closed in a `finally` that runs on another thread, so a retry could
+  find port 1455 still bound — which this provider answers by quietly switching to the device
+  flow — or have its freshly stored PKCE pair wiped by the old attempt's clean-up, which
+  failed the retry with "Login was not started" the moment its redirect arrived. The provider
+  also only clears the pair that belongs to the attempt being cleaned up.
+- **The device code is a button, not only a fallback.** `CodexProvider` implements
+  `DeviceCodeLoginCapable`, and the add-account screen offers "Use a device code" under the
+  browser wait and under a failed attempt. The browser flow needs the browser to reach this
+  app on `localhost`, and not every phone lets it — a browser that will not open a plaintext
+  local address, a system that kills the app while the browser is in front. The Codex CLI
+  ships `--device-auth` for the same reason. "Try again" after a failed device-code attempt
+  repeats the device code, not the browser.
 
 ### 2b. Device flow (fallback, when port 1455 is taken)
 
