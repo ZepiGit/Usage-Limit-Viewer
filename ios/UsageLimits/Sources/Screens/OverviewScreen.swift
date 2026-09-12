@@ -192,7 +192,7 @@ private struct AccountCard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(account.title)
+                        Text(provider?.displayName ?? account.title)
                             .font(.headline)
                             .foregroundStyle(UsageColors.textPrimary)
                         if let tier {
@@ -220,7 +220,7 @@ private struct AccountCard: View {
 
                 Spacer()
 
-                StatusPill(severity: account.severity)
+                StatusPill(severity: account.severity, label: account.connectionStatus == .reconnectRequired ? "Reconnect" : nil)
             }
 
             ForEach(Array(account.rows.enumerated()), id: \.offset) { _, row in
@@ -275,9 +275,10 @@ struct WindowRow: View {
 struct StatusPill: View {
 
     let severity: Severity
+    var label: String? = nil
 
     var body: some View {
-        Text(SeverityPalette.label(severity))
+        Text(label ?? SeverityPalette.label(severity))
             .font(.caption.weight(.semibold))
             .foregroundStyle(SeverityPalette.text(severity))
             .padding(.horizontal, 10)

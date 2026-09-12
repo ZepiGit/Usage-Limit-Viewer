@@ -157,7 +157,10 @@ final class UsageStore: ObservableObject {
     /// Named `tierLabel` rather than `planLabel` so the call to the kit's free `planLabel(_:)`
     /// inside it cannot be misread as recursion.
     func tierLabel(accountID: String) -> String? {
-        accounts.first { $0.account.id == accountID }.flatMap { planLabel($0.account.plan) }
+        accounts.first { $0.account.id == accountID }.flatMap { usage in
+            guard let tier = planLabel(usage.account.plan), tier.caseInsensitiveCompare(usage.account.provider.displayName) != .orderedSame else { return nil }
+            return tier
+        }
     }
 
     /// When this account's LONGEST allowance comes back, when that is not simply the next reset.

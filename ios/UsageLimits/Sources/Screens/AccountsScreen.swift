@@ -8,15 +8,45 @@ struct AccountsScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var store: UsageStore
     @State private var isAdding = false
+    @State private var providerFilter: ProviderID?
+    @State private var attentionOnly = false
+
+    private var filteredAccounts: [AccountUsage] {
+        store.accounts.filter { usage in
+            (providerFilter == nil || usage.account.provider == providerFilter) &&
+                (!attentionOnly || usage.snapshot?.connectionStatus == .reconnectRequired)
+        }
+    }
+
+    private func filterButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 10)
+                .foregroundStyle(selected ? UsageColors.background : UsageColors.textSecondary)
+                .background(selected ? UsageColors.terracotta : UsageColors.surfaceElevated).clipShape(Capsule())
+        }.buttonStyle(.plain)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            filterButton("All", selected: providerFilter == nil && !attentionOnly) { providerFilter = nil; attentionOnly = false }
+                            filterButton("Needs attention", selected: attentionOnly) { attentionOnly.toggle() }
+                            ForEach(ProviderID.allCases, id: \.self) { provider in
+                                if store.accounts.contains(where: { $0.account.provider == provider }) {
+                                    filterButton(provider.displayName, selected: providerFilter == provider) {
+                                        providerFilter = providerFilter == provider ? nil : provider
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Driven from `store.accounts` rather than the glance model, because this
                     // screen is the one place that needs more than the reduced view: the reset
                     // credits a card can spend do not travel in a glance.
-                    ForEach(store.accounts, id: \.account.id) { usage in
+                    ForEach(filteredAccounts, id: \.account.id) { usage in
                         AccountSummaryCard(usage: usage, now: store.now)
                     }
 
@@ -38,6 +68,7 @@ struct AccountsScreen: View {
 }
 
 private struct AccountSummaryCard: View {
+    @State private var reconnecting = false
 
     @EnvironmentObject private var store: UsageStore
     @State private var isConfirmingRedeem = false
@@ -78,7 +109,7 @@ private struct AccountSummaryCard: View {
                         .foregroundStyle(UsageColors.textTertiary)
                         .accessibilityLabel("Notifications muted")
                 }
-                StatusPill(severity: snapshot?.severity(at: now, staleAfter: store.settings.staleAfter) ?? .stale)
+                StatusPill(severity: snapshot?.severity(at: now, staleAfter: store.settings.staleAfter) ?? .stale, label: snapshot?.connectionStatus == .reconnectRequired ? "Reconnect" : nil)
                 // Disconnecting has been possible in the container, and tested there, since
                 // before anything on screen could ask for it — so a user could connect an
                 // account and then had no way at all to disconnect it. Deleting the app was
@@ -86,6 +117,9 @@ private struct AccountSummaryCard: View {
                 // one. A menu rather than a swipe: these cards are not a plain list, and an
                 // action this consequential should not be discoverable only by accident.
                 Menu {
+                    if snapshot?.connectionStatus == .reconnectRequired {
+                        Button("Reconnect account") { reconnecting = true }
+                    }
                     // Muting lives in this menu rather than as a switch on the card, because
                     // it is a per-account preference and not a per-account fact: a row of
                     // toggles down the list would compete with the numbers the screen is for.
@@ -107,7 +141,8 @@ private struct AccountSummaryCard: View {
             // deletes what THIS DEVICE stores; it does not revoke the grant at the provider,
             // and saying otherwise would leave someone believing they had cut off access they
             // had not.
-            .confirmationDialog(
+            .sheet(isPresented: $reconnecting) { AddAccountSheet() }
+        .confirmationDialog(
                 "Disconnect \(usage.account.label)?",
                 isPresented: $isConfirmingRemove,
                 titleVisibility: .visible

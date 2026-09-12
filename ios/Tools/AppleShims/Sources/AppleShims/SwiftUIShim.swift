@@ -119,7 +119,9 @@ extension View {
     public func toolbarBackground(_ visibility: Visibility, for bars: Any) -> Self { self }
     public func toolbarBackground<S: ShapeStyle>(_ style: S, for bars: Any) -> Self { self }
     public func sheet(isPresented: Binding<Bool>, onDismiss: (() -> Void)? = nil,
-                      @ViewBuilder content: () -> any View) -> Self { self }
+        @ViewBuilder content: () -> any View) -> Self { self }
+    public func sheet<Item: Identifiable>(item: Binding<Item?>, onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: (Item) -> any View) -> Self { self }
     public func alert(_ title: Any, isPresented: Binding<Bool>,
                       @ViewBuilder actions: () -> any View) -> Self { self }
     public func alert(_ title: Any, isPresented: Binding<Bool>,

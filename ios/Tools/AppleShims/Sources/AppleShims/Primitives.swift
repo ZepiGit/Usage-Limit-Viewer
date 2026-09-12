@@ -387,6 +387,11 @@ extension App {
     public static func main() {}
 }
 
+public struct NavigationLink: View {
+    public init(_ title: String, @ViewBuilder destination: () -> any View) {}
+    public var body: some View { ShimLeaf() }
+}
+
 public struct NavigationStack: View {
     public init(@ViewBuilder root: () -> any View) {}
     public var body: some View { ShimLeaf() }

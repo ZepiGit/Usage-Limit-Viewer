@@ -40,6 +40,7 @@ struct SettingsScreen: View {
                 }
 
                 Section("Display") {
+                    NavigationLink("Widget layouts") { WidgetPresetsScreen() }
                     Toggle(
                         "Show subscription tier",
                         isOn: $store.settings.showSubscriptionTier)
