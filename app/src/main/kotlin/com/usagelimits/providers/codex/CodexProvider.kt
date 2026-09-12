@@ -14,6 +14,7 @@ import com.usagelimits.core.oauth.JwtClaims
 import com.usagelimits.core.oauth.LoopbackServer
 import com.usagelimits.core.oauth.Pkce
 import com.usagelimits.core.oauth.PkceCodes
+import com.usagelimits.providers.DeviceCodeLoginCapable
 import com.usagelimits.providers.LoginChallenge
 import com.usagelimits.providers.ProviderProfile
 import com.usagelimits.providers.UsageProvider
@@ -44,7 +45,7 @@ import java.util.UUID
 class CodexProvider(
     private val http: HttpClient,
     private val nowMs: () -> Long = System::currentTimeMillis,
-) : UsageProvider {
+) : UsageProvider, DeviceCodeLoginCapable {
 
     override val providerId = ProviderId.CODEX
     override val supportsResetCredits = true
@@ -92,6 +93,18 @@ class CodexProvider(
             redirectUri = Codex.REDIRECT_URI,
         )
     }
+
+    /**
+     * The device flow on request, not only as the port fallback.
+     *
+     * The browser flow depends on the browser reaching this app's loopback listener, and on
+     * some phones it does not: a browser that refuses `http://localhost`, a launcher that
+     * kills the app while the browser is in front, a port that is bound by something else
+     * only intermittently. The Codex CLI ships `--device-auth` for the same reason. This is
+     * the button under the browser wait and under a failed attempt, so a user whose redirect
+     * never lands has a way in that needs no listener at all.
+     */
+    override suspend fun deviceLoginChallenge(): LoginChallenge = beginDeviceLogin()
 
     /** The device flow: no port to bind, a code to carry. Used only when the port is taken. */
     private suspend fun beginDeviceLogin(): LoginChallenge {
@@ -148,25 +161,32 @@ class CodexProvider(
 
         val response = try {
             listener.awaitRedirect(REDIRECT_TIMEOUT_MS) { response ->
-                response.state?.let { Pkce.constantTimeEquals(expectedState, it) } == true
+                response.state?.let { Pkce.stateMatches(expectedState, it) } == true
             }
         } finally {
             // One redirect, one attempt: the port is released and the verifier discarded even
             // when the browser never comes back.
             listener.close()
-            server = null
-            pendingCodes = null
-            pendingState = null
+            // Only THIS attempt's secrets. A cancelled attempt unwinds here on its own thread,
+            // and by then a retry may already have bound the port and stored a new pair —
+            // nulling unconditionally wiped that pair, and the retry then failed with "Login
+            // was not started" the moment its redirect arrived.
+            if (server === listener) {
+                server = null
+                pendingCodes = null
+                pendingState = null
+            }
         }
 
         response.error?.let { error ->
             throw ProviderException.LoginCancelled(response.errorDescription ?: error)
         }
         // The CSRF control for the whole flow: the state the browser brought back has to be
-        // the one this instance generated, checked before the code is looked at.
+        // the one this instance generated, checked before the code is looked at. OpenAI may
+        // append a `.`-separated suffix to the value it echoes; see Pkce.stateMatches.
         val returnedState = response.state
             ?: throw ProviderException.LoginCancelled("Redirect carried no state")
-        if (!Pkce.constantTimeEquals(expectedState, returnedState)) {
+        if (!Pkce.stateMatches(expectedState, returnedState)) {
             throw ProviderException.Unexpected("state mismatch")
         }
         val code = response.code

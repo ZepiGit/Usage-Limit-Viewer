@@ -140,6 +140,18 @@ final class OAuthFlowsTests: XCTestCase {
         XCTAssertEqual(try OAuthFlows.code(from: url, expectedState: "xyz"), "abc123")
     }
 
+    func testAStateWithAnAppendedSuffixStillAnswersTheRequest() throws {
+        // OpenAI echoes `<state>.onboarding_entrypoint=…` for some accounts, exactly as the
+        // Codex CLI tolerates. The random part is still required in full.
+        let url = URL(string: "com.usagelimits://callback?code=abc123&state=xyz.onboarding_entrypoint=life_sciences")!
+
+        XCTAssertEqual(try OAuthFlows.code(from: url, expectedState: "xyz"), "abc123")
+        XCTAssertThrowsError(try OAuthFlows.code(
+            from: URL(string: "com.usagelimits://callback?code=abc123&state=xy.z")!, expectedState: "xyz"))
+        XCTAssertThrowsError(try OAuthFlows.code(
+            from: URL(string: "com.usagelimits://callback?code=abc123&state=xyzz")!, expectedState: "xyz"))
+    }
+
     func testAMismatchedStateIsRejected() {
         // The whole point of `state`: without this check a crafted redirect can hand the app an
         // authorisation code belonging to somebody else's session.
