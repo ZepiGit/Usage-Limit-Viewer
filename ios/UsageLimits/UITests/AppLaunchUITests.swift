@@ -17,13 +17,27 @@ final class AppLaunchUITests: XCTestCase {
         // A failing assertion should stop the test at the point of failure rather than carrying
         // on and reporting a cascade of consequences.
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+        super.tearDown()
     }
 
     /// Swipes until the element materialises, or gives up rather than swiping for ever.
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        for _ in 0..<6 {
+        let identifiers = ["provider-picker-scroll", "settings-form", "accounts-scroll"]
+        let container = identifiers.map { app.descendants(matching: .any)[$0].firstMatch }
+            .first { $0.exists && $0.isHittable } ?? app
+        for _ in 0..<12 {
             if element.isHittable { return true }
-            app.swipeUp()
+            let frame = container.frame.intersection(app.frame)
+            let reverse = element.exists && element.frame.maxY < frame.minY + 60
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * (reverse ? 0.3 : 0.7)))
+            let end = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * (reverse ? 0.7 : 0.3)))
+            start.press(forDuration: 0.1, thenDragTo: end)
         }
         return element.waitForExistence(timeout: 2) && element.isHittable
     }
@@ -32,9 +46,17 @@ final class AppLaunchUITests: XCTestCase {
         let app = XCUIApplication()
         // Read by the app to skip the notification-permission prompt, which is a system alert
         // that would otherwise sit over the UI and fail every query behind it.
-        app.launchArguments += ["-ui-testing"]
+        app.launchArguments += ["-ui-testing", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
+        waitForOrientation(app, landscape: false)
         return app
+    }
+
+    private func waitForOrientation(_ app: XCUIApplication, landscape: Bool) {
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
     }
 
     func testTheAppLaunches() {
@@ -120,6 +142,7 @@ final class AppLaunchUITests: XCTestCase {
         app.launchArguments += ["-ui-testing", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"]
         app.launch()
         XCUIDevice.shared.orientation = .landscapeLeft
+        waitForOrientation(app, landscape: true)
         defer { XCUIDevice.shared.orientation = .portrait }
         let accounts = app.buttons["Accounts"]
         XCTAssertTrue(accounts.waitForExistence(timeout: 10))

@@ -59,6 +59,7 @@ struct AddAccountSheet: View {
                 .padding(16)
                 .readableWidth()
             }
+            .accessibilityIdentifier("provider-picker-scroll")
             .background(UsageColors.background)
             .navigationTitle("Add account")
             .toolbar {

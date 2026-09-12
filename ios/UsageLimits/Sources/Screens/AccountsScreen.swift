@@ -27,6 +27,7 @@ struct AccountsScreen: View {
                 .padding(16)
                 .readableWidth()
             }
+            .accessibilityIdentifier("accounts-scroll")
             .background(UsageColors.background)
             .navigationTitle("Accounts")
             .refreshable { await store.refresh() }
