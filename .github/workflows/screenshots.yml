@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check screenshot export names
+        run: python3 -m unittest discover -s ios/Tools -p 'test_export_screenshots.py'
       - name: Install XcodeGen and generate the project
         working-directory: ios/UsageLimits
         run: |
