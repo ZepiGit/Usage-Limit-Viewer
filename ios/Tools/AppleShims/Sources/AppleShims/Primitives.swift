@@ -181,8 +181,14 @@ public struct List: View {
     public var body: some View { ShimLeaf() }
 }
 
+public enum Axis {
+    public struct Set: Sendable {
+        public static let horizontal = Set()
+        public static let vertical = Set()
+    }
+}
 public struct ScrollView: View {
-    public init(_ axes: Any? = nil, showsIndicators: Bool = true,
+    public init(_ axes: Axis.Set = .vertical, showsIndicators: Bool = true,
                 @ViewBuilder content: () -> any View) {}
     public var body: some View { ShimLeaf() }
 }

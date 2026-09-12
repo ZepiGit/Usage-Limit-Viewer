@@ -124,6 +124,8 @@ struct ConfiguredUsageWidget: Widget {
 @available(iOS 17.0, *)
 struct ConfiguredRingWidget: Widget {
     var mini: Bool
+    init() { mini = false }
+    init(mini: Bool) { self.mini = mini }
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: mini ? "com.usagelimits.widget.mini-rings" : "com.usagelimits.widget.account-rings", intent: UsageWidgetIntent.self, provider: ConfiguredUsageProvider()) { entry in
             ConfiguredRingGrid(entry: entry, mini: mini)
