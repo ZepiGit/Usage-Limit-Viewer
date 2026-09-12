@@ -149,11 +149,8 @@ class XaiProvider(
     /**
      * Polls the token endpoint until the user approves, denies, or the code expires.
      *
-     * Two pending signals have to be handled, because xAI uses both. RFC 8628 says pending is
-     * a `authorization_pending` error *body*; in practice that body arrives on a non-2xx
-     * status, which [HttpClient] has already turned into an exception before this code can
-     * read it. So a failed status is treated as "keep waiting" and the body is only inspected
-     * when the request succeeded. The expiry deadline is what bounds the loop either way.
+     * Reads OAuth error bodies on both 2xx and HTTP 400/403, so a denial stops immediately
+     * and slow_down changes every subsequent wait. The HTTP layer does not retry polls.
      */
     override suspend fun completeLogin(
         challenge: LoginChallenge,
@@ -183,12 +180,16 @@ class XaiProvider(
                     // Pending is expressed as a failed status, so the generic retry must not
                     // absorb it — poll timing belongs to this loop.
                     retries = 0,
+                    devicePoll = true,
                 )
-                JsonSupport.parseObject(response.body)
-            } catch (e: ProviderException.Forbidden) {
+                JsonSupport.parseObject(response.body).also { payload ->
+                    if (response.statusCode !in 200..299 && JsonSupport.string(payload, "error") == null) {
+                        throw ProviderException.MalformedPayload("device error response had no error code")
+                    }
+                }
+            } catch (e: ProviderException.Offline) {
                 null
-            } catch (e: ProviderException.Unexpected) {
-                // 400 carrying `authorization_pending` lands here too.
+            } catch (e: ProviderException.ServerError) {
                 null
             }
 
@@ -205,7 +206,7 @@ class XaiProvider(
                 ERROR_SLOW_DOWN -> {
                     // RFC 8628 §3.5: the increase is permanent for the rest of the poll, not
                     // just for this attempt.
-                    intervalMs += SLOW_DOWN_STEP_MS
+                    intervalMs = Math.addExact(intervalMs, SLOW_DOWN_STEP_MS)
                     delay(intervalMs)
                 }
 
@@ -214,7 +215,7 @@ class XaiProvider(
 
                 // An unknown terminal code stops the loop rather than polling to expiry
                 // against an endpoint that has already made up its mind.
-                else -> throw ProviderException.Unexpected("device authorization failed: $error")
+                else -> throw ProviderException.Unexpected("device authorization was refused")
             }
         }
 

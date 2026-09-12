@@ -81,14 +81,11 @@ The steps as implemented:
    the token endpoint with `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
    `device_code` and `client_id`, with HTTP retries disabled so the generic retry cannot
    swallow a pending response.
-7. Poll handling covers both shapes of "not yet". A failed status (403, or a 400 carrying
-   `authorization_pending`) is treated as pending, because `HttpClient` has already turned it
-   into an exception before the body can be read. When the request *succeeds*, the body is
-   inspected: no `error` field means the credentials are in hand; `authorization_pending`
-   waits; `slow_down` adds 5 s to the interval **permanently for the rest of the poll**, per
-   RFC 8628 §3.5, not just for the next attempt; `expired_token` and `access_denied` raise
-   `LoginCancelled`; and an unrecognised terminal code raises rather than polling to expiry
-   against an endpoint that has already made up its mind.
+7. Both platforms read the OAuth error body on HTTP 200, 400 and 403. Only
+   `authorization_pending` keeps the current interval; `slow_down` permanently adds five
+   seconds to each subsequent wait. `expired_token`, `access_denied` and unknown terminal
+   errors end the attempt immediately. Transport failures and 5xx can continue within the
+   deadline. Polls have no additional HTTP retry loop.
 8. The whole loop is bounded by the `expires_in` deadline.
 
 The token endpoint is **pinned into the stored credentials** (`OAuthCredentials.tokenEndpoint`)

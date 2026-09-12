@@ -404,3 +404,20 @@ Residual risk, stated as the README does: this is the single biggest feasibility
 project. It is entirely possible that Claude support simply does not work from a phone on a
 mobile network, and no code change within these rules would fix it. Nothing in this repository
 has been run against Anthropic's edge, so it remains unverified in both directions.
+
+## Release readiness audit (2026-09-11)
+
+Device polling now interprets Kimi and xAI OAuth errors on HTTP 400/403 as well as 200.
+It never copies an arbitrary error string into a user-visible message. A denial ends the
+attempt; slow_down applies permanently, including when carried by an HTTP error status.
+
+On Android, the credential read inside the refresh lock must still exist. Removing an account
+while refresh waits for the lock now stops before any exchange; the pre-lock copy cannot
+stand in for a deleted credential. The existing compare-before-save still covers removal
+later in the exchange.
+
+The historical claim above that Android has no logging calls is obsolete. The credential
+store logs the exception class only; startup scheduling can also log an infrastructure
+exception. Neither changed path logs a credential or a provider response body. This audit adds no logging, storage, provider
+identity headers, scopes or endpoints. Provider permission and live-account checks remain
+open; see `release-readiness.md`.

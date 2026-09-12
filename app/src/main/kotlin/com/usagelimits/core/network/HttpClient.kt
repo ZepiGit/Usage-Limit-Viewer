@@ -76,12 +76,14 @@ class HttpClient(
          * full policy — a usage GET spends nothing and is safe to repeat.
          */
         oneTimeGrant: Boolean = false,
+        /** Device grants carry protocol errors on HTTP 400/403; only their poll reads these. */
+        devicePoll: Boolean = false,
     ): HttpResponse {
         requireSecure(url)
         var attempt = 0
         while (attempt <= retries) {
             try {
-                return executeOnce(url, method, headers, body, badRequestMeansExpired, oneTimeGrant)
+                return executeOnce(url, method, headers, body, badRequestMeansExpired, oneTimeGrant, devicePoll)
             } catch (e: ProviderException.RateLimited) {
                 // Honour Retry-After when the provider sent one, otherwise back off — but
                 // clamped. Providers routinely set Retry-After to the whole remaining
@@ -116,6 +118,7 @@ class HttpClient(
         body: RequestBody?,
         badRequestMeansExpired: Boolean = false,
         oneTimeGrant: Boolean = false,
+        devicePoll: Boolean = false,
     ): HttpResponse = withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url)
         headers.forEach { (k, v) -> builder.header(k, v) }
@@ -153,6 +156,7 @@ class HttpClient(
                 val headerMap = response.headers.names().associateWith { response.headers[it].orEmpty() }
                 when {
                     response.isSuccessful -> HttpResponse(response.code, text, headerMap)
+                    devicePoll && response.code in setOf(400, 403) -> HttpResponse(response.code, text, headerMap)
                     response.code == 400 && badRequestMeansExpired ->
                         throw ProviderException.Unauthorized()
                     response.code == 401 -> throw ProviderException.Unauthorized()

@@ -286,6 +286,7 @@ private enum DeepLink {
 /// A fixed height on a *bar* is legitimate — the Dynamic Type rule concerns text —
 /// and `@ScaledMetric` grows the bar with the user's type size regardless.
 private struct QuotaBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let remainingPercent: Double?
     let severity: Severity
@@ -307,6 +308,8 @@ private struct QuotaBar: View {
                 }
             }
         }
+        .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: remainingPercent)
+        .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: severity)
         .frame(height: barHeight)
         // A bar shape tells VoiceOver nothing; state the number in words.
         .accessibilityElement()
@@ -417,7 +420,7 @@ private struct MediumAccountRow: View {
                     .foregroundColor(UsageColors.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(verbatim: QuotaFormatting.percentText(row?.remainingPercent))
+                WidgetPercentage(remainingPercent: row?.remainingPercent)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(SeverityPalette.text(rowSeverity))
                     .lineLimit(1)
@@ -482,7 +485,7 @@ struct UsageWidgetSmallView: View {
 
             Spacer(minLength: 4)
 
-            Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
+            WidgetPercentage(remainingPercent: focus.row?.remainingPercent)
                 .font(.system(.title2, design: .rounded).weight(.semibold))
                 .foregroundColor(SeverityPalette.text(severity))
                 .lineLimit(1)
@@ -618,7 +621,7 @@ struct UsageAccessoryRectangularView: View {
                 .lineLimit(1)
 
             HStack(spacing: 4) {
-                Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
+                WidgetPercentage(remainingPercent: focus.row?.remainingPercent)
                     .font(.title3.weight(.semibold))
                     .lineLimit(1)
                 // The ACCOUNT's severity, which is the one that carries staleness. The row's
@@ -659,6 +662,7 @@ struct UsageAccessoryRectangularView: View {
 /// number in a square and leaves its own middle free for the two facts that qualify it — which
 /// limit, and when it comes back.
 private struct UsageRing: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let remainingPercent: Double?
     let severity: Severity
@@ -682,6 +686,8 @@ private struct UsageRing: View {
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     // From twelve o'clock, clockwise. `trim` starts at three o'clock.
                     .rotationEffect(Angle.degrees(-90))
+                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: remainingPercent)
+                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: severity)
             }
         }
     }
@@ -720,7 +726,7 @@ struct UsageRingWidgetView: View {
                     severity: severity,
                     lineWidth: 9)
                 VStack(spacing: 1) {
-                    Text(verbatim: QuotaFormatting.percentText(focus.row?.remainingPercent))
+                    WidgetPercentage(remainingPercent: focus.row?.remainingPercent)
                         .font(.system(.title2, design: .rounded).weight(.semibold))
                         .foregroundColor(SeverityPalette.text(severity))
                         .lineLimit(1)
@@ -784,7 +790,7 @@ struct UsageAccessoryCircularView: View {
                     .stroke(.primary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                     .rotationEffect(Angle.degrees(-90))
             }
-            Text(verbatim: QuotaFormatting.percentText(remaining))
+            WidgetPercentage(remainingPercent: remaining)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -1042,5 +1048,20 @@ struct UsageWidgets: WidgetBundle {
         UsageWidget()
         UsageClearWidget()
         UsageRingWidget()
+    }
+}
+/// WidgetKit animates only when a timeline value changes; no timer or background task is added.
+private struct WidgetPercentage: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let remainingPercent: Double?
+
+    var body: some View {
+        if #available(iOS 17.0, *), !reduceMotion {
+            Text(verbatim: QuotaFormatting.percentText(remainingPercent))
+                .contentTransition(ContentTransition.numericText())
+        } else {
+            Text(verbatim: QuotaFormatting.percentText(remainingPercent))
+                .transaction { if reduceMotion { $0.animation = nil; $0.disablesAnimations = true } }
+        }
     }
 }

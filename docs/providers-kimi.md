@@ -45,11 +45,12 @@ reads `/v1/usages` only.
    (`KimiProvider.displayCode`).
 3. `completeLogin()` polls `https://auth.kimi.com/api/oauth/token` with
    `grant_type=urn:ietf:params:oauth:grant-type:device_code`, the device code and the client
-   id, at the provider's interval (never below five seconds). Kimi answers a pending poll with
-   **200 and an `error` body** (`authorization_pending`, `slow_down`), as CLIProxyAPI reads it;
-   a failed status is treated as pending too, for a server that follows the RFC's 400. A poll
-   that does not get through keeps the loop going as well. `expired_token` and `access_denied`
-   end it; the deadline bounds it either way.
+   id, at the provider's interval (never below five seconds). Both platforms inspect OAuth
+   error bodies on HTTP 200, 400 and 403. `authorization_pending` keeps waiting; `slow_down`
+   permanently adds five seconds to every subsequent interval; `expired_token` and
+   `access_denied` stop immediately. Unknown errors and non-OAuth failures stop too.
+   Transport failures and 5xx can continue at the poll interval, within the challenge deadline.
+   Poll requests disable the HTTP client's own retries.
 4. The token response is `access_token`, `refresh_token`, `token_type`, `expires_in`, `scope`.
    Refresh is an ordinary `refresh_token` grant against the same endpoint, sent once (see
    `HttpClient.oneTimeGrant`); a response that omits the refresh token means "keep the old

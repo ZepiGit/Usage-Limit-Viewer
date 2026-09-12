@@ -125,6 +125,40 @@ class KimiLoginTest {
     }
 
     @Test
+    fun `HTTP 400 denial or expiry ends the poll before another request`() = runBlocking {
+        for (error in listOf("access_denied", "expired_token")) {
+            val seen = mutableListOf<Recorded>()
+            val subject = provider(scripted(
+                400 to """{"error":"$error"}""",
+                200 to tokenJson,
+                seen = seen,
+            ))
+            val challenge = LoginChallenge.DeviceCode(
+                userCode = "SYNTHETIC|device-synthetic", verificationUri = "https://auth.kimi.com/device",
+                verificationUriComplete = null, expiresAt = 2_000_000, pollIntervalMs = 0,
+            )
+
+            val failure = runCatching { subject.completeLogin(challenge, null) }.exceptionOrNull()
+
+            assertTrue("$error must end the attempt", failure is ProviderException.LoginCancelled)
+            assertEquals("no poll after a terminal answer", 1, seen.size)
+        }
+    }
+
+    @Test
+    fun `a non OAuth HTTP failure is terminal`() = runBlocking {
+        val seen = mutableListOf<Recorded>()
+        val subject = provider(scripted(404 to "{}", 200 to tokenJson, seen = seen))
+        val challenge = LoginChallenge.DeviceCode(
+            userCode = "SYNTHETIC|device-synthetic", verificationUri = "https://auth.kimi.com/device",
+            verificationUriComplete = null, expiresAt = 2_000_000, pollIntervalMs = 0,
+        )
+        val failure = runCatching { subject.completeLogin(challenge, null) }.exceptionOrNull()
+        assertTrue(failure is ProviderException.Unexpected)
+        assertEquals(1, seen.size)
+    }
+
+    @Test
     fun `an OAuth account refreshes, a key account is handed back unchanged`() = runBlocking {
         val seen = mutableListOf<Recorded>()
         val subject = provider(scripted(200 to tokenJson, seen = seen))

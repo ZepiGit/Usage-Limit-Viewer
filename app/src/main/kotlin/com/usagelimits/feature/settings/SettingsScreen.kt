@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +36,7 @@ import com.usagelimits.ui.theme.UsageColors
 private val INTERVAL_CHOICES = listOf(15, 30, 60, 180)
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun SettingsScreen(
     state: UsageUiState,
     onSyncIntervalChange: (Int) -> Unit,
@@ -80,7 +83,10 @@ fun SettingsScreen(
                     color = UsageColors.TextSecondary,
                 )
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     INTERVAL_CHOICES.forEach { minutes ->
                         IntervalChip(
                             minutes = minutes,

@@ -17,24 +17,57 @@ final class AppLaunchUITests: XCTestCase {
         // A failing assertion should stop the test at the point of failure rather than carrying
         // on and reporting a cascade of consequences.
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+        super.tearDown()
     }
 
     /// Swipes until the element materialises, or gives up rather than swiping for ever.
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        for _ in 0..<6 {
-            if element.exists { return true }
-            app.swipeUp()
+        let identifiers = ["provider-picker-scroll", "settings-form", "accounts-scroll"]
+        let container = identifiers.map { app.descendants(matching: .any)[$0].firstMatch }
+            .first { $0.exists && $0.isHittable } ?? app
+        for _ in 0..<12 {
+            if element.isHittable { return true }
+            let frame = container.frame.intersection(app.frame)
+            let reverse = element.exists && element.frame.maxY < frame.minY + 60
+            // The failed movie shows a drag over Claude activating the card. Use the
+            // visible gutter before the first card, inside the landscape safe area.
+            let firstButton = container.buttons.firstMatch
+            let gutterX = firstButton.exists ? max(frame.minX + 4, firstButton.frame.minX - 8) : frame.minX + 16
+            let x = (gutterX - container.frame.minX) / container.frame.width
+            let start = container.coordinate(withNormalizedOffset: CGVector(dx: x, dy: reverse ? 0.3 : 0.75))
+            let end = container.coordinate(withNormalizedOffset: CGVector(dx: x, dy: reverse ? 0.75 : 0.3))
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
-        return element.waitForExistence(timeout: 2)
+        return element.waitForExistence(timeout: 2) && element.isHittable
     }
 
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         // Read by the app to skip the notification-permission prompt, which is a system alert
         // that would otherwise sit over the UI and fail every query behind it.
-        app.launchArguments += ["-ui-testing"]
+        app.launchArguments += ["-ui-testing", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
+        waitForOrientation(app, landscape: false)
         return app
+    }
+
+    private func waitForOrientation(_ app: XCUIApplication, landscape: Bool) {
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            landscape ? app.frame.width > app.frame.height : app.frame.height > app.frame.width
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+    }
+
+    private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        // iPadOS exposes the floating tab cell and its child with the same label.
+        // Select the hittable match, then assert the destination after tapping it.
+        let matches = app.buttons.matching(identifier: label)
+        return matches.allElementsBoundByIndex.first { $0.isHittable } ?? matches.firstMatch
     }
 
     func testTheAppLaunches() {
@@ -51,7 +84,7 @@ final class AppLaunchUITests: XCTestCase {
 
         for tab in ["Overview", "Accounts", "Resets", "Settings"] {
             XCTAssertTrue(
-                app.buttons[tab].waitForExistence(timeout: 10),
+                tabButton(tab, in: app).waitForExistence(timeout: 10),
                 "the \(tab) tab should be reachable")
         }
     }
@@ -62,9 +95,10 @@ final class AppLaunchUITests: XCTestCase {
         let app = launch()
 
         for tab in ["Accounts", "Resets", "Settings", "Overview"] {
-            let button = app.buttons[tab]
+            let button = tabButton(tab, in: app)
             XCTAssertTrue(button.waitForExistence(timeout: 10), "\(tab) should exist")
             button.tap()
+            XCTAssertTrue(app.navigationBars[tab].waitForExistence(timeout: 10))
             XCTAssertEqual(
                 app.state, .runningForeground, "the app should survive opening \(tab)")
         }
@@ -77,7 +111,7 @@ final class AppLaunchUITests: XCTestCase {
         // visible here.
         let app = launch()
 
-        let settings = app.buttons["Settings"]
+        let settings = tabButton("Settings", in: app)
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
 
@@ -96,7 +130,7 @@ final class AppLaunchUITests: XCTestCase {
         // each of them rather than dead-end.
         let app = launch()
 
-        let accounts = app.buttons["Accounts"]
+        let accounts = tabButton("Accounts", in: app)
         XCTAssertTrue(accounts.waitForExistence(timeout: 10))
         accounts.tap()
 
@@ -110,8 +144,32 @@ final class AppLaunchUITests: XCTestCase {
 
         for provider in ["OpenAI Codex", "Claude", "Antigravity", "Grok", "Kimi"] {
             XCTAssertTrue(
-                app.staticTexts[provider].waitForExistence(timeout: 5),
+                scrollTo(app.staticTexts[provider], in: app),
                 "\(provider) should be offered")
         }
+    }
+
+    func testLandscapeAndLargeTextKeepTheProviderPickerReachable() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ui-testing", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForOrientation(app, landscape: true)
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let accounts = tabButton("Accounts", in: app)
+        XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+        accounts.tap()
+        let add = app.staticTexts["+ Add account"]
+        XCTAssertTrue(scrollTo(add, in: app))
+        add.tap()
+        XCTAssertTrue(app.navigationBars["Add account"].waitForExistence(timeout: 10))
+        XCTAssertTrue(scrollTo(app.staticTexts["Kimi"], in: app))
+        XCTAssertTrue(app.buttons["Cancel"].isHittable)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Landscape provider picker with large text"
+        screenshot.lifetime = .keepAlways
+        self.add(screenshot)
+        app.buttons["Cancel"].tap()
+        XCTAssertEqual(app.state, .runningForeground)
     }
 }

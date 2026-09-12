@@ -120,6 +120,78 @@ final class DeviceLoginTests: XCTestCase {
         XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "X-Msh-Platform"), "UsageLimits")
     }
 
+    private actor PollWaits {
+        var values: [TimeInterval] = []
+        func append(_ seconds: TimeInterval) { values.append(seconds) }
+    }
+
+    func testHTTP400SlowDownAppliesToEverySubsequentPoll() async throws {
+        for provider in [ProviderID.kimi, .xai] {
+            let (http, transport) = client([
+                (400, #"{"error":"slow_down"}"#),
+                (400, #"{"error":"authorization_pending"}"#),
+                (200, #"{"access_token":"synthetic-access"}"#),
+            ])
+            let waits = PollWaits()
+            let challenge = DeviceLoginChallenge(
+                userCode: "SYNTHETIC", verificationURI: "https://example.invalid",
+                expiresAt: now.addingTimeInterval(60), pollInterval: 5,
+                continuation: ["device_code": "synthetic-device", "token_endpoint": "https://auth.x.ai/token"])
+            var kimi = KimiDeviceLogin(httpClient: http, now: { [now] in now })
+            kimi.waitForPoll = { await waits.append($0) }
+            var xai = XaiDeviceLogin(httpClient: http, now: { [now] in now })
+            xai.waitForPoll = { await waits.append($0) }
+            let login: any DeviceLoginProvider = provider == .kimi ? kimi : xai
+            let result = try await login.complete(challenge)
+            let delays = await waits.values
+            let sent = await transport.requests
+            XCTAssertEqual(result.accessToken, "synthetic-access")
+            XCTAssertEqual(delays, [10, 10])
+            XCTAssertEqual(sent.count, 3)
+        }
+    }
+
+    func testLongHTTPDeviceErrorsRemainReadableForBothProviders() async throws {
+        let description = String(repeating: "synthetic detail ", count: 60)
+        for provider in [ProviderID.kimi, .xai] {
+            for status in [400, 403] {
+                let (http, transport) = client([
+                    (status, "{\"error\":\"slow_down\",\"error_description\":\"\(description)\"}"),
+                    (status, "{\"error\":\"authorization_pending\",\"error_description\":\"\(description)\"}"),
+                    (200, #"{"access_token":"synthetic-access"}"#),
+                ])
+                let waits = PollWaits()
+                let challenge = DeviceLoginChallenge(
+                    userCode: "SYNTHETIC", verificationURI: "https://example.invalid",
+                    expiresAt: now.addingTimeInterval(60), pollInterval: 5,
+                    continuation: ["device_code": "synthetic-device", "token_endpoint": "https://auth.x.ai/token"])
+                var kimi = KimiDeviceLogin(httpClient: http, now: { [now] in now })
+                kimi.waitForPoll = { await waits.append($0) }
+                var xai = XaiDeviceLogin(httpClient: http, now: { [now] in now })
+                xai.waitForPoll = { await waits.append($0) }
+                let login: any DeviceLoginProvider = provider == .kimi ? kimi : xai
+                let result = try await login.complete(challenge)
+                let delays = await waits.values
+                let sent = await transport.requests
+                XCTAssertEqual(result.accessToken, "synthetic-access")
+                XCTAssertEqual(delays, [10, 10])
+                XCTAssertEqual(sent.count, 3)
+            }
+        }
+    }
+
+    func testRegularHTTPFailuresStillTruncateTheirDiagnosticBody() async throws {
+        let body = String(repeating: "synthetic detail ", count: 60)
+        let (http, _) = client([(400, body)])
+        do {
+            _ = try await http.request(url: "https://example.invalid")
+            XCTFail("a regular request must not accept an HTTP failure")
+        } catch HTTPError.status(let code, let diagnostic) {
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(diagnostic, String(body.prefix(512)) + "…")
+        }
+    }
+
     func testKimiRefreshesAnOAuthAccountAndLeavesAKeyAlone() async throws {
         let (http, transport) = client([
             (200, #"{"access_token": "acc2", "expires_in": 3600}"#),
@@ -142,6 +214,32 @@ final class DeviceLoginTests: XCTestCase {
         XCTAssertEqual(unchanged.accessToken, "sk-synthetic")
         let afterKey = await transport.requests
         XCTAssertEqual(afterKey.count, 1, "no request for a key")
+    }
+
+    func testDevicePollingStopsOnHTTP400DenialAndExpiry() async throws {
+        for provider in [ProviderID.kimi, .xai] {
+            for error in ["access_denied", "expired_token"] {
+                let (http, transport) = client([
+                    (400, "{\"error\":\"\(error)\"}"),
+                    (200, #"{"access_token":"synthetic-after-denial"}"#),
+                ])
+                let challenge = DeviceLoginChallenge(
+                    userCode: "SYNTHETIC", verificationURI: "https://example.invalid",
+                    expiresAt: now.addingTimeInterval(60), pollInterval: 0,
+                    continuation: ["device_code": "synthetic-device", "token_endpoint": "https://auth.x.ai/token"])
+                let login: any DeviceLoginProvider = provider == .kimi
+                    ? KimiDeviceLogin(httpClient: http, now: { [now] in now })
+                    : XaiDeviceLogin(httpClient: http, now: { [now] in now })
+                do {
+                    _ = try await login.complete(challenge)
+                    XCTFail("\(provider) accepted a token after \(error)")
+                } catch let failure as DeviceLoginError {
+                    XCTAssertEqual(failure, error == "expired_token" ? .expired : .declined("the sign-in was declined"))
+                }
+                let sent = await transport.requests
+                XCTAssertEqual(sent.count, 1, "no poll after a terminal answer")
+            }
+        }
     }
 
     // MARK: - JWT claims

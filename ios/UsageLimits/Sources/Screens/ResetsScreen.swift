@@ -33,6 +33,7 @@ struct ResetsScreen: View {
                     }
                 }
                 .padding(16)
+                .readableWidth()
             }
             .background(UsageColors.background)
             .navigationTitle("Resets")

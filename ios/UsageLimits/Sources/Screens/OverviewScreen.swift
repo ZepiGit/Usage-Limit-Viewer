@@ -8,6 +8,7 @@ import UsageLimitsKit
 /// the two platforms saying the same thing about the same account.
 struct OverviewScreen: View {
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var store: UsageStore
 
     /// Whether the list is in reordering mode.
@@ -36,6 +37,7 @@ struct OverviewScreen: View {
                         ForEach(store.orderedAccounts) { account in
                             AccountCard(
                                 account: account,
+                                provider: store.accounts.first { $0.account.id == account.id }?.account.provider,
                                 now: store.now,
                                 tier: store.settings.showSubscriptionTier
                                     ? store.tierLabel(accountID: account.id) : nil,
@@ -48,6 +50,8 @@ struct OverviewScreen: View {
                     }
                 }
             }
+            .animation(reduceMotion ? nil : Animation.easeInOut(duration: 0.24), value: store.orderedAccounts.map(\.id))
+            .readableWidth()
             .listStyle(.plain)
             .environment(\.editMode, $editMode)
             .scrollContentBackground(.hidden)
@@ -63,7 +67,7 @@ struct OverviewScreen: View {
                 if store.accounts.count > 1 || editMode.isEditing {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(editMode.isEditing ? "Done" : "Reorder") {
-                            withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                            withAnimation(reduceMotion ? nil : Animation.easeInOut(duration: 0.2)) { editMode = editMode.isEditing ? .inactive : .active }
                         }
                     }
                 }
@@ -168,6 +172,7 @@ private struct SummaryCard: View {
 private struct AccountCard: View {
 
     let account: GlanceAccount
+    let provider: ProviderID?
     let now: Date
     /// The plan the provider reports — Plus, Pro, Max — or nil when it is switched off or the
     /// provider never said.
@@ -178,6 +183,7 @@ private struct AccountCard: View {
     var body: some View {
         UsageCard {
             HStack(spacing: 10) {
+                if let provider { ProviderBadge(provider: provider) }
                 Circle()
                     .fill(SeverityPalette.accent(account.severity))
                     .frame(width: 8, height: 8)
