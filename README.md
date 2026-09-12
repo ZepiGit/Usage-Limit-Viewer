@@ -2,10 +2,10 @@
 
 Usage Limits is an Android and iOS app that shows, at a glance, how much of each AI subscription you
 have left and when each limit rolls over — your Codex five-hour window, your Claude weekly
-window, your Antigravity model buckets and your Grok credits, side by side on one screen and
+window, your Antigravity model buckets, Grok credits and Kimi Code quota, side by side on one screen and
 on the home screen. It talks directly from your phone to each provider's own usage endpoint
-with your own OAuth login: there is no account to create, no server in the middle, and
-nothing about your usage leaves the device.
+with your own OAuth login or, for Kimi, a key from your console. There is no app-owned account
+or server; credentials and cached usage stay on the device and requests go to the providers.
 
 ## What it does
 
@@ -56,102 +56,98 @@ quota-reading halves of that work.
 | **Claude** (Anthropic subscription) | Authorization code + PKCE in the system browser, returning to a loopback redirect on port 54545 | Five-hour window plus the weekly windows Anthropic reports, including per-model ones |
 | **Antigravity** (Google) | Google installed-app authorization code + PKCE, loopback redirect on port 51121 | The already-grouped quota buckets Google returns per model family, five-hour and weekly |
 | **Grok** (xAI) | RFC 8628 device flow, with the endpoints resolved from xAI's OIDC discovery document and validated to be x.ai hosts | Weekly credit usage and the monthly billing window |
+| **Kimi Code** (Moonshot) | Device-code flow under the app's `UsageLimits` identity, or a pasted key from the user's Kimi Code console | Coding quota and reset windows |
 
-All four work on both platforms. Grok's device flow is the easier fit for a phone — nothing
-has to survive the app being backgrounded and no local port has to be free — while Codex, Claude
-and Antigravity pin loopback redirect URIs in their client registrations, so for those three the
-app binds the exact port they expect and answers one request on it. That is what RFC 8252 §7.3
-describes for a native app that cannot register a scheme, and it works on iOS because the sign-in
-is presented by `ASWebAuthenticationSession`, which runs in process: the app stays foregrounded
-and the socket stays alive. `docs/security.md` explains what the listener refuses and why.
+All five have implementations on both platforms; live account access remains unverified in
+this audit. Codex uses browser authorization by default and device authorization if its
+loopback listener cannot bind. Claude and Antigravity also use fixed loopback callbacks.
+Grok and Kimi use device codes, and Kimi provides a pasted-key option. Kimi OAuth usage access
+may require vendor approval of the `UsageLimits` identity. See [docs/security.md](docs/security.md)
+and the per-provider notes for the callback checks and compatibility limits.
 
 ## Project status
 
-**Every provider's usage endpoint has been called with a real account; no login, token refresh
-or credit redemption has been run end to end from a device.**
+**The final local run passed 400 Android tests with no failures or skips, and 456 Swift
+package tests.** The API 36 debug and minified release APKs built successfully, and the iOS
+app and widget sources passed the Linux framework-shim type check. The final minified APK
+passed an API 36 emulator smoke covering empty refresh, all four tabs, compact-widget
+configuration and placement, narrow and wide layouts, large text and reduced motion. Both
+widget sizes were also exercised on the earlier API 35 build. Real iOS SDK compilation
+completed. Simulator scroll-test failures were reproduced and the gesture handling corrected;
+[PR #9](https://github.com/ZepiGit/Usage-Limit-Viewer/pull/9) records the current iPhone/iPad CI results.
 
-Those are different claims and the difference is the whole point. The four usage payloads were
-captured from live accounts and the parsers corrected against them — which found six divergences
-that synthetic fixtures could not have, because a fixture written from the same assumption as the
-parser cannot catch a wrong assumption. Those captures date from when that gateway path worked; a
-later attempt to re-read the same endpoints failed to authenticate and was abandoned rather than
-retried, so the fixtures stand but nothing re-confirms them against today's live accounts.
-`docs/verification.md` step 3 onward is the runbook for the part only a person with a phone can
-do, ordered cheapest-first and saying what a *wrong* result looks like at each step. It sets out
-what each layer of
-testing can and cannot establish.
+Historical production-shaped and upstream-derived fixtures test parser compatibility without
+live credentials. No login, live token refresh or reset-credit redemption was attempted in
+this audit. The remaining checks are in [docs/verification.md](docs/verification.md).
 
-What runs in CI, on every push:
+The workflows are configured for the following checks; an observed run is needed to claim a pass:
 
 | | Android | iOS |
 |---|---|---|
-| Unit tests | 295, on the JVM | 352, on Linux and macOS |
-| Screens rendered | every screen, under Robolectric | every screen, on a booted simulator |
-| App launched | the Application, under Robolectric | the real binary, on a booted simulator |
-| Installable artifact | debug APK, and a signed release on a tag | unsigned archive |
+| Unit tests | JVM and Robolectric | Swift package on Linux and macOS |
+| Screens and launch | Compose screens and Application under Robolectric | App on an iOS simulator |
+| Packaging | Debug and release APKs; both verification APKs uploaded | Real SDK app and widget build |
+| Release workflow | Signed AAB and APK when release secrets are supplied | Unsigned archive |
 
-Those are the counts as of the last local run. GitHub-hosted runners have been unavailable to
-this repository since the morning of 10 September — every job dies in two seconds with no log,
-on both runner types, which is the signature of an exhausted Actions allowance rather than a
-build failure — so the commits since then are verified locally and say so individually. PR #2
-records the evidence.
-
-What that still does not cover: signing in to a real account, a token actually being refreshed,
-and a reset credit actually being spent. Refresh in particular has deliberately NOT been
-exercised — these providers rotate refresh tokens on use, so testing it against the maintainer's
-gateway would have invalidated working credentials. The
-per-provider documents in `docs/` each carry their own status section saying exactly what is
-and is not verified for that provider — read them before trusting a field name.
+Five API 36 cold launches had a median of 627 ms. These emulator samples do not establish a
+speed improvement over the earlier API 35 run. Physical-device checks, the final iOS CI run,
+live account approval, vendor permission, distribution signing and store publication remain open. Both
+platforms now use the shared quota-cell and return-arrow app icon, including Android adaptive
+and monochrome variants and the configured iOS AppIcon catalog. See
+[docs/release-readiness.md](docs/release-readiness.md) for measured results and remaining checks.
 
 ## Build
 
 Requirements:
 
-- **JDK 17.** The Kotlin and Java targets are both 17; a newer JDK will work as a toolchain
-  but 17 is what the build is configured for.
-- **An Android SDK containing platform 35 and build-tools for it**, located either through
+- **JDK 21 for tests.** Robolectric 4.16.1's API 36 test runtime needs it. Packaging alone uses
+  JDK 17 in CI, and Kotlin and Java still target Java 17 bytecode.
+- **An Android SDK containing platform 36 and Build Tools 35 or later**, located either through
   `ANDROID_HOME` or through `sdk.dir` in `local.properties`.
 - No global Gradle install — the wrapper pins Gradle 8.11.1 and downloads it on first run.
 
-```sh
-export ANDROID_HOME=/path/to/android-sdk    # must contain platforms/android-35
-./gradlew :app:assembleDebug
+```powershell
+$env:ANDROID_HOME = 'C:\path\to\android-sdk'
+.\gradlew.bat :app:assembleDebug
 ```
 
-Key versions: `minSdk` 26 (Android 8.0), `compileSdk` and `targetSdk` 35, AGP 8.7.3, Kotlin
+On Linux or macOS, set `ANDROID_HOME` for that shell and use `./gradlew`.
+
+Key versions: `minSdk` 26 (Android 8.0), `compileSdk` and `targetSdk` 36, AGP 8.10.1, Kotlin
 2.0.21, Compose BOM 2024.12.01, Room 2.6.1 with KSP, Glance 1.1.1. `docs/compatibility.md`
 explains why the floor is 26 and what it would take to go lower.
 
 The debug variant installs as `com.usagelimits.debug`, so it can sit alongside a release
-build. Note that `assembleRelease` is currently signed with the **debug** signing config and
-minifies against an empty `proguard-rules.pro`; that is enough to verify the release build
-locally and is not enough to ship. Both must be fixed before any distribution.
+build. With no signing settings, `assembleRelease` uses the debug key for local verification.
+Supplying a complete signing configuration enables real release signing; a partial one fails.
+R8 rules for serialization and crash locations are present. See [docs/release.md](docs/release.md)
+for the setting names and the device smoke test required before distribution.
 
 ## Tests
 
-```sh
-./gradlew :app:testDebugUnitTest
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
 ```
 
-Everything under `app/src/test` is a plain JVM JUnit 4 test — no Robolectric, no emulator, no
-network. That is a deliberate constraint rather than an accident: the four provider parsers
-and the shared model helpers (`Severity`, `WindowCategory`, `Instants`, `Countdown`) are
-written as pure Kotlin with no `android.*` dependency precisely so they can be tested this
-way, and every fixture is synthetic JSON with invented identifiers and `example.com`
-addresses. There is no instrumented (`androidTest`) source set.
+The suite combines plain JVM parser and model tests, local HTTP and socket tests, and
+Robolectric tests for Android storage, application startup and Compose screens. It uses
+synthetic fixtures without live provider credentials and requires no emulator. There is no
+instrumented (`androidTest`) source set. Reports are written to
+`app/build/reports/tests/testDebugUnitTest/index.html`.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layering, the `UsageProvider` abstraction, the normalised model, the sync pipeline, and the two deliberate deviations from convention |
-| [docs/verification.md](docs/verification.md) | How the app checks it is telling the truth: the three layers of verification, what each can and cannot catch, and the defects each one actually found |
+| [docs/verification.md](docs/verification.md) | Local results, test coverage and limits, and the remaining device and account-holder runbook |
+| [docs/release-readiness.md](docs/release-readiness.md) | Release audit evidence, artifact sizes, runtime samples and outstanding final checks |
 | [docs/security.md](docs/security.md) | Threat model, credential storage, the no-tokens-in list, PKCE and state validation, and a frank accepted-risks section |
 | [docs/widgets.md](docs/widgets.md) | The two widget sizes, the configuration model, the Room-only data path, and the Glance constraints that shaped the layout |
 | [docs/compatibility.md](docs/compatibility.md) | Android version floor, foldables, window size classes, RTL and accessibility |
 | [docs/provider-auth-research.md](docs/provider-auth-research.md) | Phase 0: the feasibility matrix, why each login flow was chosen for Android, and the three corrections reading the current upstream code forced |
 | [docs/release.md](docs/release.md) | Building, testing, signing a real release, and what must be reviewed before any public distribution |
-| [docs/providers-codex.md](docs/providers-codex.md) · [claude](docs/providers-claude.md) · [antigravity](docs/providers-antigravity.md) · [xai](docs/providers-xai.md) | One document per provider: the exact flow, payload shapes, corrections to the original research, and what remains unverified |
+| [docs/providers-codex.md](docs/providers-codex.md) · [claude](docs/providers-claude.md) · [antigravity](docs/providers-antigravity.md) · [xai](docs/providers-xai.md) · [kimi](docs/providers-kimi.md) | One document per provider: the auth flow, payload shapes and verification limits |
 
 ## Legal and stability
 

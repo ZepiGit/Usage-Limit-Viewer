@@ -1,125 +1,131 @@
 # Building and releasing
 
-## Debug builds
+## Local Android builds
 
-```bash
-export ANDROID_HOME=/path/to/android-sdk    # must contain platform 35 + build-tools 35
-./gradlew :app:assembleDebug
+Use JDK 21 for tests (Robolectric API 36), or JDK 17 for packaging alone, and an
+Android SDK with platform 36 and Build Tools 35 or later. Set
+`ANDROID_HOME` or `sdk.dir` in the untracked `local.properties`. The Gradle wrapper
+and dependency versions are committed; no global Gradle installation is needed.
+The current build uses AGP 8.10.1 and Robolectric 4.16.1, with Java 17 app
+bytecode. Use JDK 21 when running the build and tests together.
+
+From the repository root in PowerShell:
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug :app:assembleRelease
 ```
 
-Produces `app/build/outputs/apk/debug/app-debug.apk`, signed with the standard
-Android debug key. The debug build sets `applicationIdSuffix = ".debug"`, so it
-installs alongside a release build rather than replacing it.
+On Linux or macOS, use `./gradlew` with the same arguments. The debug APK is
+`app/build/outputs/apk/debug/app-debug.apk`. Its application ID ends in `.debug`,
+so it can be installed beside the release variant.
 
-Requires JDK 17. The project targets Java 17 bytecode and Kotlin 2.0.21 with the
-Compose compiler plugin.
+Tests include plain JVM tests, local HTTP and socket tests, and Robolectric tests
+for Android storage and Compose screens. They do not require an emulator. The
+HTML report is `app/build/reports/tests/testDebugUnitTest/index.html`; current
+results and gaps are recorded in [verification.md](verification.md).
 
-## Tests
+## Android signing
 
-```bash
-./gradlew :app:testDebugUnitTest
+`app/build.gradle.kts` already reads the signing settings below. No source edit is
+needed to sign a release.
+
+| Environment variable | Gradle property or alternative environment variable |
+|---|---|
+| `ANDROID_KEYSTORE_PATH` | `USAGE_LIMITS_STORE_FILE` |
+| `ANDROID_KEYSTORE_PASSWORD` | `USAGE_LIMITS_STORE_PASSWORD` |
+| `ANDROID_KEY_ALIAS` | `USAGE_LIMITS_KEY_ALIAS` |
+| `ANDROID_KEY_PASSWORD` | `USAGE_LIMITS_KEY_PASSWORD` |
+
+For each setting, a nonblank `ANDROID_*` environment value takes precedence over
+its `USAGE_LIMITS_*` Gradle property, followed by the `USAGE_LIMITS_*` environment
+value. Local properties belong in the user's `.gradle/gradle.properties`, outside
+the repository. Use an absolute keystore path.
+
+- With all four settings absent, the release variant uses the debug key. This
+  keeps local minified builds installable; it is for verification only.
+- With any setting supplied, all four are required and the keystore must exist.
+  An incomplete configuration fails instead of falling back to debug signing.
+- With a complete configuration, Gradle uses that keystore. The build still has
+  to verify that the password and alias are valid.
+
+The release variant uses `com.usagelimits`, including when debug-signed. It cannot
+update an installation signed with a different key. Keep signing-key creation,
+backup, access and distribution credentials under the release owner's control.
+Never commit credentials or a keystore, and do not enable Gradle's configuration
+cache for a signed build.
+
+With the release owner's settings supplied:
+
+```powershell
+.\gradlew.bat --no-configuration-cache :app:bundleRelease :app:assembleRelease
 ```
 
-109 unit tests, all on plain JVM — no emulator, no Robolectric in the hot path.
-That is deliberate: the parsers are the part most exposed to upstream change, so
-they are kept free of `android.*` APIs and can be tested at full speed. Results
-land in `app/build/reports/tests/testDebugUnitTest/index.html`.
+Outputs are `app/build/outputs/bundle/release/app-release.aab` and
+`app/build/outputs/apk/release/app-release.apk`. Supply `ANDROID_VERSION_CODE` and
+`ANDROID_VERSION_NAME` for a release; the local defaults are `1` and `0.1.0`.
+Check the version code against the last distributed build before uploading.
 
-## Release builds
+## CI and release artifacts
 
-```bash
-./gradlew :app:assembleRelease
-```
+The Android workflow runs the API 36 unit suite on JDK 21 and assembles both
+debug and release variants on JDK 17. It uploads the debug APK. Without signing
+settings, its release build uses the debug key too. Local API 36 packaging and
+all 400 Android tests passed; CI results remain pending. Artifact sizes and
+remaining runtime checks are tracked in [release-readiness.md](release-readiness.md).
 
-**The release build is currently signed with the debug key.** This is stated in a
-comment in `app/build.gradle.kts` and is there so `assembleRelease` stays runnable
-for local verification of minification and shrinking. It is **not** a distributable
-artifact — an APK signed with the debug key cannot be updated by a real release
-later, because the signing identity would change.
+The separate release workflow runs on `v*` tags or manual dispatch. Its Android
+job requires `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` from the repository secret store.
+It decodes the key into the runner's temporary directory, builds with
+`--no-configuration-cache`, and removes the key in an `always()` cleanup step.
+It does not use the Gradle caching action. The uploaded artifacts include the
+signed AAB, APK and matching R8 `mapping.txt`.
 
-### Signing a real release
+The workflow uses its run number as the Android version code and the manual
+version input or tag name as the version name. Confirm those values before
+starting a release. A configured workflow is not evidence that a signed build
+has completed; the current audit did not use release credentials.
 
-1. Create a keystore, once, and keep it somewhere it cannot be lost — losing it
-   means never being able to update the app under the same application ID:
+The iOS release job generates the Xcode project from
+`ios/UsageLimits/project.yml` and creates an **unsigned** release archive on
+macOS. Distribution signing, provisioning and store submission remain separate
+release-owner steps. Neither workflow publishes to a store.
 
-   ```bash
-   keytool -genkeypair -v \
-     -keystore usage-limits-release.jks \
-     -keyalg RSA -keysize 4096 -validity 10000 \
-     -alias usage-limits
-   ```
+## Minified-build smoke test
 
-2. Keep the credentials out of the repository. Put them in
-   `~/.gradle/gradle.properties` (user-level, never committed), or supply them
-   from the CI secret store as environment variables:
+The Android release variant enables R8 minification and resource shrinking.
+`app/proguard-rules.pro` contains rules for generated serialization code and
+readable crash locations; dependencies also contribute consumer rules. Keep
+`mapping.txt` with the exact artifact it describes.
 
-   ```properties
-   USAGE_LIMITS_STORE_FILE=/absolute/path/usage-limits-release.jks
-   USAGE_LIMITS_STORE_PASSWORD=…
-   USAGE_LIMITS_KEY_ALIAS=usage-limits
-   USAGE_LIMITS_KEY_PASSWORD=…
-   ```
+Build success does not establish that the minified app works on a device. Install
+the local verification APK on an emulator or test phone:
 
-3. Replace the debug-signing line in `app/build.gradle.kts` with a real config
-   that reads those properties and degrades gracefully when they are absent, so a
-   contributor without the keystore can still build:
-
-   ```kotlin
-   signingConfigs {
-       create("release") {
-           val storePath = providers.gradleProperty("USAGE_LIMITS_STORE_FILE").orNull
-           if (storePath != null) {
-               storeFile = file(storePath)
-               storePassword = providers.gradleProperty("USAGE_LIMITS_STORE_PASSWORD").orNull
-               keyAlias = providers.gradleProperty("USAGE_LIMITS_KEY_ALIAS").orNull
-               keyPassword = providers.gradleProperty("USAGE_LIMITS_KEY_PASSWORD").orNull
-           }
-       }
-   }
-   ```
-
-   and in `buildTypes.release`, select it only when it is configured:
-
-   ```kotlin
-   signingConfig = signingConfigs.findByName("release")
-       ?.takeIf { it.storeFile != null }
-   ```
-
-4. Never commit the keystore, the passwords, or a `local.properties` containing
-   them. `.gitignore` already excludes `local.properties`.
-
-## Minification
-
-The release build enables R8 (`isMinifyEnabled` and `isShrinkResources`).
-`app/proguard-rules.pro` is currently empty, which is correct for the present
-dependency set: Room, Glance, WorkManager and Compose all ship their own consumer
-rules, and `kotlinx.serialization` is driven by the compiler plugin rather than
-reflection over class names.
-
-If reflection-based serialization is ever introduced, that stops being true and
-keep rules become necessary. **Always smoke-test a minified build before shipping
-it** — R8 problems appear at runtime, not at build time:
-
-```bash
-./gradlew :app:assembleRelease
+```powershell
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-Exercise at least one login, one usage refresh and one widget placement.
+Check launch, all four tabs and both widgets first. Then have the account holder
+run the login and usage checks in [verification.md](verification.md). Record the
+artifact, device, OS version and result. Cold-start time and memory use require
+runtime measurements; APK size is not a substitute.
 
-## Before any public distribution
+## Before public distribution
 
-The provider integrations need a review that is legal and product, not technical.
-`docs/provider-auth-research.md` and the per-provider documents set out the facts;
-the open questions are:
+The five integrations are Codex, Claude, Antigravity, Grok and Kimi Code. Vendor
+permission and terms review remain open, including the use of first-party OAuth
+registrations and usage endpoints. A working response does not resolve that
+review. Kimi also needs confirmation that the `UsageLimits` identity is allowed
+on its coding API; the pasted-key route does not establish that approval.
 
-- Several usage endpoints are internal endpoints of first-party CLI and desktop
-  clients, not public APIs. Whether a third-party client may call them is a
-  question for each vendor's terms, and it is not answered by the fact that they
-  respond.
-- The OAuth client identifiers are those first-party clients' public identifiers.
-  Using them means presenting as that client.
-- The app is built for accounts the person running it controls. That assumption
-  should be stated in any store listing.
+Both platforms use the quota-cell and return-arrow mark in terracotta and cream. Android includes
+an adaptive icon and a monochrome variant for themed launchers; iOS builds the
+`AppIcon` asset catalog. `tools/generate_app_icons.py` regenerates its opaque PNGs
+with Pillow, a development tool that is not included in either app.
 
-Until those are resolved, treat builds as private and personal.
+Release-key custody, live account approval, legal and store copy, and publication
+are human responsibilities outside this audit. See
+[provider-auth-research.md](provider-auth-research.md) and the per-provider notes
+for the implementation background. Treat builds as private verification
+artifacts until those decisions and the device runbook are complete.

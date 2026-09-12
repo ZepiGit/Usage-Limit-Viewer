@@ -1,59 +1,59 @@
 # iOS
 
-The iOS client shares no code with the Android app, but it shares every decision the Android
-app paid for — the normalised model, classifying Codex windows by declared duration rather than
-payload position, the `iguana_necktie` supersession, the xAI `config` envelope. Those were
-found by reading upstream and by four separate defects in production-shaped payloads; they are
-ported, not re-derived. `docs/providers-*.md` is the reference.
+The iOS client has a SwiftUI app, a WidgetKit extension and a shared Swift package.
+It follows the same quota model and provider behavior as Android, with separate
+implementations. The per-provider documents in `docs/` describe payload shapes
+and compatibility limits.
 
-## The split, and why
+## Targets
 
-```
-ios/
-  UsageLimitsKit/     Foundation only. Models, parsers, providers, HTTP.
-                      Builds and tests on Linux — no Mac required.
-  UsageLimits/        SwiftUI app + WidgetKit extension. Keychain,
-                      ASWebAuthenticationSession. Requires the iOS SDK.
-```
-
-`UsageLimitsKit` imports `Foundation` and nothing else. That is a hard rule, enforced by the
-fact that CI builds it in a `swift:6.0.3` Linux container where SwiftUI and Security simply do
-not exist — an accidental `import UIKit` fails the build rather than passing unnoticed until
-someone opens Xcode.
-
-The boundary is not arbitrary. On Android, every real defect found in this project was in a
-parser: an inverted percentage, a missing `config` envelope, windows read by position instead
-of declared duration, a present-but-empty field marking a whole account as failed. None was in
-a view. So the half that can be verified without Apple hardware is also the half where the bugs
-live, and putting the engine on the Linux-testable side of the line is what makes that
-verification possible at all.
+- `UsageLimitsKit` contains models, parsers, HTTP clients, authentication and sync.
+  Its portable code builds and tests on Linux; Keychain and Network-framework
+  adapters are compiled when those Apple frameworks are available.
+- `UsageLimits` contains the app, system-browser presentation and background work.
+- `UsageLimitsWidget` reads snapshots through the shared App Group container.
+  It is embedded in the app by `UsageLimits/project.yml`.
 
 ## Platform mapping
 
-| Android | iOS | Note |
-|---|---|---|
-| Android Keystore + AES-GCM | Keychain, `kSecAttrAccessibleAfterFirstUnlock` | Background refresh must read the token while the device is locked, so `WhenUnlocked` is not usable. |
-| Custom Tabs | `ASWebAuthenticationSession` | **Removes the loopback server entirely.** It supports a custom-scheme callback, so the fixed ports 54545 and 51121 — and the whole class of "another app squatted the port" failures — do not exist on iOS. |
-| WorkManager | `BGAppRefreshTask` | iOS gives materially weaker scheduling guarantees. Staleness detection matters more here, not less. |
-| Glance + Room | WidgetKit + App Group container | The widget still reads only the normalised cache, never a credential. |
-| Room | SQLite via an App Group, or `Codable` snapshots | Whichever is chosen, tokens stay in the Keychain and out of it. |
+| Android | iOS |
+|---|---|
+| Android Keystore and AES-GCM | Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
+| Custom Tabs and loopback listener | `ASWebAuthenticationSession` plus a Network-framework loopback listener |
+| WorkManager | `BGAppRefreshTask`, subject to the system's scheduling decisions |
+| Glance and local cache | WidgetKit and snapshots in the shared App Group |
 
-## Building
+Codex, Claude and Antigravity use their registered loopback callbacks. The browser
+may intercept the callback, while the listener provides another way to receive
+it. Codex also has a device-code fallback when the port cannot be used. Grok and
+Kimi use device codes; Kimi additionally accepts a key from the user's console.
+These code paths are implemented, but live account sign-in has not been verified
+in the current audit.
 
-The engine, anywhere including Linux:
+## Building and checking
 
-```bash
-cd ios/UsageLimitsKit
-swift build
-swift test
+For the portable package, from the repository root:
+
+```sh
+swift build --package-path ios/UsageLimitsKit
+swift test --package-path ios/UsageLimitsKit
 ```
 
-The app requires macOS with Xcode. `.github/workflows/ios.yml` runs the engine on both Linux
-and macOS, and the app itself on a macOS runner against the real SDK — so "the iOS app
-compiles" is a claim CI makes on Apple hardware, not one asserted from a Linux container.
+The app and widget require macOS with Xcode and XcodeGen:
 
-## Status
+```sh
+cd ios/UsageLimits
+xcodegen generate
+xcodebuild build -scheme UsageLimits -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+```
 
-The engine is real and tested. The app target is not yet written; the CI job for it is guarded
-on the Xcode project existing, so it stays green rather than reporting a false failure until
-there is something to build.
+The iOS workflow is configured to test the package on Linux and macOS, build the
+app with the real SDK, check the embedded widget and run simulator UI tests.
+The Linux `ios/Tools/typecheck-app.sh` script provides an additional check with
+framework shims; a pass there does not establish an Xcode build or UI behavior.
+The final local audit passed 456 package tests and the app/widget shim type check.
+Real-SDK, iPhone/iPad, landscape and large-text CI results remain pending.
+
+See [verification.md](../docs/verification.md) for the observed local results and
+remaining device checks, and [release.md](../docs/release.md) for unsigned archives,
+distribution signing and release requirements.

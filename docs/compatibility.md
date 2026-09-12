@@ -1,89 +1,90 @@
 # Device and OS compatibility
 
-## Android versions
+## Android toolchain
 
-| | Value | Why |
-|---|---|---|
-| `minSdk` | 26 (Android 8.0, Oreo) | Covers essentially the entire active install base. It is also the floor at which the three things this app depends on are dependable: `java.time` is available natively (no desugaring), the Keystore's AES/GCM behaviour is consistent, and notification channels exist, so there is no second notification code path. |
-| `targetSdk` | 35 (Android 15) | Current at time of writing. Targeting the newest platform opts the app into the current background-work, permission and windowing rules rather than running under legacy compatibility shims. |
-| `compileSdk` | 35 | Matches `targetSdk`. |
-
-Going below 26 would mean adding core-library desugaring for `java.time` and a
-pre-O notification path, in exchange for a fraction of a percent of devices. If
-that trade ever becomes worth making, desugaring is the only real change: no API
-below 26 is used anywhere except through the Keystore and Glance, both of which
-already support 23+.
-
-**Version-specific handling actually present in the code:**
-
-- `POST_NOTIFICATIONS` is requested only on API 33+, and every notification path
-  checks the permission first. Notifications are optional everywhere — declining
-  them never blocks a feature.
-- Notification channels are created unconditionally behind an API 26 check, which
-  `minSdk` makes a formality but keeps honest.
-- No API newer than 26 is called without a guard.
-
-## Screen sizes, foldables and windowing
-
-The app derives its layout from the **window** size class, never from the physical
-screen or the device model. That single decision is what makes it correct on
-hardware nobody enumerated: a folded phone, an unfolded inner display, a tablet, a
-split-screen pane, a freeform window and a desktop-mode window are all just
-widths.
-
-| Window width | Layout |
+| Setting | Current value |
 |---|---|
-| Compact (< 600dp) — phones, folded foldables, narrow split-screen | Bottom navigation bar |
-| Medium (600–839dp) — unfolded foldables, small tablets, half-screen on a tablet | Navigation rail |
-| Expanded (≥ 840dp) — tablets, desktop windows | Navigation rail |
+| Minimum Android version | API 26 (Android 8.0) |
+| Compile and target SDK | API 36 (Android 16) |
+| Android Gradle Plugin / wrapper | 8.10.1 / 8.11.1 |
+| Robolectric | 4.16.1 |
+| JVM for API 36 tests | JDK 21 |
+| App bytecode target | Java 17; packaging CI uses JDK 17 |
 
-Two further rules keep wide windows readable:
+The API 26 floor provides native `java.time` and notification channels. Notification
+permission is requested on API 33 and later; declining it does not block quota
+viewing. The final minified APK was exercised on an API 36 AOSP x86_64 emulator
+with WHPX. Earlier API 35 checks provide additional widget and system-bar evidence.
 
-- **Content is capped at 720dp and centred.** A usage row is label → bar → percent
-  → countdown. Stretched across a tablet, the eye has to travel the full width to
-  connect a label to its number. Past a comfortable measure the extra space becomes
-  margin instead of line length.
-- **Nothing is orientation-locked or aspect-ratio-locked.** `screenOrientation` is
-  `unspecified` and `resizeableActivity` is `true`, so unfolding a device re-lays
-  out rather than letterboxing.
+## Window sizes and navigation
 
-`configChanges` declares `screenSize|screenLayout|smallestScreenSize|orientation|density|uiMode`,
-so a fold, rotation or resize is handled in-place by Compose rather than by
-destroying and recreating the activity. `calculateWindowSizeClass` recomposes on
-each of those changes, so the shell switches between bar and rail live as the
-device folds.
+Android chooses navigation from the current window width, including split-screen
+and resizable windows:
 
-State survives configuration changes regardless, because all screen state lives in
-a `ViewModel` and the navigation back stack, not in the activity.
+| Window width | Navigation |
+|---|---|
+| Below 600 dp | Bottom bar |
+| 600–839 dp | Side rail |
+| 840 dp and wider | Side rail |
 
-## Widgets
+Content is centered and capped at 720 dp. The activities allow resizing and do
+not lock orientation. The provider picker scrolls in short landscape windows;
+its regression test was observed failing before the fix, passing afterwards and
+failing again when scrolling was removed in an isolated copy.
 
-Both widgets use Glance's `SizeMode.Responsive` with three declared sizes rather
-than `SizeMode.Exact`. Launcher grid cells differ substantially between a phone, a
-tablet and an unfolded foldable; with `Responsive`, the launcher picks the nearest
-declared size and the widget renders a layout it was actually designed for,
-instead of having one layout re-measured into a shape it never anticipated.
+Both Android activities use light system-bar icons over the dark app. Widget
+configuration consumes safe drawing insets. These changes address issues found
+on the API 35 emulator. The manifest has no edge-to-edge opt-out; navigation
+uses AndroidX rather than a custom legacy back-key handler. The final API 36 run
+covered a narrow 320 dp window and simulated effective windows of 960×540 dp
+(landscape), 800×1280 dp (tablet) and 840×720 dp (unfolded size). Wide windows
+used the side rail, and the landscape provider picker scrolled to Kimi;
+physical foldable transitions have not been exercised.
 
-Both are resizeable (`minResizeWidth` 180dp), so a user on a dense grid can shrink
-the compact widget to roughly two cells and still get a usable row.
+iOS content fills narrow windows and is capped at 760 pt on wider ones. The app
+supports iPhone and iPad, including landscape and split view. The CI workflow now
+includes an iPad run and a landscape/large-text provider-picker check. Real SDK
+compilation completed at `19fc063`, but three scroll-gesture UI checks failed.
+The corrected iPhone/iPad run remains pending.
 
-## RTL and accessibility
+## Widgets, icons and accessibility
 
-- `supportsRtl` is enabled and every layout uses start/end-relative modifiers, so
-  mirroring is automatic.
-- Status is never encoded in colour alone — each state carries a text label and a
-  bar length as well, which is what keeps the screens usable for colour-blind
-  users and in bright sunlight.
-- Each usage row is merged into one spoken sentence for screen readers
-  ("Weekly, 53% remaining, Reset in 5d 2h"). Four disconnected fragments per
-  window becomes unusable once an account reports five of them.
-- Type and spacing follow Material 3 defaults, so system font scaling applies
-  without clipping.
+Android's compact and ring widgets use Glance responsive sizes and support
+resizing. Both were placed on the API 35 emulator in their empty state. The final
+API 36 APK also passed compact-widget configuration, placement and opening the
+app from the widget. Populated accounts, additional launcher grids and physical
+foldable resizing still need runtime checks. iOS uses WidgetKit and the shared
+App Group snapshot.
 
-## What has not been verified
+Both platforms use the same quota-cell and return-arrow icon. Android supplies
+adaptive and monochrome variants. The iOS AppIcon catalog is wired into the
+XcodeGen build and contains 18 opaque slots.
 
-No part of this has been exercised on physical hardware or an emulator in the
-environment where it was built. The layout rules above are implemented and the
-project compiles, but "renders correctly on a Pixel Fold" is a claim that needs a
-device or an emulator to support it. Treat the adaptive behaviour as designed and
-implemented, not as tested.
+Status includes text and bar length as well as color. Android exposes grouped
+usage descriptions to screen readers and enables RTL support. At 320 dp and font
+scales 1.3 and 2.0, the final API 36 APK wrapped the sync-interval choices and kept
+the 3 h option visible and selectable. Some bottom-tab labels break mid-word at
+2.0; their touch targets remain accessible. Native keyboard/pointer behavior is
+retained, but those input paths and screen-reader behavior need device checks.
+
+Android observes changes to the system animator scale while the app is open.
+Scale zero removes value interpolation, item movement and sign-in transitions;
+Add-account navigation and Back passed with scale zero on the API 36 emulator.
+iOS reads `accessibilityReduceMotion`. Test large text, screen readers, RTL,
+keyboard navigation and reduced motion on populated screens before distribution.
+
+## Verified scope
+
+The final API 36 build passed 400 Android tests without failures or skips;
+`aapt` confirmed minimum 26, target 36 and compile 36 in the APK. All 456 Swift
+package tests and the Linux app/widget type check passed.
+
+The API 35 emulator covered installation, launch, empty refresh, all four tabs,
+and both widgets. Before/after screenshots confirm the system-bar and widget
+inset fixes. The final API 36 run covered the layouts, large text, reduced-motion
+navigation and compact-widget steps described above; its crash buffer was empty.
+Emulator settings were restored after the checks. Physical-device checks remain open. The PR records the corrected iPhone/iPad
+simulator CI results. Local screenshots,
+UI dumps and runtime logs are under `C:/temp/ulv-audit`.
+See [verification.md](verification.md) for the runbook and
+[release-readiness.md](release-readiness.md) for the measured audit evidence.
