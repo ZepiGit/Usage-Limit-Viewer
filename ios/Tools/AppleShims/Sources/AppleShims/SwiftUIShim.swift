@@ -181,6 +181,8 @@ extension View {
     public func truncationMode(_ value: Any) -> Self { self }
     public func animation(_ value: Any?, value other: Any) -> Self { self }
     public func transition(_ value: Any) -> Self { self }
+    public func contentTransition(_ value: ContentTransition) -> Self { self }
+    public func transaction(_ transform: (inout Transaction) -> Void) -> Self { self }
     public func zIndex(_ value: Double) -> Self { self }
     public func offset(x: Any? = nil, y: Any? = nil) -> Self { self }
     public func scaleEffect(_ value: Any) -> Self { self }

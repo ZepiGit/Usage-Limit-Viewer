@@ -122,19 +122,45 @@ class CodexBrowserLoginTest {
         }
 
     @Test
-    fun `a redirect with the wrong state is refused before any code is exchanged`() = runBlocking {
+    fun `unrelated callbacks are ignored until the matching redirect arrives`() = runBlocking {
+        // Deliberately replaces the old fail-on-mismatch contract: strangers must neither
+        // exchange a code nor terminate a login that the real browser can still complete.
         val bodies = mutableListOf<String>()
         val provider = CodexProvider(answering(tokenJson, bodies))
         val challenge = provider.beginLogin() as LoginChallenge.Redirect
+        val state = query(challenge.authorizationUrl).getValue("state")
 
         val completing = async(Dispatchers.IO) { runCatching { provider.completeLogin(challenge, null) } }
         withContext(Dispatchers.IO) {
-            send(Codex.REDIRECT_PORT, "GET /auth/callback?code=C1&state=not-ours HTTP/1.1")
+            for (query in listOf("code=stranger&state=not-ours", "code=stranger",
+                "error=access_denied&state=not-ours", "error=access_denied")) {
+                // A broken listener closes after the first stranger. Keep the fixture moving
+                // so the assertion reports that login failure rather than connection refusal.
+                runCatching { send(Codex.REDIRECT_PORT, "GET /auth/callback?$query HTTP/1.1") }
+            }
+            runCatching { send(Codex.REDIRECT_PORT, "GET /auth/callback?code=real-code&state=$state HTTP/1.1") }
         }
-        val failure = completing.await().exceptionOrNull()
+        val credentials = completing.await().getOrThrow()
 
-        assertTrue("expected a state mismatch, got $failure", failure is ProviderException.Unexpected)
-        assertTrue("nothing was sent to the token endpoint", bodies.isEmpty())
+        assertEquals("a", credentials.accessToken)
+        val body = bodies.single()
+        val form = body.split('&').associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), "UTF-8") }
+        assertEquals("only the matching callback is exchanged", "real-code", form["code"])
+        assertTrue(portIsFree())
+    }
+
+    @Test
+    fun `a matching denial ends login without exchanging a code`() = runBlocking {
+        val bodies = mutableListOf<String>()
+        val provider = CodexProvider(answering(tokenJson, bodies))
+        val challenge = provider.beginLogin() as LoginChallenge.Redirect
+        val state = query(challenge.authorizationUrl).getValue("state")
+        val completing = async(Dispatchers.IO) { runCatching { provider.completeLogin(challenge, null) } }
+        withContext(Dispatchers.IO) {
+            send(Codex.REDIRECT_PORT, "GET /auth/callback?error=access_denied&state=$state HTTP/1.1")
+        }
+        assertTrue(completing.await().exceptionOrNull() is ProviderException.LoginCancelled)
+        assertTrue(bodies.isEmpty())
         assertTrue(portIsFree())
     }
 

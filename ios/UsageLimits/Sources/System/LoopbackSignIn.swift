@@ -51,40 +51,15 @@ final class LoopbackSignIn: NSObject {
 
             defer { group.cancelAll(); self.session?.cancel(); self.session = nil }
 
-            // The first SUCCESS wins, not the first result.
-            //
-            // `group.next()` reports whichever child finished first, including one that
-            // finished by throwing — so rethrowing it made whichever path failed FASTEST
-            // load-bearing, which is precisely what racing two of them was meant to avoid.
-            // A listener that cannot bind its port (another app holds it, or a previous
-            // sign-in has not released it) would end a sign-in that the interception path
-            // could have completed without any port at all.
-            //
-            // So a failure retires one path and the other keeps going. Both are bounded:
-            // the listener has its own deadline, and the browser task gives up shortly
-            // after the sheet closes, so this cannot wait for ever.
-            var failure: (any Error)?
-            while true {
-                do {
-                    guard let code = try await group.next() else { break }
+            // One failed path can still be followed by a code from the other. Resolve
+            // browser dismissal separately from cancellation of the whole attempt.
+            var race = LoopbackSignInRace()
+            while let result = await group.nextResult() {
+                if let code = try race.receive(result, taskIsCancelled: Task.isCancelled) {
                     return code
-                } catch is CancellationError {
-                    // Cancellation is the USER, and it ends everything immediately.
-                    //
-                    // My first version of this loop recorded it and kept waiting, which was a
-                    // regression I introduced while fixing something else: dismissing the
-                    // sheet retired the browser path and then waited on the listener's own
-                    // five-minute deadline. The add-account screen would have sat there for
-                    // five minutes after the user asked it to stop.
-                    throw CancellationError()
-                } catch {
-                    // Anything else retires one path and leaves the other running. This is the
-                    // case that matters: a listener that cannot bind its port must not end a
-                    // sign-in that the interception path needs no port to complete.
-                    failure = error
                 }
             }
-            throw failure ?? CancellationError()
+            throw race.terminalError
         }
     }
 

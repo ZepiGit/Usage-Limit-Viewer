@@ -498,6 +498,7 @@ public struct ToolbarItemPlacement {
 public enum TextSelectability { case enabled, disabled }
 
 public struct EnvironmentValues {
+    public var accessibilityReduceMotion = false
     public var dismiss = DismissAction()
     public var openURL = OpenURLAction()
     public var dynamicTypeSize: DynamicTypeSize = .large
@@ -511,6 +512,23 @@ public struct EnvironmentValues {
 }
 
 public enum ColorScheme { case light, dark }
+
+public struct Animation {
+    public static func easeInOut(duration: Double) -> Animation { Animation() }
+}
+
+public struct AnyTransition {
+    public static let opacity = AnyTransition()
+}
+
+public struct ContentTransition {
+    public static func numericText() -> ContentTransition { ContentTransition() }
+}
+
+public struct Transaction {
+    public var animation: Animation?
+    public var disablesAnimations = false
+}
 
 /// The widget family, declared here because `EnvironmentValues` lives in this module while
 /// `WidgetFamily` belongs to the WidgetKit shim; the alias there keeps the app's spelling.

@@ -305,3 +305,11 @@ The refresh glyph is a `Link` rather than the tile-wide `widgetURL`, so one glyp
 on a refresh while the rest of the tile opens the overview. The system honours `Link` on medium
 and large only — which is why the small tile has no such button rather than a decorative one
 that does nothing.
+
+## Refresh motion
+
+WidgetKit bars and rings use short value transitions, with numeric text transitions on iOS 17
+and later. `accessibilityReduceMotion` suppresses them. These run only when WidgetKit displays
+a changed timeline entry; no timer, network request or extra reload is scheduled. Glance keeps
+its static rendering because it does not expose Compose animation in RemoteViews. Ring and
+minimal widgets retain their transparent backgrounds; detailed cards retain the app palette.

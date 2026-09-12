@@ -58,6 +58,8 @@ struct SettingsScreen: View {
                         .foregroundStyle(UsageColors.textSecondary)
                 }
             }
+            .accessibilityIdentifier("settings-form")
+            .readableWidth()
             .scrollContentBackground(.hidden)
             .background(UsageColors.background)
             .navigationTitle("Settings")

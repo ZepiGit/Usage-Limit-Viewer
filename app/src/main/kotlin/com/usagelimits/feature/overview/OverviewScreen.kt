@@ -1,5 +1,7 @@
 package com.usagelimits.feature.overview
 
+import com.usagelimits.ui.theme.LocalMotionEnabled
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -150,6 +152,7 @@ fun OverviewScreen(
         items(items = shown, key = { it.account.localId }) { usage ->
             val id = usage.account.localId
             val dragging = draggingId == id
+            val motionEnabled = LocalMotionEnabled.current
 
             AccountCard(
                 usage = usage,
@@ -158,6 +161,7 @@ fun OverviewScreen(
                 showTier = state.settings.showSubscriptionTier,
                 showRenewal = state.settings.showRenewalTime,
                 modifier = Modifier
+                    .then(if (motionEnabled) Modifier.animateItem(placementSpec = if (dragging) null else spring()) else Modifier)
                     // Above its neighbours while it is being carried, or the cards it passes
                     // over are drawn on top of it.
                     .zIndex(if (dragging) 1f else 0f)
