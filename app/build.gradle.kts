@@ -6,23 +6,31 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-/// The release key, read from the environment, or null when it is not configured.
-///
-/// Environment variables rather than Gradle properties, because `-PstorePassword=…` puts the
-/// password on the command line where `ps` and the daemon log can see it.
-val releaseKeystore: File? = System.getenv("ANDROID_KEYSTORE_PATH")
-    ?.takeIf { it.isNotBlank() }
-    ?.let(::File)
-    ?.takeIf { it.isFile }
+// Environment names match the release workflow; user-level Gradle properties are supported too.
+fun signingValue(environment: String, property: String): String? =
+    providers.environmentVariable(environment).orNull?.takeIf { it.isNotBlank() }
+        ?: providers.gradleProperty(property).orNull?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable(property).orNull?.takeIf { it.isNotBlank() }
+
+val releaseStorePath = signingValue("ANDROID_KEYSTORE_PATH", "USAGE_LIMITS_STORE_FILE")
+val releaseStorePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "USAGE_LIMITS_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("ANDROID_KEY_ALIAS", "USAGE_LIMITS_KEY_ALIAS")
+val releaseKeyPassword = signingValue("ANDROID_KEY_PASSWORD", "USAGE_LIMITS_KEY_PASSWORD")
+val signingValues = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+val releaseSigningConfigured = signingValues.any { it != null }
+if (releaseSigningConfigured) {
+    require(signingValues.all { it != null }) { "Release signing requires all four signing settings." }
+    require(file(releaseStorePath!!).isFile) { "The configured release keystore file does not exist." }
+}
 
 android {
     namespace = "com.usagelimits"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.usagelimits"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         // Supplied by the release job so a second release can actually be uploaded; a
         // hardcoded 1 fails on the second upload and there is no way back from a published one.
         versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
@@ -31,12 +39,12 @@ android {
     }
 
     signingConfigs {
-        if (releaseKeystore != null) {
+        if (releaseSigningConfigured) {
             create("release") {
-                storeFile = releaseKeystore
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
@@ -53,18 +61,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // The real key when one is supplied, and nothing at all when it is not.
-            //
-            // Never a silent fallback to debug signing. On a CI runner there is no debug
-            // keystore, so AGP generates a THROWAWAY key per job: a build signed with it
-            // installs, looks right, and can never be updated, because no later build will ever
-            // present the same signature again. Those users are stranded permanently. And a
-            // typo in a secret's name would produce that artifact instead of a red build.
-            //
-            // Unsigned is the honest alternative for the local case: `assembleRelease` still
-            // runs, R8 output and APK size are still inspectable, and the result simply cannot
-            // be installed — which is exactly true.
-            signingConfig = signingConfigs.findByName("release")
+            // Local minified builds stay installable. A debug-signed APK is for verification
+            // only; the release workflow requires its real signing settings before building.
+            signingConfig = if (releaseSigningConfigured) signingConfigs.getByName("release")
+                else signingConfigs.getByName("debug")
         }
     }
 
