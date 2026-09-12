@@ -30,6 +30,7 @@ struct AccountsScreen: View {
             .accessibilityIdentifier("accounts-scroll")
             .background(UsageColors.background)
             .navigationTitle("Accounts")
+            .marketingDemoLabel()
             .refreshable { await store.refresh() }
             .sheet(isPresented: $isAdding) { AddAccountSheet() }
         }

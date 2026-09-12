@@ -134,7 +134,27 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.uitests
         TEST_TARGET_NAME: UsageLimits
 
+  UsageLimitsScreenshotTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ScreenshotTests
+    dependencies:
+      - target: UsageLimits
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.usagelimits.app.screenshottests
+        TEST_TARGET_NAME: UsageLimits
+
 schemes:
+  UsageLimitsScreenshots:
+    build:
+      targets:
+        UsageLimits: all
+    test:
+      config: Debug
+      targets:
+        - UsageLimitsScreenshotTests
   UsageLimits:
     build:
       targets:

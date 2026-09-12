@@ -1,0 +1,103 @@
+name: Marketing screenshots
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketing-screenshots-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    name: Real iPhone and iPad captures
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen and generate the project
+        working-directory: ios/UsageLimits
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Capture the real SwiftUI screens with demo data
+        working-directory: ios/UsageLimits
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          devices=$(xcrun simctl list devices available --json)
+          iphone=$(printf '%s' "$devices" | jq -r '
+            [.devices[][] | select(.isAvailable and (.name | startswith("iPhone")))]
+            | sort_by(.name | contains("Pro Max")) | last | .udid')
+          ipad=$(printf '%s' "$devices" | jq -r '
+            [.devices[][] | select(.isAvailable and (.name | startswith("iPad")))]
+            | sort_by(.name | contains("13-inch")) | last | .udid')
+          test -n "$iphone" && test "$iphone" != "null"
+          test -n "$ipad" && test "$ipad" != "null"
+          mkdir -p "$GITHUB_WORKSPACE/ios-marketing-screenshots"
+          printf 'Real iOS Simulator screenshots of Usage Limits.\nSynthetic in-memory demo accounts only; no credentials or provider requests.\nSource commit: %s\nFixture clock: 2026-09-12 09:41 UTC.\n' "$GITHUB_SHA" \
+            > "$GITHUB_WORKSPACE/ios-marketing-screenshots/CAPTURE.txt"
+
+          for form in iphone ipad; do
+            if [ "$form" = iphone ]; then
+              udid="$iphone"
+              test_name=testCaptureIPhoneScreens
+            else
+              udid="$ipad"
+              test_name=testCaptureIPadOverview
+            fi
+            printf '%s' "$devices" | jq -r --arg id "$udid" '
+              .devices | to_entries[] | .key as $runtime | .value[]
+              | select(.udid == $id) | "\(.name) | \($runtime)"' \
+              >> "$GITHUB_WORKSPACE/ios-marketing-screenshots/CAPTURE.txt"
+            xcrun simctl boot "$udid" || true
+            xcrun simctl bootstatus "$udid" -b
+            xcrun simctl status_bar "$udid" override \
+              --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 \
+              --batteryState charged --batteryLevel 100
+            xcodebuild test \
+              -scheme UsageLimitsScreenshots \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=$udid" \
+              -derivedDataPath "$GITHUB_WORKSPACE/ios-screenshot-build" \
+              -resultBundlePath "$GITHUB_WORKSPACE/$form-screenshots.xcresult" \
+              -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES \
+              -maximum-test-execution-time-allowance 180 \
+              -only-testing:"UsageLimitsScreenshotTests/MarketingScreenshotTests/$test_name" \
+              CODE_SIGNING_ALLOWED=NO
+            xcrun xcresulttool export attachments \
+              --path "$GITHUB_WORKSPACE/$form-screenshots.xcresult" \
+              --output-path "$GITHUB_WORKSPACE/$form-attachments"
+            xcrun simctl shutdown "$udid"
+          done
+          python3 ../Tools/export-screenshots.py \
+            "$GITHUB_WORKSPACE/iphone-attachments" "$GITHUB_WORKSPACE/ios-marketing-screenshots" \
+            iphone-overview iphone-accounts iphone-resets iphone-settings
+          python3 ../Tools/export-screenshots.py \
+            "$GITHUB_WORKSPACE/ipad-attachments" "$GITHUB_WORKSPACE/ios-marketing-screenshots" \
+            ipad-overview
+
+      - name: Upload the screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-marketing-screenshots
+          path: ios-marketing-screenshots
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Keep test evidence if a capture fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-marketing-capture-failure
+          path: |
+            iphone-screenshots.xcresult
+            ipad-screenshots.xcresult
+            iphone-attachments
+            ipad-attachments
+          if-no-files-found: ignore
+          retention-days: 7
