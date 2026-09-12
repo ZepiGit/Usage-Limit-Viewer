@@ -158,7 +158,7 @@ struct ProviderBadge: View {
     private var symbol: String {
         switch provider {
         case .codex: return "⬡"
-        case .claude: return "✳"
+        case .claude: return "✳︎"
         case .antigravity: return "◆"
         case .xai: return "✕"
         case .kimi: return "☾"
