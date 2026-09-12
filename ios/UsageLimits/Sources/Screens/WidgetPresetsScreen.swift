@@ -95,6 +95,7 @@ private struct WidgetPresetEditor: View {
                                     Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
                                         .foregroundStyle(selected.contains(id) ? UsageColors.terracotta : UsageColors.textTertiary)
                                 }.buttonStyle(.plain).accessibilityLabel("Show \(usage.account.label)")
+                                    .accessibilityValue(selected.contains(id) ? "Selected" : "Not selected")
                                 ProviderBadge(provider: usage.account.provider)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(usage.account.label).foregroundStyle(UsageColors.textPrimary)
