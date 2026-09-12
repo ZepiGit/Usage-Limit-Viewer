@@ -34,10 +34,11 @@ final class AppLaunchUITests: XCTestCase {
             if element.isHittable { return true }
             let frame = container.frame.intersection(app.frame)
             let reverse = element.exists && element.frame.maxY < frame.minY + 60
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let start = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * (reverse ? 0.3 : 0.7)))
-            let end = origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * (reverse ? 0.7 : 0.3)))
-            start.press(forDuration: 0.1, thenDragTo: end)
+            // Anchor in the scroll view's gutter. App-origin offsets can be transformed
+            // twice after rotation and were delivered as a tap on a provider button.
+            let start = container.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: reverse ? 0.3 : 0.75))
+            let end = container.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: reverse ? 0.75 : 0.3))
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
         return element.waitForExistence(timeout: 2) && element.isHittable
     }
