@@ -37,6 +37,7 @@ struct ResetsScreen: View {
             }
             .background(UsageColors.background)
             .navigationTitle("Resets")
+            .marketingDemoLabel()
             .refreshable { await store.refresh() }
         }
     }

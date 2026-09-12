@@ -7,6 +7,9 @@ struct UsageLimitsApp: App {
     @StateObject private var store = UsageStore()
 
     init() {
+        #if DEBUG
+        if MarketingDemo.isEnabled { return }
+        #endif
         // Registration must happen before launch finishes; later is a programmer error the
         // system traps rather than reports, and the app then never refreshes in the background
         // again. The store's own container is handed over rather than a second one: two
@@ -68,6 +71,7 @@ struct UsageLimitsApp: App {
                 // A tapped alert names one account, so it lands on the screen where that
                 // account's card, its error and its actions are.
                 .task {
+                    guard !store.isMarketingDemo else { return }
                     NotificationRouter.shared.onAccountTapped = { _ in tab = .accounts }
                 }
                 .preferredColorScheme(.dark)
@@ -84,7 +88,7 @@ struct UsageLimitsApp: App {
                     // sits above the app's own window and fails every query behind it — so a
                     // test written to check the tab bar would fail on the alert instead, for a
                     // reason that reads as unrelated to what it was checking.
-                    if !Self.isUITesting {
+                    if !Self.isUITesting && !store.isMarketingDemo {
                         _ = await NotificationScheduler.requestAuthorization()
                     }
                     await store.refresh()

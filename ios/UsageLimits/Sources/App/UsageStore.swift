@@ -65,6 +65,14 @@ final class UsageStore: ObservableObject {
     init(container: UsageLimitsContainer? = UsageStore.sharedContainer) {
         self.container = container
 
+        #if DEBUG
+        if MarketingDemo.isEnabled {
+            now = MarketingDemo.now
+            accounts = MarketingDemo.accounts
+            return
+        }
+        #endif
+
         // A countdown that only moves when the data refreshes is worse than no countdown: it
         // reads as a live number while being up to half an hour stale.
         clock = Task { [weak self] in
@@ -197,6 +205,9 @@ final class UsageStore: ObservableObject {
     /// ever. The cache is what the app knew when it was last open, which is the right thing to
     /// render while the real answer is on its way.
     func load() async {
+        #if DEBUG
+        if MarketingDemo.isEnabled { return }
+        #endif
         guard let container else {
             // Said here as well as in `refresh`, because a cold launch renders this screen before
             // anything is refreshed: without it the user sees an empty account list and the
@@ -229,6 +240,9 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() async {
+        #if DEBUG
+        if MarketingDemo.isEnabled { return }
+        #endif
         guard !isRefreshing else { return }
         guard let container else {
             // No shared container means the app group is missing from the entitlements, which is
@@ -334,6 +348,10 @@ final class UsageStore: ObservableObject {
     /// is a `@StateObject` initialiser whose isolation is not this type's to assume. The
     /// container is an actor, so it is safe to reach from anywhere.
     nonisolated static let sharedContainer: UsageLimitsContainer? = {
+        #if DEBUG
+        // Screenshot launches must never open the keychain, cached accounts or saved settings.
+        if MarketingDemo.isEnabled { return nil }
+        #endif
         guard let directory = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupID) else { return nil }
         return UsageLimitsContainer(

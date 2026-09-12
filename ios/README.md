@@ -57,3 +57,27 @@ Real-SDK, iPhone/iPad, landscape and large-text CI results remain pending.
 See [verification.md](../docs/verification.md) for the observed local results and
 remaining device checks, and [release.md](../docs/release.md) for unsigned archives,
 distribution signing and release requirements.
+
+## Marketing screenshots
+
+Run the manual **Marketing screenshots** workflow to capture the actual SwiftUI app on an
+iPhone and an iPad simulator. The `ios-marketing-screenshots` artifact contains five PNGs and
+`CAPTURE.txt` with the source commit and simulator models. The phone captures Overview,
+Accounts, Resets and Settings; the iPad captures Overview.
+
+The separate `UsageLimitsScreenshots` test scheme launches a Debug build with
+`-marketing-demo`. This uses five synthetic accounts in memory, a fixed clock and a visible
+**Demo data** label. It does not initialize shared storage, the keychain, provider clients,
+background refresh or notification routing. Settings changes have no persistent store.
+Release builds ignore the demo argument and contain no fixtures.
+
+To reproduce on a Mac, generate the project with XcodeGen and choose a simulator destination:
+
+```sh
+xcodebuild test -scheme UsageLimitsScreenshots -configuration Debug \
+  -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' CODE_SIGNING_ALLOWED=NO
+```
+
+The workflow shows the complete commands for exporting the XCTest screenshot attachments
+as named PNGs. `ios/Tools/typecheck-app.sh -D DEBUG` also checks the fixture branch against
+the Linux framework shims; the simulator workflow is the real SDK and rendering check.

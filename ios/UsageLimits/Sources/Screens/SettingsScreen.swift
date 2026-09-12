@@ -63,6 +63,7 @@ struct SettingsScreen: View {
             .scrollContentBackground(.hidden)
             .background(UsageColors.background)
             .navigationTitle("Settings")
+            .marketingDemoLabel()
         }
     }
 

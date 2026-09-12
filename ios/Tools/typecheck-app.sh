@@ -58,6 +58,7 @@ swiftc -emit-module -module-name UsageLimitsKit \
 count=$(echo "$APP_SOURCES" | wc -l)
 echo "Type-checking $count app sources against the framework shims…"
 swiftc -typecheck "${ALIASES[@]}" \
+  "$@" \
   -I "$SHIM_BUILD/Modules" -I "$SHIM_BUILD" -I "$KIT_MODULE" \
   $APP_SOURCES
 

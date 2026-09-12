@@ -57,6 +57,7 @@ struct OverviewScreen: View {
             .scrollContentBackground(.hidden)
             .background(UsageColors.background)
             .navigationTitle("Overview")
+            .marketingDemoLabel()
             .toolbar {
                 // `|| editMode.isEditing` is the half that matters. Gated on the count alone,
                 // the button — and with it the only way OUT of reorder mode — vanished the
