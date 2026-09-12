@@ -5,6 +5,7 @@ import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.emitAll
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.updateAll
 import androidx.glance.action.ActionParameters
@@ -40,6 +41,7 @@ object WidgetUpdater {
         "CompactUsageWidget" to { CompactUsageWidget() },
         "DetailedUsageWidget" to { DetailedUsageWidget() },
         "MinimalUsageWidget" to { MinimalUsageWidget() },
+        "MiniRingsWidget" to { MiniRingsWidget() },
     )
 
     /** Rebuilds every placed widget. Called after a sync pass moves the cache. */
@@ -67,32 +69,35 @@ object WidgetUpdater {
     data class WidgetView(
         val snapshot: WidgetSnapshot,
         val transparent: Boolean = false,
+        val metrics: WidgetMetrics = WidgetMetrics(),
     )
 
-    suspend fun load(context: Context, glanceId: GlanceId): WidgetView {
-        val app = context.applicationContext as? UsageLimitsApp ?: return WidgetView(WidgetSnapshot.Empty)
-        val container = app.container
+    suspend fun load(context: Context, glanceId: GlanceId): WidgetView = observe(context, glanceId).first()
 
-        val appWidgetId = runCatching {
-            GlanceAppWidgetManager(context).getAppWidgetId(glanceId)
-        }.getOrNull()
+    fun observe(context: Context, glanceId: GlanceId): kotlinx.coroutines.flow.Flow<WidgetView> =
+        kotlinx.coroutines.flow.flow {
+            val app = context.applicationContext as? UsageLimitsApp ?: return@flow
+            val container = app.container
+            val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(glanceId)
+            emitAll(kotlinx.coroutines.flow.combine(
+                container.repository.observeAccountUsage(),
+                container.widgetConfigDao.observe(appWidgetId),
+                container.settingsStore.settings,
+            ) { accounts, config, settings ->
+                val custom = runCatching {
+                    val ids = org.json.JSONArray(config?.customAccountIdsJson ?: "[]")
+                    (0 until ids.length()).map { ids.getString(it) }
+                }.getOrDefault(emptyList())
+                WidgetView(
+                    WidgetDataBuilder.build(accounts, System.currentTimeMillis(),
+                        WidgetScope.fromName(config?.scope), config?.accountId, config?.provider,
+                        Severity.staleAfterMs(settings.syncIntervalMinutes), custom, settings.providerIcons),
+                    config?.transparent ?: false,
+                    WidgetMetrics.fromJson(config?.layoutMetricsJson ?: "{}") ?: WidgetMetrics(),
+                )
+            })
+        }
 
-        val config = appWidgetId?.let { container.widgetConfigDao.get(it) }
-
-        val interval = container.settingsStore.settings.first().syncIntervalMinutes
-
-        return WidgetView(
-            snapshot = WidgetDataBuilder.build(
-                all = container.repository.accountUsageOnce(),
-                nowMs = System.currentTimeMillis(),
-                scope = WidgetScope.fromName(config?.scope),
-                accountId = config?.accountId,
-                providerId = config?.provider,
-                staleAfterMs = Severity.staleAfterMs(interval),
-            ),
-            transparent = config?.transparent ?: false,
-        )
-    }
 }
 
 /**

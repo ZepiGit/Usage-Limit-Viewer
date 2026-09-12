@@ -31,7 +31,8 @@ def export(source: Path, destination: Path, names: list[str]) -> None:
             path = (source / record["exportedFileName"]).resolve()
             if not path.is_relative_to(source):
                 raise ValueError("Attachment path leaves its export directory")
-            if label.startswith(name) and path.suffix.lower() == ".png" and path.is_file():
+            named_capture = label in (name, f"{name}.png") or label.startswith(f"{name}_")
+            if named_capture and path.suffix.lower() == ".png" and path.is_file():
                 matches.append(path)
         if len(matches) != 1:
             raise ValueError(f"Expected one {name} screenshot, found {len(matches)}")

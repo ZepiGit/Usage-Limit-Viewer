@@ -153,37 +153,15 @@ struct UsageBar: View {
 
 /// Matches the five text glyphs used by Android's provider badges.
 struct ProviderBadge: View {
+    @Environment(\.providerIconChoices) private var choices
     let provider: ProviderID
 
-    private var symbol: String {
-        switch provider {
-        case .codex: return "⬡"
-        case .claude: return "✳︎"
-        case .antigravity: return "◆"
-        case .xai: return "✕"
-        case .kimi: return "☾"
-        }
-    }
-
-    private var tint: Color {
-        switch provider {
-        case .codex: return UsageColors.teal
-        case .claude: return UsageColors.terracotta
-        case .antigravity: return UsageColors.green
-        case .xai: return UsageColors.textPrimary
-        case .kimi: return Color(hex: 0x7C86D9)
-        }
-    }
-
     var body: some View {
-        Text(symbol)
-            .font(.title2)
-            .foregroundStyle(tint)
+        Image(ProviderIconCatalog.selected(for: provider, id: choices[provider.rawValue]).assetName).resizable().scaledToFit().padding(6)
             .frame(width: 40, height: 40)
-            .background(UsageColors.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .accessibilityHidden(true)
+            .accessibilityLabel(provider.displayName)
     }
+
 }
 
 /// Keeps quota rows legible in wide iPad and resizable windows while filling narrow panes.
@@ -191,4 +169,19 @@ extension View {
     func readableWidth() -> some View {
         frame(maxWidth: 760).frame(maxWidth: .infinity)
     }
+}
+
+private struct ProviderIconChoicesKey: EnvironmentKey {
+    static let defaultValue: [String: String] = [:]
+}
+
+extension EnvironmentValues {
+    var providerIconChoices: [String: String] {
+        get { self[ProviderIconChoicesKey.self] }
+        set { self[ProviderIconChoicesKey.self] = newValue }
+    }
+}
+
+extension ProviderID {
+    var assetName: String { ProviderIconCatalog.selected(for: self, id: nil).assetName }
 }

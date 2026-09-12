@@ -91,6 +91,7 @@ data class UsageSnapshot(
     /** Of [resetCreditCount], how many apply to the limit currently reached. Null if unstated. */
     val applicableResetCreditCount: Int? = null,
     val errorMessage: String? = null,
+    val connectionStatus: ConnectionStatus = ConnectionStatus.fromStored(null, status, errorMessage),
 ) {
     /**
      * How many credits the user holds, spendable or not — the number worth displaying.

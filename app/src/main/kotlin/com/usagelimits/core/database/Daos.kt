@@ -74,6 +74,8 @@ interface UsageSnapshotDao {
 
 @Dao
 interface WidgetConfigDao {
+    @Query("SELECT * FROM widget_configs WHERE appWidgetId = :appWidgetId")
+    fun observe(appWidgetId: Int): Flow<WidgetConfigEntity?>
 
     @Query("SELECT * FROM widget_configs WHERE appWidgetId = :appWidgetId")
     suspend fun get(appWidgetId: Int): WidgetConfigEntity?
@@ -87,15 +89,7 @@ interface WidgetConfigDao {
     @Query("DELETE FROM widget_configs WHERE appWidgetId = :appWidgetId")
     suspend fun delete(appWidgetId: Int)
 
-    /**
-     * Drops every widget pinned to an account, so the widget falls back to the automatic scope.
-     *
-     * Without this a widget scoped to a deleted account was left rendering the empty snapshot
-     * for ever — blank dashes with no way back short of removing the widget from the home
-     * screen and placing it again.
-     */
-    @Query("DELETE FROM widget_configs WHERE accountId = :accountId")
-    suspend fun deleteForAccount(accountId: String)
+
 }
 
 /**

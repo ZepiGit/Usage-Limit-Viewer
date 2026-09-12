@@ -42,6 +42,7 @@ struct UsageLimitsApp: App {
         WindowGroup {
             RootView(tab: $tab)
                 .environmentObject(store)
+                .environment(\.providerIconChoices, store.settings.providerIcons)
                 // Six failure paths in the store wrote `lastError` and NOTHING read it. A spend
                 // the provider refused dismissed its dialog, left the credit count unchanged and
                 // said nothing — indistinguishable from a button that did nothing at all. A
@@ -114,6 +115,9 @@ struct UsageLimitsApp: App {
             await store.refresh()
         case "glance":
             tab = .overview
+        case "account":
+            store.focusedAccountID = url.lastPathComponent
+            tab = .accounts
         default:
             break
         }

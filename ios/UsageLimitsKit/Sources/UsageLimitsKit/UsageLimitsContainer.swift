@@ -348,7 +348,9 @@ public actor UsageLimitsContainer {
     /// is floored at what the platform will honour.
     @discardableResult
     public func save(settings: AppSettings) async throws -> AppSettings {
-        try await settingsStore.save(settings)
+        let stored = try await settingsStore.save(settings)
+        await publishCurrent(await repository.usage())
+        return stored
     }
 
     // MARK: - Notifications
@@ -494,7 +496,7 @@ public actor UsageLimitsContainer {
     /// next arrived, so every account would read stale permanently and the tile would lead with
     /// whichever healthy account happened to sort first.
     private func publishCurrent(_ usage: [AccountUsage]) async {
-        publish(usage, staleAfter: await settingsStore.settings().staleAfter)
+        publish(usage, settings: await settingsStore.settings())
     }
 
     /// Hands the widget what the app would render.
@@ -502,10 +504,10 @@ public actor UsageLimitsContainer {
     /// Built from the same `GlanceModel` call the app's own screen uses, so the two surfaces
     /// cannot disagree — one derivation, one answer. Best-effort: failing to update a tile must
     /// never fail the refresh the user is watching.
-    private func publish(_ usage: [AccountUsage], staleAfter: TimeInterval) {
+    private func publish(_ usage: [AccountUsage], settings: AppSettings) {
         try? GlanceSnapshotCodec.write(
             GlanceModel.build(
-                usage, now: now(), scope: .mostCritical, staleAfter: staleAfter),
+                usage, now: now(), scope: .allAccounts, staleAfter: settings.staleAfter, providerIcons: settings.providerIcons),
             toDirectory: containerDirectory)
 
         // Writing the file is only half of it. A widget extension does not watch the container,

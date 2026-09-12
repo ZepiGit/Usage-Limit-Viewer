@@ -36,15 +36,14 @@ import com.usagelimits.ui.components.UsageCard
 import com.usagelimits.ui.theme.UsageColors
 
 /** Filters over the account list. Kept local to the screen — it is view state, not app state. */
-private data class AccountFilter(
+internal data class AccountFilter(
     val provider: ProviderId? = null,
     val onlyProblems: Boolean = false,
 ) {
     fun matches(usage: AccountUsage): Boolean {
         if (provider != null && usage.account.provider != provider) return false
         if (onlyProblems) {
-            val severity = usage.snapshot?.severity ?: Severity.STALE
-            return severity >= Severity.LOW
+            return usage.snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED
         }
         return true
     }

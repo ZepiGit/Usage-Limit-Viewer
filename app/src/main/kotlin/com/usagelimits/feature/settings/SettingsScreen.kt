@@ -50,6 +50,7 @@ fun SettingsScreen(
     onShowTier: (Boolean) -> Unit,
     onShowRenewal: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onProviderIconChange: (com.usagelimits.core.model.ProviderId, String) -> Unit = { _, _ -> },
 ) {
     val settings = state.settings
 
@@ -68,6 +69,7 @@ fun SettingsScreen(
             )
         }
 
+        item { ProviderIconSettings(settings.providerIcons, onProviderIconChange) }
         item { SectionHeader("Sync") }
         item {
             UsageCard {
@@ -152,8 +154,8 @@ fun SettingsScreen(
                     onChange = onNotifyResetApproaching,
                 )
                 ToggleRow(
-                    title = "Reset credit expiring",
-                    subtitle = "Before an unused Codex reset credit lapses",
+                    title = "Unused reset credit expires soon",
+                    subtitle = "Notify me when an unused Codex reset credit expires within 24 hours. A credit lets you reset an eligible usage limit.",
                     checked = settings.notifyOnResetCreditExpiring,
                     onChange = onNotifyCreditExpiring,
                 )

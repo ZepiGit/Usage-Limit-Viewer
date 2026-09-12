@@ -107,7 +107,7 @@ jobs:
           xcodebuild build \
             -scheme UsageLimits \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
 
       # Compiling the widget proves nothing about shipping it. The extension is a separate
       # target, and building both in the scheme leaves the .appex NEXT TO the app rather than
@@ -201,7 +201,7 @@ jobs:
             -parallel-testing-enabled NO \
             -test-timeouts-enabled YES \
             -maximum-test-execution-time-allowance 180 \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
 
       - name: Run adaptive UI checks on an iPad
         working-directory: ios/UsageLimits
@@ -221,7 +221,7 @@ jobs:
             -maximum-test-execution-time-allowance 180 \
             -only-testing:UsageLimitsUITests/AppLaunchUITests/testEachScreenOpensWithNoAccountsConnected \
             -only-testing:UsageLimitsUITests/AppLaunchUITests/testLandscapeAndLargeTextKeepTheProviderPickerReachable \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
 
       # Kept on failure only, because a UI test that fails is unreadable from console output
       # alone: the bundle carries the screenshot and the view hierarchy at the moment it broke.

@@ -154,9 +154,10 @@ private val UsageTypography = Typography(
 @Composable
 fun UsageLimitsTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    providerIcons: Map<String, String> = emptyMap(),
     content: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(LocalMotionEnabled provides rememberMotionEnabled()) {
+    CompositionLocalProvider(LocalMotionEnabled provides rememberMotionEnabled(), com.usagelimits.ui.LocalProviderIcons provides providerIcons) {
         MaterialTheme(
             colorScheme = UsageColorScheme,
             shapes = UsageShapes,

@@ -540,6 +540,12 @@ public actor SyncEngine {
     /// The engine builds messages from the error itself and from identifiers it chose; credential
     /// material is never interpolated, so an outcome is safe to show the user as it stands.
     private static func message(for error: any Error) -> String {
+        if let httpError = error as? HTTPError, case .status(let code, _) = httpError, code == 401 {
+            return NotificationEvaluator.signInExpiredMessage
+        }
+        if case .credentialsAbsent? = error as? SyncEngineError {
+            return NotificationEvaluator.signInExpiredMessage
+        }
         if let described = (error as? LocalizedError)?.errorDescription, !described.isEmpty {
             return described
         }

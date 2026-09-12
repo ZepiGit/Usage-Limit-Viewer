@@ -72,6 +72,7 @@ data class UsageSnapshotEntity(
      * not mean the user holds nothing — see CodexUsageParser.applicableCreditCount.
      */
     val applicableResetCreditCount: Int? = null,
+    val connectionStatus: String? = null,
 )
 
 /**
@@ -103,6 +104,10 @@ data class WidgetConfigEntity(
      */
     @androidx.room.ColumnInfo(defaultValue = "0")
     val transparent: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "'[]'")
+    val customAccountIdsJson: String = "[]",
+    @androidx.room.ColumnInfo(defaultValue = "'{}'")
+    val layoutMetricsJson: String = "{}",
 )
 
 /**
