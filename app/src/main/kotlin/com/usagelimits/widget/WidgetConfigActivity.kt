@@ -1,5 +1,6 @@
 package com.usagelimits.widget
 
+import androidx.compose.runtime.collectAsState
 import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.graphics.Color
@@ -53,8 +54,16 @@ class WidgetConfigActivity : ComponentActivity() {
             receiver.contains("Compact") -> "Usage Summary"
             else -> "Usage Bars"
         }
+        val options = AppWidgetManager.getInstance(this).getAppWidgetOptions(widgetId)
+        val providerInfo = AppWidgetManager.getInstance(this).getAppWidgetInfo(widgetId)
+        val targetColumns = if (android.os.Build.VERSION.SDK_INT >= 31) providerInfo?.targetCellWidth?.takeIf { it > 0 } else null
+        val targetRows = if (android.os.Build.VERSION.SDK_INT >= 31) providerInfo?.targetCellHeight?.takeIf { it > 0 } else null
+        val placementMetrics = WidgetMetrics.fromPlacement(
+            options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH), options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT),
+            options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH), options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT),
+            targetColumns ?: if (kind == "Mini Rings") 1 else 3, targetRows ?: if (kind == "Mini Rings" || kind == "Usage Summary") 1 else 2)
         setContent {
-            UsageLimitsTheme {
+            UsageLimitsTheme(providerIcons = container.settingsStore.settings.collectAsState(initial = com.usagelimits.core.settings.AppSettings()).value.providerIcons) {
                 var initial by remember { mutableStateOf<WidgetConfigEntity?>(null) }
                 var loaded by remember { mutableStateOf(false) }
                 val accounts by container.repository.observeAccountUsage().collectAsState(emptyList())
@@ -73,7 +82,8 @@ class WidgetConfigActivity : ComponentActivity() {
                                     container.widgetConfigDao.upsert(WidgetConfigEntity(
                                         appWidgetId = widgetId, scope = scope.name, accountId = accountId,
                                         provider = providerId, transparent = transparent, updatedAt = System.currentTimeMillis(),
-                                        customAccountIdsJson = JSONArray(custom).toString()))
+                                        customAccountIdsJson = JSONArray(custom).toString(),
+                                        layoutMetricsJson = (WidgetMetrics.fromJson(initial?.layoutMetricsJson ?: "{}") ?: placementMetrics).toJson()))
                                     WidgetUpdater.refreshAll(this@WidgetConfigActivity)
                                     setResult(RESULT_OK, result); finish()
                                 } catch (_: Exception) { saving = false; error = "Could not save the widget. Try again." }

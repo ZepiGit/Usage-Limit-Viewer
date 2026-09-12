@@ -26,6 +26,8 @@ data class WidgetAccount(
     val severity: Severity,
     val providerId: String = "",
     val requiresReauthentication: Boolean = false,
+    val iconChoiceId: String? = null,
+    val resetTimes: List<Long> = rows.mapNotNull { it.resetAt },
 )
 
 /**
@@ -79,6 +81,7 @@ object WidgetDataBuilder {
          */
         staleAfterMs: Long = Severity.STALE_AFTER_MS,
         customAccountIds: List<String> = emptyList(),
+        providerIcons: Map<String, String> = emptyMap(),
     ): WidgetSnapshot {
         val selected = when (scope) {
             WidgetScope.ACCOUNT -> all.filter { it.account.localId == accountId }
@@ -89,7 +92,7 @@ object WidgetDataBuilder {
 
         if (selected.isEmpty()) return WidgetSnapshot.Empty
 
-        val accounts = selected.map { it.toWidgetAccount(nowMs, staleAfterMs) }
+        val accounts = selected.map { it.toWidgetAccount(nowMs, staleAfterMs, providerIcons) }
 
         // For the auto scope, lead with whatever is closest to running out — see [criticality].
         val ordered = if (scope == WidgetScope.MOST_CRITICAL) {
@@ -126,7 +129,7 @@ object WidgetDataBuilder {
             // replaces it, so once one had passed the minimum was anchored in the past and the
             // compact widget's tile named a reset that was already over. The overview's view
             // model drops passed instants for the same reason.
-            nextResetAt = lead?.rows?.mapNotNull { it.resetAt }?.filter { it > nowMs }?.minOrNull(),
+            nextResetAt = lead?.resetTimes?.filter { it > nowMs }?.minOrNull(),
             // Deliberately NOT the leading account's severity. This answers "is anything wrong
             // anywhere", which is a different question from "what should I look at first" —
             // and it is the only thing that still surfaces a broken account once the ordering
@@ -222,7 +225,7 @@ object WidgetDataBuilder {
         else -> 2
     }
 
-    private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long): WidgetAccount {
+    private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long, providerIcons: Map<String, String>): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
 
         // Show the two horizons that matter, not every window an account reports — a widget
@@ -239,7 +242,9 @@ object WidgetDataBuilder {
             rows = rows,
             severity = snapshot?.severityAt(nowMs, staleAfterMs) ?: Severity.STALE,
             providerId = account.provider.id,
+            iconChoiceId = providerIcons[account.provider.id],
             requiresReauthentication = snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED,
+            resetTimes = windows.mapNotNull { it.resetAt },
         )
     }
 

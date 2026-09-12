@@ -40,6 +40,7 @@ struct SettingsScreen: View {
                 }
 
                 Section("Display") {
+                    NavigationLink("Provider icons") { ProviderIconsScreen() }
                     NavigationLink("Widget layouts") { WidgetPresetsScreen() }
                     Toggle(
                         "Show subscription tier",

@@ -1,13 +1,16 @@
 package com.usagelimits.widget
 
-import kotlin.math.floor
-
-/** Layout uses the host's available dp area; launcher cell labels are only placement hints. */
 object WidgetLayout {
-    fun accountColumns(width: Float, height: Float): Int =
-        if (width >= 240f && height >= 240f) 2 else 1
+    data class Grid(val columns: Int, val rows: Int) { val capacity: Int get() = columns * rows }
 
-    fun miniColumns(width: Float): Int = maxOf(1, floor((width - 8f) / 52f).toInt())
-    fun miniRows(height: Float): Int = maxOf(1, floor((height - 8f) / 28f).toInt())
-    fun miniCapacity(width: Float, height: Float): Int = miniColumns(width) * miniRows(height)
+    fun accountColumns(width: Float, height: Float, metrics: WidgetMetrics? = null): Int =
+        if (metrics == null) { if (width >= 240f && height >= 240f) 2 else 1 }
+        else { val span = metrics.span(width, height); if (span.columns >= 2 && span.rows >= 4) 2 else 1 }
+
+    fun miniGrid(width: Float, height: Float, metrics: WidgetMetrics = WidgetMetrics()): Grid {
+        val span = metrics.span(width, height)
+        return if (span.landscape) Grid(span.columns * 2, span.rows) else Grid(span.columns, span.rows * 2)
+    }
+
+    fun miniCapacity(width: Float, height: Float): Int = miniGrid(width, height).capacity
 }

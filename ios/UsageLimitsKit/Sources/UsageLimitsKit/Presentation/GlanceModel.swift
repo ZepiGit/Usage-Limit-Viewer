@@ -64,6 +64,8 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
     /// keeps exactly its previous behaviour rather than being declared stale on upgrade.
     public let fetchedAt: Date?
     public let providerID: String?
+    public let iconAssetName: String?
+    public let resetDates: [Date]
     public let connectionStatus: ConnectionStatus
 
     public init(
@@ -75,7 +77,9 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         baseSeverity: Severity? = nil,
         fetchedAt: Date? = nil,
         providerID: String? = nil,
-        connectionStatus: ConnectionStatus = .unknown
+        connectionStatus: ConnectionStatus = .unknown,
+        resetDates: [Date]? = nil,
+        iconAssetName: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -85,11 +89,13 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         self.baseSeverity = baseSeverity ?? severity
         self.fetchedAt = fetchedAt
         self.providerID = providerID
+        self.iconAssetName = iconAssetName
         self.connectionStatus = connectionStatus
+        self.resetDates = resetDates ?? rows.compactMap(\.resetAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt, providerID, connectionStatus
+        case id, title, subtitle, rows, severity, baseSeverity, fetchedAt, providerID, connectionStatus, resetDates, iconAssetName
     }
 
     /// Lenient on the two new keys: a snapshot written before them must still decode, or every
@@ -104,7 +110,9 @@ public struct GlanceAccount: Sendable, Equatable, Identifiable, Codable {
         baseSeverity = try c.decodeIfPresent(Severity.self, forKey: .baseSeverity) ?? severity
         fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
         providerID = try c.decodeIfPresent(String.self, forKey: .providerID)
+        iconAssetName = try c.decodeIfPresent(String.self, forKey: .iconAssetName)
         connectionStatus = try c.decodeIfPresent(ConnectionStatus.self, forKey: .connectionStatus) ?? .unknown
+        resetDates = try c.decodeIfPresent([Date].self, forKey: .resetDates) ?? rows.compactMap(\.resetAt)
     }
 
     /// The severity to show at `now`, aged from the fetch instant rather than frozen.
@@ -220,7 +228,8 @@ public enum GlanceModel {
         accountID: String? = nil,
         providerID: String? = nil,
         staleAfter: TimeInterval = Severity.staleAfter,
-        customAccountIDs: [String] = []
+        customAccountIDs: [String] = [],
+        providerIcons: [String: String] = [:]
     ) -> GlanceSnapshot {
         let selected: [AccountUsage]
         switch scope {
@@ -237,7 +246,7 @@ public enum GlanceModel {
 
         guard !selected.isEmpty else { return .empty }
 
-        let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter) }
+        let accounts = selected.map { glanceAccount($0, now: now, staleAfter: staleAfter, providerIcons: providerIcons) }
         let ordered: [GlanceAccount]
         if scope == .mostCritical { ordered = sortedByUrgency(accounts) }
         else if scope == .closestResets {
@@ -270,7 +279,7 @@ public enum GlanceModel {
             // fetch replaces it, so once one had passed the minimum was anchored in the past:
             // the summary read "next reset now" for hours while the real next rollover was
             // never shown. The Android view model already drops passed instants.
-            nextResetAt: lead?.rows.compactMap(\.resetAt).filter { $0 > now }.min(),
+            nextResetAt: lead?.resetDates.filter { $0 > now }.min(),
             // Deliberately NOT the leading account's severity. This answers "is anything wrong
             // anywhere", which is a different question from "what should I look at first" —
             // and it is the only thing that still surfaces a broken account once the ordering
@@ -392,7 +401,7 @@ public enum GlanceModel {
     }
 
     private static func glanceAccount(
-        _ usage: AccountUsage, now: Date, staleAfter: TimeInterval
+        _ usage: AccountUsage, now: Date, staleAfter: TimeInterval, providerIcons: [String: String]
     ) -> GlanceAccount {
         let windows = usage.snapshot?.windows ?? []
 
@@ -423,7 +432,9 @@ public enum GlanceModel {
             // hours later can age it itself instead of repeating a verdict from write time.
             baseSeverity: usage.snapshot?.severity ?? .stale,
             fetchedAt: usage.snapshot?.fetchedAt, providerID: usage.account.provider.rawValue,
-            connectionStatus: usage.snapshot?.connectionStatus ?? .unknown)
+            connectionStatus: usage.snapshot?.connectionStatus ?? .unknown,
+            resetDates: usage.snapshot?.windows.compactMap(\.resetAt),
+            iconAssetName: ProviderIconCatalog.selected(for: usage.account.provider, id: providerIcons[usage.account.provider.rawValue]).assetName)
     }
 
     private static func row(_ window: UsageWindow) -> GlanceRow {

@@ -85,7 +85,8 @@ struct ConfiguredUsageProvider: AppIntentTimelineProvider {
         if let reset = first.snapshot.nextResetAt, reset > now, reset < now.addingTimeInterval(3600) {
             dates.append(reset.addingTimeInterval(2))
         }
-        let entries = dates.sorted().map { Entry(date: $0, snapshot: first.snapshot, transparent: configuration.transparent) }
+        var entries: [Entry] = []
+        for date in dates.sorted() { entries.append(await entry(configuration, at: date)) }
         return Timeline(entries: entries, policy: .after(now.addingTimeInterval(900)))
     }
     private func entry(_ config: Intent, at date: Date) async -> Entry {
@@ -155,7 +156,7 @@ private struct ConfiguredRingGrid: View {
                                     .stroke(SeverityPalette.text(severity), style: StrokeStyle(lineWidth: 4, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
                                 if let provider = ProviderID(rawValue: account.providerID ?? "") {
-                                    Image(provider.assetName).resizable().scaledToFit().frame(width: 20, height: 20)
+                                    Image(account.iconAssetName ?? provider.assetName).resizable().scaledToFit().frame(width: 20, height: 20)
                                 }
                             }.frame(width: 38, height: 38)
                             if !mini {

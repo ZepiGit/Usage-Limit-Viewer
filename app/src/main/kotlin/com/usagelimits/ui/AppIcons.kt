@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
  * `LocalContentColor` over the black fill exactly as it does for `Icons.Default.*`.
  */
 object AppIcons {
+    val DragHandle: ImageVector by lazy { icon("DragHandle", "M3 8h18v2H3zm0 6h18v2H3z") }
     /** Material "chevron_right". */
     val ChevronRight: ImageVector by lazy {
         icon("ChevronRight", "M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z")

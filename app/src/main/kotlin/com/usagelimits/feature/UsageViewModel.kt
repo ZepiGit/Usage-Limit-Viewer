@@ -187,9 +187,23 @@ class UsageViewModel(
                 container.repository.reorderAccounts(idsInOrder.distinct())
                 container.settingsStore.setAccountsManuallyOrdered(true)
                 WidgetUpdater.refreshAll(appContext)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                transientMessage.value = "Could not save account order. Try again."
             } finally {
                 reorderMutex.unlock()
             }
+        }
+    }
+
+    fun setProviderIcon(provider: ProviderId, iconId: String) {
+        viewModelScope.launch {
+            try {
+                container.settingsStore.setProviderIcon(provider.id, iconId)
+                WidgetUpdater.refreshAll(appContext)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { transientMessage.value = "Could not save the icon choice. Try again." }
         }
     }
 

@@ -16,21 +16,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.usagelimits.ui.theme.UsageColors
 
-fun providerLogoResource(provider: ProviderId): Int = when (provider) {
-    ProviderId.CODEX -> R.drawable.provider_codex
-    ProviderId.CLAUDE -> R.drawable.provider_claude
-    ProviderId.ANTIGRAVITY -> R.drawable.provider_antigravity
-    ProviderId.XAI -> R.drawable.provider_grok
-    ProviderId.KIMI -> R.drawable.provider_kimi
-}
+val LocalProviderIcons = androidx.compose.runtime.staticCompositionLocalOf<Map<String, String>> { emptyMap() }
+
+fun providerLogoResource(provider: ProviderId, iconId: String? = null): Int = ProviderIconCatalog.selected(provider, iconId).drawable
 
 @Composable
 fun ProviderLogo(provider: ProviderId, modifier: Modifier = Modifier) {
-    Image(painterResource(providerLogoResource(provider)), provider.displayName, modifier)
+    Image(painterResource(providerLogoResource(provider, LocalProviderIcons.current[provider.id])), provider.displayName, modifier)
 }
 
 @Composable
 fun ProviderBadge(provider: ProviderId, size: Dp = 40.dp) {
-    Box(Modifier.size(size).clip(RoundedCornerShape(14.dp)).background(UsageColors.SurfaceElevated),
-        contentAlignment = Alignment.Center) { ProviderLogo(provider, Modifier.size(size * 0.58f)) }
+    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+        ProviderLogo(provider, Modifier.size(size * 0.70f))
+    }
 }

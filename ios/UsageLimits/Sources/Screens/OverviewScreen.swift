@@ -152,7 +152,7 @@ private struct SummaryCard: View {
 
     private var subtitle: String {
         let accounts = snapshot.accountCount == 1 ? "1 account" : "\(snapshot.accountCount) accounts"
-        guard let next = snapshot.accounts.flatMap(\.rows).compactMap(\.resetAt).filter({ $0 > now }).min() else { return accounts }
+        guard let next = snapshot.accounts.flatMap(\.resetDates).filter({ $0 > now }).min() else { return accounts }
         return "\(accounts) · next reset \(Countdown.format(until: next, from: now))"
     }
 

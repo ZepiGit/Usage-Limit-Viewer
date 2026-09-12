@@ -106,6 +106,8 @@ data class WidgetConfigEntity(
     val transparent: Boolean = false,
     @androidx.room.ColumnInfo(defaultValue = "'[]'")
     val customAccountIdsJson: String = "[]",
+    @androidx.room.ColumnInfo(defaultValue = "'{}'")
+    val layoutMetricsJson: String = "{}",
 )
 
 /**

@@ -69,6 +69,7 @@ object WidgetUpdater {
     data class WidgetView(
         val snapshot: WidgetSnapshot,
         val transparent: Boolean = false,
+        val metrics: WidgetMetrics = WidgetMetrics(),
     )
 
     suspend fun load(context: Context, glanceId: GlanceId): WidgetView = observe(context, glanceId).first()
@@ -90,8 +91,9 @@ object WidgetUpdater {
                 WidgetView(
                     WidgetDataBuilder.build(accounts, System.currentTimeMillis(),
                         WidgetScope.fromName(config?.scope), config?.accountId, config?.provider,
-                        Severity.staleAfterMs(settings.syncIntervalMinutes), custom),
+                        Severity.staleAfterMs(settings.syncIntervalMinutes), custom, settings.providerIcons),
                     config?.transparent ?: false,
+                    WidgetMetrics.fromJson(config?.layoutMetricsJson ?: "{}") ?: WidgetMetrics(),
                 )
             })
         }

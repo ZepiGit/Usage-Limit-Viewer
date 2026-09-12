@@ -398,6 +398,14 @@ public struct NavigationLink: View {
     public var body: some View { ShimLeaf() }
 }
 
+public struct ScrollViewProxy {
+    public func scrollTo<ID: Hashable>(_ id: ID, anchor: Alignment? = nil) {}
+}
+public struct ScrollViewReader: View {
+    public init(@ViewBuilder content: (ScrollViewProxy) -> any View) {}
+    public var body: some View { ShimLeaf() }
+}
+
 public struct NavigationStack: View {
     public init(@ViewBuilder root: () -> any View) {}
     public var body: some View { ShimLeaf() }
@@ -509,7 +517,15 @@ public struct ToolbarItemPlacement {
 
 public enum TextSelectability { case enabled, disabled }
 
+public protocol EnvironmentKey {
+    associatedtype Value
+    static var defaultValue: Value { get }
+}
 public struct EnvironmentValues {
+    public subscript<Key: EnvironmentKey>(_ key: Key.Type) -> Key.Value {
+        get { Key.defaultValue }
+        set {}
+    }
     public var accessibilityReduceMotion = false
     public var dismiss = DismissAction()
     public var openURL = OpenURLAction()

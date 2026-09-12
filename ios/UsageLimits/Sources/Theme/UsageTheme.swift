@@ -153,13 +153,12 @@ struct UsageBar: View {
 
 /// Matches the five text glyphs used by Android's provider badges.
 struct ProviderBadge: View {
+    @Environment(\.providerIconChoices) private var choices
     let provider: ProviderID
 
     var body: some View {
-        Image(provider.assetName).resizable().scaledToFit().padding(8)
+        Image(ProviderIconCatalog.selected(for: provider, id: choices[provider.rawValue]).assetName).resizable().scaledToFit().padding(6)
             .frame(width: 40, height: 40)
-            .background(UsageColors.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
             .accessibilityLabel(provider.displayName)
     }
 
@@ -172,14 +171,17 @@ extension View {
     }
 }
 
-extension ProviderID {
-    var assetName: String {
-        switch self {
-        case .codex: "ProviderCodex"
-        case .claude: "ProviderClaude"
-        case .antigravity: "ProviderAntigravity"
-        case .xai: "ProviderGrok"
-        case .kimi: "ProviderKimi"
-        }
+private struct ProviderIconChoicesKey: EnvironmentKey {
+    static let defaultValue: [String: String] = [:]
+}
+
+extension EnvironmentValues {
+    var providerIconChoices: [String: String] {
+        get { self[ProviderIconChoicesKey.self] }
+        set { self[ProviderIconChoicesKey.self] = newValue }
     }
+}
+
+extension ProviderID {
+    var assetName: String { ProviderIconCatalog.selected(for: self, id: nil).assetName }
 }

@@ -239,6 +239,7 @@ fun ToggleRow(
         Spacer(Modifier.width(12.dp))
         Switch(
             checked = checked,
+            modifier = Modifier.semantics { contentDescription = title },
             onCheckedChange = onChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = UsageColors.Background,

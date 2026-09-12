@@ -1,4 +1,5 @@
 package com.usagelimits.feature.overview
+import sh.calvin.reorderable.ReorderableItem
 
 import com.usagelimits.core.model.title
 import com.usagelimits.ui.theme.LocalMotionEnabled
@@ -103,26 +104,22 @@ fun OverviewScreen(
 ) {
     val listState = rememberLazyListState()
 
-    // Drag state. `liveOrder` is the list as the finger has rearranged it — non-null only while
-    // a drag is in flight, and for the moment afterwards before the stored order comes back
-    // through the flow. Dropping it the instant the finger lifts would show the old order again
-    // for one frame, which reads as the drag having failed.
-    var draggingId by remember { mutableStateOf<String?>(null) }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var reordering by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
     var liveOrder by remember { mutableStateOf<List<AccountUsage>?>(null) }
-
     val shown = liveOrder?.mapNotNull { pending -> state.accounts.firstOrNull { it.account.localId == pending.account.localId } }
         ?: state.orderedAccounts(nowMs)
     val currentShown by androidx.compose.runtime.rememberUpdatedState(shown)
-
-    LaunchedEffect(state.accounts, state.settings.accountsManuallyOrdered) {
+    val reorderState = sh.calvin.reorderable.rememberReorderableLazyListState(listState) { from, to ->
+        val order = currentShown.toMutableList()
+        val start = order.indexOfFirst { it.account.localId == from.key }
+        val end = order.indexOfFirst { it.account.localId == to.key }
+        if (start >= 0 && end >= 0 && start != end) { order.add(end, order.removeAt(start)); liveOrder = order }
+    }
+    LaunchedEffect(state.accounts, dragging, state.message) {
         val pending = liveOrder ?: return@LaunchedEffect
-        if (draggingId == null &&
-            state.orderedAccounts(nowMs).map { it.account.localId } ==
-            pending.map { it.account.localId }
-        ) {
-            liveOrder = null
-        }
+        if (!dragging && (state.orderedAccounts(nowMs).map { it.account.localId } == pending.map { it.account.localId } ||
+                state.message == "Could not save account order. Try again.")) liveOrder = null
     }
 
     LazyColumn(
@@ -142,86 +139,34 @@ fun OverviewScreen(
                 SectionHeader(
                     title = "Accounts",
                     trailing = {
-                        Text(
-                            text = Countdown.freshnessLabel(state.lastUpdated, nowMs),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = UsageColors.TextTertiary,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(Countdown.freshnessLabel(state.lastUpdated, nowMs), style = MaterialTheme.typography.bodySmall, color = UsageColors.TextTertiary)
+                            androidx.compose.material3.TextButton(onClick = { reordering = !reordering }) {
+                                Text(if (reordering) "Done" else "Reorder")
+                            }
+                        }
                     },
                 )
             }
         }
 
         items(items = shown, key = { it.account.localId }) { usage ->
-            val id = usage.account.localId
-            val dragging = draggingId == id
-            val motionEnabled = LocalMotionEnabled.current
-
-            AccountCard(
-                usage = usage,
-                nowMs = nowMs,
-                staleAfterMs = state.staleAfterMs,
-                showTier = state.settings.showSubscriptionTier,
-                showRenewal = state.settings.showRenewalTime,
-                modifier = Modifier
-                    .then(if (motionEnabled) Modifier.animateItem(placementSpec = if (dragging) null else spring()) else Modifier)
-                    // Above its neighbours while it is being carried, or the cards it passes
-                    // over are drawn on top of it.
-                    .zIndex(if (dragging) 1f else 0f)
-                    .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
-                    .pointerInput(id) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                draggingId = id
-                                dragOffset = 0f
-                                liveOrder = currentShown
-                            },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                dragOffset += amount.y
-
-                                val current = liveOrder ?: return@detectDragGesturesAfterLongPress
-                                val visible = listState.layoutInfo.visibleItemsInfo
-                                val self = visible.firstOrNull { it.key == id }
-                                    ?: return@detectDragGesturesAfterLongPress
-
-                                // Where the card's middle now sits, and whichever card that
-                                // point has landed inside is the one to trade places with.
-                                val centre = self.offset + self.size / 2f + dragOffset
-                                val over = visible.firstOrNull { other ->
-                                    other.key != id &&
-                                        centre >= other.offset &&
-                                        centre <= other.offset + other.size
-                                } ?: return@detectDragGesturesAfterLongPress
-
-                                val from = current.indexOfFirst { it.account.localId == id }
-                                val to = current.indexOfFirst { it.account.localId == over.key }
-                                if (from < 0 || to < 0 || from == to) {
-                                    return@detectDragGesturesAfterLongPress
-                                }
-
-                                liveOrder = current.toMutableList()
-                                    .apply { add(to, removeAt(from)) }
-                                // The card has swapped into the other's slot, so the finger's
-                                // travel so far is now measured from there. Without this the
-                                // card jumps by its own height on every swap.
-                                dragOffset -= (over.offset - self.offset)
-                            },
-                            onDragEnd = {
-                                draggingId = null
-                                dragOffset = 0f
-                                liveOrder?.let { order ->
-                                    onReorder(order.map { it.account.localId })
-                                }
-                            },
-                            onDragCancel = {
-                                draggingId = null
-                                dragOffset = 0f
-                                liveOrder = null
-                            },
-                        )
+            ReorderableItem(reorderState, key = usage.account.localId) { isDragging ->
+                AccountCard(usage = usage, nowMs = nowMs, staleAfterMs = state.staleAfterMs,
+                    showTier = state.settings.showSubscriptionTier, showRenewal = state.settings.showRenewalTime,
+                    modifier = Modifier.zIndex(if (isDragging) 1f else 0f),
+                    dragHandle = if (!reordering) null else {
+                        {
+                            Box(Modifier.size(44.dp).draggableHandle(
+                                onDragStarted = { dragging = true; liveOrder = currentShown },
+                                onDragStopped = { dragging = false; liveOrder?.let { onReorder(it.map { item -> item.account.localId }) } },
+                            ), contentAlignment = Alignment.Center) {
+                                Icon(AppIcons.DragHandle, "Move ${usage.account.label}", tint = UsageColors.TextSecondary)
+                            }
+                        }
                     },
-            ) { onAccountClick(id) }
+                ) { if (!reordering) onAccountClick(usage.account.localId) }
+            }
         }
 
         item { AddAccountCard(onAddAccount) }
@@ -425,6 +370,7 @@ fun AccountCard(
     // Before `onClick`, so the trailing-lambda call sites keep binding their lambda to the
     // click and not to this.
     modifier: Modifier = Modifier,
+    dragHandle: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val snapshot = usage.snapshot
@@ -458,12 +404,14 @@ fun AccountCard(
                     }
                 }
             }
+            if (dragHandle != null) dragHandle() else {
             StatusPill(severity, label = if (snapshot?.connectionStatus == com.usagelimits.core.model.ConnectionStatus.RECONNECT_REQUIRED) "Reconnect" else null)
             Icon(
                 imageVector = AppIcons.ChevronRight,
                 contentDescription = null,
                 tint = UsageColors.TextTertiary,
             )
+            }
         }
 
         val windows = snapshot?.windows.orEmpty()

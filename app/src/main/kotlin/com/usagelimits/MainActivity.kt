@@ -1,5 +1,6 @@
 package com.usagelimits
 
+import androidx.compose.runtime.collectAsState
 import android.Manifest
 import android.graphics.Color
 import android.os.Build
@@ -44,7 +45,7 @@ class MainActivity : ComponentActivity() {
             // Recomputed on every configuration change, so unfolding a foldable, entering
             // split-screen or resizing a freeform window re-lays-out the shell immediately.
             val windowSizeClass = calculateWindowSizeClass(this)
-            UsageLimitsTheme {
+            UsageLimitsTheme(providerIcons = container.settingsStore.settings.collectAsState(initial = com.usagelimits.core.settings.AppSettings()).value.providerIcons) {
                 UsageLimitsNavigation(container, windowSizeClass, requestedAccount.value) { requestedAccount.value = null }
             }
         }

@@ -27,7 +27,7 @@ final class AppLaunchUITests: XCTestCase {
 
     /// Swipes until the element materialises, or gives up rather than swiping for ever.
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        let identifiers = ["provider-picker-scroll", "settings-form", "accounts-scroll"]
+        let identifiers = ["provider-icons-list", "provider-picker-scroll", "settings-form", "accounts-scroll"]
         let container = identifiers.map { app.descendants(matching: .any)[$0].firstMatch }
             .first { $0.exists && $0.isHittable } ?? app
         for _ in 0..<12 {
@@ -74,6 +74,32 @@ final class AppLaunchUITests: XCTestCase {
         let app = launch()
 
         XCTAssertEqual(app.state, .runningForeground, "the app should still be running")
+    }
+
+    func testProviderIconSelectionPersists() {
+        var app = launch()
+        tabButton("Settings", in: app).tap()
+        XCTAssertTrue(scrollTo(app.buttons["Provider icons"], in: app))
+        app.buttons["Provider icons"].tap()
+        let alternative = app.buttons["Claude · Color"]
+        XCTAssertTrue(scrollTo(alternative, in: app))
+        alternative.tap()
+        XCTAssertEqual(alternative.value as? String, "Selected")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Provider icon choice"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.terminate()
+        app = launch()
+        tabButton("Settings", in: app).tap()
+        XCTAssertTrue(scrollTo(app.buttons["Provider icons"], in: app))
+        app.buttons["Provider icons"].tap()
+        let restored = app.buttons["Claude · Color"]
+        XCTAssertTrue(scrollTo(restored, in: app))
+        XCTAssertEqual(restored.value as? String, "Selected")
+        let defaultIcon = app.buttons["Claude Code · Color"]
+        XCTAssertTrue(scrollTo(defaultIcon, in: app))
+        defaultIcon.tap()
     }
 
     func testAllFourDestinationsExist() {

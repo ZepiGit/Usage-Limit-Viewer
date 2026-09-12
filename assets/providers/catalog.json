@@ -1,0 +1,88 @@
+{
+  "claude": [
+    [
+      "claudecode-color",
+      "Claude Code · Color"
+    ],
+    [
+      "claudecode",
+      "Claude Code · Monochrome"
+    ],
+    [
+      "claudecode-text",
+      "Claude Code · Wordmark"
+    ],
+    [
+      "claude-color",
+      "Claude · Color"
+    ],
+    [
+      "claude",
+      "Claude · Monochrome"
+    ],
+    [
+      "claude-text",
+      "Claude · Wordmark"
+    ]
+  ],
+  "codex": [
+    [
+      "openai",
+      "OpenAI"
+    ],
+    [
+      "openai-text",
+      "OpenAI · Wordmark"
+    ]
+  ],
+  "xai": [
+    [
+      "grok",
+      "Grok"
+    ],
+    [
+      "grok-text",
+      "Grok · Wordmark"
+    ]
+  ],
+  "antigravity": [
+    [
+      "gemini-color",
+      "Gemini · Color"
+    ],
+    [
+      "antigravity-color",
+      "Antigravity · Color"
+    ],
+    [
+      "gemini",
+      "Gemini · Monochrome"
+    ],
+    [
+      "antigravity",
+      "Antigravity · Monochrome"
+    ],
+    [
+      "gemini-text",
+      "Gemini · Wordmark"
+    ],
+    [
+      "antigravity-text",
+      "Antigravity · Wordmark"
+    ]
+  ],
+  "kimi": [
+    [
+      "kimi-color",
+      "Kimi · Color"
+    ],
+    [
+      "kimi",
+      "Kimi · Monochrome"
+    ],
+    [
+      "kimi-text",
+      "Kimi · Wordmark"
+    ]
+  ]
+}

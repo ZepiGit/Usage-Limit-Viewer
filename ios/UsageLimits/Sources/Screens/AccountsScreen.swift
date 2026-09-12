@@ -28,6 +28,7 @@ struct AccountsScreen: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -47,7 +48,7 @@ struct AccountsScreen: View {
                     // screen is the one place that needs more than the reduced view: the reset
                     // credits a card can spend do not travel in a glance.
                     ForEach(filteredAccounts, id: \.account.id) { usage in
-                        AccountSummaryCard(usage: usage, now: store.now)
+                        AccountSummaryCard(usage: usage, now: store.now).id(usage.account.id)
                     }
 
                     Button { isAdding = true } label: { AddAccountCard() }
@@ -63,6 +64,14 @@ struct AccountsScreen: View {
             .marketingDemoLabel()
             .refreshable { await store.refresh() }
             .sheet(isPresented: $isAdding) { AddAccountSheet() }
+            .task(id: store.focusedAccountID) {
+                guard let id = store.focusedAccountID else { return }
+                providerFilter = nil; attentionOnly = false
+                await Task.yield()
+                proxy.scrollTo(id, anchor: .center)
+                store.focusedAccountID = nil
+            }
+            }
         }
     }
 }

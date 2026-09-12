@@ -35,42 +35,52 @@ open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
         provideContent {
             val view by WidgetUpdater.observe(context, id).collectAsState(initial)
             val size = LocalSize.current
-            val columns = if (mini) WidgetLayout.miniColumns(size.width.value)
-                else WidgetLayout.accountColumns(size.width.value, size.height.value)
-            val groups = view.snapshot.accounts.chunked(columns)
-            val rowHeight = if (mini) ((size.height.value - 8) / WidgetLayout.miniRows(size.height.value)).coerceIn(28f, 64f).dp else 54.dp
+            val grid = WidgetLayout.miniGrid(size.width.value, size.height.value, view.metrics)
+            val columns = if (mini) grid.columns else WidgetLayout.accountColumns(size.width.value, size.height.value, view.metrics)
+            val selected = if (mini) view.snapshot.accounts.take(grid.capacity) else view.snapshot.accounts
+            val groups = selected.chunked(columns)
+            val rowHeight = if (mini) ((size.height.value - 8f) / grid.rows).coerceAtLeast(20f).dp else 60.dp
+            val ringSize = if (mini) minOf((size.width.value - 8f) / columns, rowHeight.value).minus(8f).coerceIn(16f, 52f).dp else 36.dp
             Column(GlanceModifier.fillMaxSize().cornerRadius(24.dp)
                 .background(if (view.transparent) Color.Transparent else UsageColors.Background)
                 .padding(if (mini) 4.dp else 10.dp)) {
                 if (groups.isEmpty()) Text("No accounts selected", style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 12.sp))
-                else LazyColumn(GlanceModifier.fillMaxSize()) {
+                else if (mini) {
+                    // Fixed visible capacity also avoids sharing a collection adapter between
+                    // differently sized portrait and landscape RemoteViews.
+                    groups.forEach { group -> RingAccountRow(context, group, columns, rowHeight, ringSize, true) }
+                } else LazyColumn(GlanceModifier.fillMaxSize()) {
                     items(groups, itemId = { it.first().accountId.hashCode().toLong() }) { group ->
-                        Row(GlanceModifier.fillMaxWidth().height(rowHeight), verticalAlignment = Alignment.CenterVertically) {
-                            group.forEach { account ->
-                                val action = actionStartActivity(Intent(context, MainActivity::class.java)
-                                    .putExtra("accountId", account.accountId))
-                                Row(GlanceModifier.defaultWeight().fillMaxHeight().padding(2.dp).clickable(action),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalAlignment = if (mini) Alignment.CenterHorizontally else Alignment.Start) {
-                                    RingMark(account, if (mini) (rowHeight.value - 4).coerceIn(24f, 52f).dp else 38.dp)
-                                    if (!mini) {
-                                        Spacer(GlanceModifier.width(8.dp))
-                                        Column(GlanceModifier.defaultWeight()) {
-                                            Text(account.title, maxLines = 1, style = TextStyle(color = ColorProvider(UsageColors.TextPrimary), fontSize = 12.sp, fontWeight = FontWeight.Medium))
-                                            Text(if (account.requiresReauthentication) "Reconnect" else ringLimit(account)?.resetAt?.let {
-                                                Countdown.absoluteResetLabel(it, System.currentTimeMillis())?.removePrefix("Resets ")
-                                            } ?: "No reset time", maxLines = 1,
-                                                style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 11.sp))
-                                        }
-                                    }
-                                }
-                            }
-                            repeat(columns - group.size) { Spacer(GlanceModifier.defaultWeight()) }
-                        }
+                        RingAccountRow(context, group, columns, rowHeight, ringSize, false)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RingAccountRow(context: Context, group: List<WidgetAccount>, columns: Int,
+    rowHeight: androidx.compose.ui.unit.Dp, ringSize: androidx.compose.ui.unit.Dp, mini: Boolean) {
+    Row(GlanceModifier.fillMaxWidth().height(rowHeight), verticalAlignment = Alignment.CenterVertically) {
+        group.forEach { account ->
+            val action = actionStartActivity(Intent(context, MainActivity::class.java).putExtra("accountId", account.accountId))
+            if (mini) Box(GlanceModifier.defaultWeight().fillMaxHeight().padding(2.dp).clickable(action), contentAlignment = Alignment.Center) {
+                RingMark(account, ringSize)
+            } else Row(GlanceModifier.defaultWeight().fillMaxHeight().padding(2.dp).clickable(action), verticalAlignment = Alignment.CenterVertically) {
+                RingMark(account, ringSize)
+                Spacer(GlanceModifier.width(8.dp))
+                Column(GlanceModifier.defaultWeight()) {
+                    Text(account.subtitle ?: account.title, maxLines = 1,
+                        style = TextStyle(color = ColorProvider(UsageColors.TextPrimary), fontSize = 12.sp, fontWeight = FontWeight.Medium))
+                    Text(if (account.requiresReauthentication) "Reconnect" else ringLimit(account)?.resetAt?.let {
+                        Countdown.absoluteResetLabel(it, System.currentTimeMillis())?.removePrefix("Resets ")
+                    } ?: "No reset time", maxLines = 1,
+                        style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 11.sp))
+                }
+            }
+        }
+        repeat(columns - group.size) { Spacer(GlanceModifier.defaultWeight()) }
     }
 }
 
@@ -93,7 +103,7 @@ private fun RingMark(account: WidgetAccount, size: androidx.compose.ui.unit.Dp) 
                 if (account.requiresReauthentication) ", reconnect required" else "",
             GlanceModifier.fillMaxSize())
         ProviderId.fromId(account.providerId)?.let {
-            Image(ImageProvider(providerLogoResource(it)), null, GlanceModifier.size(size * 0.46f))
+            Image(ImageProvider(providerLogoResource(it, account.iconChoiceId)), null, GlanceModifier.size(size * 0.46f))
         }
     }
 }

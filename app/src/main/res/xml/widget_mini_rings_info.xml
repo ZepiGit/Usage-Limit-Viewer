@@ -4,6 +4,7 @@
     android:minResizeWidth="56dp" android:minResizeHeight="56dp"
     android:targetCellWidth="1" android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen"
+    android:previewImage="@drawable/widget_mini_preview"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:configure="com.usagelimits.widget.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

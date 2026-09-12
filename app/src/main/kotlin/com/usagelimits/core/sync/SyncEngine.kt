@@ -81,6 +81,11 @@ class SyncEngine(
     }
 
     suspend fun syncAccount(account: ProviderAccount): SyncOutcome = accountLock(account.localId).withLock {
+        // Emulator fixtures never contact a provider. R8 removes this branch from release APKs.
+        if (com.usagelimits.BuildConfig.DEBUG && account.attributes["screenshotFixture"] == "true") {
+            repository.snapshot(account.localId)?.let { repository.saveSnapshot(it.copy(fetchedAt = nowMs())) }
+            return@withLock SyncOutcome(account.localId, success = true)
+        }
         try {
             val provider = registry.forId(account.provider)
                 ?: throw ProviderException.Unexpected("No provider for ${account.provider.id}")

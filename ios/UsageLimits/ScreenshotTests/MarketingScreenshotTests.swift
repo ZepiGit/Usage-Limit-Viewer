@@ -35,7 +35,7 @@ final class MarketingScreenshotTests: XCTestCase {
         ]
         app.launch()
         XCTAssertTrue(app.navigationBars["Overview"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["3/5"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["5/5 connected"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["marketing-demo-label"].firstMatch.exists)
         XCTAssertEqual(app.alerts.count, 0)
         return app

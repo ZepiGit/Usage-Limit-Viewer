@@ -14,15 +14,15 @@ extension GlanceSnapshot {
             selected = customAccountIDs.filter { seen.insert($0).inserted }.compactMap { id in accounts.first { $0.id == id } }
         case .closestResets, .mostCritical:
             selected = accounts.enumerated().sorted { lhs, rhs in
-                let left = lhs.element.rows.compactMap(\.resetAt).filter { $0 > now }.min() ?? .distantFuture
-                let right = rhs.element.rows.compactMap(\.resetAt).filter { $0 > now }.min() ?? .distantFuture
+                let left = lhs.element.resetDates.filter { $0 > now }.min() ?? .distantFuture
+                let right = rhs.element.resetDates.filter { $0 > now }.min() ?? .distantFuture
                 return left == right ? lhs.offset < rhs.offset : left < right
             }.map(\.element)
         }
         guard let lead = selected.first else { return .empty }
         return GlanceSnapshot(accounts: selected, accountCount: selected.count,
             updatedAt: selected.compactMap(\.fetchedAt).max(),
-            nextResetAt: lead.rows.compactMap(\.resetAt).filter { $0 > now }.min(),
+            nextResetAt: lead.resetDates.filter { $0 > now }.min(),
             overallSeverity: lead.severity(at: now, staleAfter: staleAfter),
             headlineShort: lead.rows.first { $0.category == .fiveHour },
             headlineLong: lead.rows.first { $0.category != .fiveHour }, staleAfter: staleAfter)

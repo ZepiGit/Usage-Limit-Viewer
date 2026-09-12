@@ -50,6 +50,7 @@ fun SettingsScreen(
     onShowTier: (Boolean) -> Unit,
     onShowRenewal: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onProviderIconChange: (com.usagelimits.core.model.ProviderId, String) -> Unit = { _, _ -> },
 ) {
     val settings = state.settings
 
@@ -68,6 +69,7 @@ fun SettingsScreen(
             )
         }
 
+        item { ProviderIconSettings(settings.providerIcons, onProviderIconChange) }
         item { SectionHeader("Sync") }
         item {
             UsageCard {

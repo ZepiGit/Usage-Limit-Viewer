@@ -55,6 +55,7 @@ data class AppSettings(
      * account mints a new one and cannot inherit an old mute.
      */
     val mutedAccountIds: Set<String> = emptySet(),
+    val providerIcons: Map<String, String> = emptyMap(),
 ) {
     companion object {
         /**
@@ -84,6 +85,11 @@ class SettingsStore(context: Context) {
     private val dataStore = context.applicationContext.dataStore
 
     val settings: Flow<AppSettings> = dataStore.data.map { it.toSettings() }
+
+    suspend fun setProviderIcon(providerId: String, iconId: String) = edit { prefs ->
+        val previous = prefs[Keys.PROVIDER_ICONS].orEmpty()
+        prefs[Keys.PROVIDER_ICONS] = previous.filterNot { it.substringBefore(':') == providerId }.toSet() + "$providerId:$iconId"
+    }
 
     suspend fun setSyncInterval(minutes: Int) = edit {
         it[Keys.SYNC_INTERVAL] = minutes.coerceAtLeast(AppSettings.MIN_SYNC_INTERVAL_MINUTES)
@@ -180,6 +186,7 @@ internal fun Preferences.toSettings() = AppSettings(
     showSubscriptionTier = this[Keys.SHOW_TIER] ?: true,
     showRenewalTime = this[Keys.SHOW_RENEWAL] ?: false,
     mutedAccountIds = this[Keys.MUTED_ACCOUNTS] ?: emptySet(),
+    providerIcons = this[Keys.PROVIDER_ICONS].orEmpty().filter { ":" in it }.associate { it.substringBefore(':') to it.substringAfter(':') },
 )
 
 /**
@@ -193,6 +200,7 @@ internal fun Preferences.toSettings() = AppSettings(
  * every stored value invisible and silently resets the user to defaults.
  */
 private object Keys {
+    val PROVIDER_ICONS = stringSetPreferencesKey("provider_icons")
     val SYNC_INTERVAL = intPreferencesKey("sync_interval_minutes")
     /** Read only to carry a pre-tier opt-out forward; nothing writes it any more. */
     val NOTIFY_LOW = booleanPreferencesKey("notify_low_usage")
