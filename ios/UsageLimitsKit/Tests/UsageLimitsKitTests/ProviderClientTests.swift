@@ -250,8 +250,16 @@ final class ProviderClientTests: XCTestCase {
             _ = try await XaiClient(httpClient: http)
                 .fetchUsage(credentials: credentials, attributes: [:])
             XCTFail("expected a failure when neither view answered")
+        } catch ProviderError.noData(let detail) {
+            // `ProviderHTTP.translate` turns a non-2xx into `noData` carrying only the endpoint
+            // name and status, and `preferredFailure` surfaces the first route's failure when
+            // neither was a credential rejection. The status is the one fact a user can act on;
+            // the body and the bearer token must never reach a description.
+            XCTAssertTrue(detail.contains("HTTP 503"), "status must be reported: \(detail)")
+            XCTAssertFalse(detail.contains("unavailable"), "body must not be echoed: \(detail)")
+            XCTAssertFalse(detail.contains("synthetic-access"), "token must not leak: \(detail)")
         } catch {
-            XCTAssertFalse("\(error)".contains("synthetic-access"))
+            XCTFail("both routes failing must be reported as noData, not \(error)")
         }
     }
     // MARK: - Errors that have to reach the engine in its own terms

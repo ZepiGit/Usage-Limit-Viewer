@@ -291,17 +291,68 @@ final class CodexUsageParserTests: XCTestCase {
 
     // MARK: - When position may stand in for a duration
 
-    func testAStatedButUnfamiliarDurationIsNotForcedIntoTheSessionSlot() {
-        // A daily limit is neither five-hourly nor weekly nor monthly. Reading it by POSITION
-        // labels it the session limit and reports a day's quota as five hours' — the same class
-        // of error as reading a week as five hours, which a live payload caught once already.
+    func testAStatedButUnfamiliarDurationIsNotForcedIntoTheSessionSlot() throws {
+        let now = Date(timeIntervalSince1970: 1_788_955_200) // 2026-09-09T12:00:00Z
         let windows = CodexUsageParser.parse(payload(#"""
-        {"rate_limit": {"primary_window": {"limit_window_seconds": 86400, "used_percent": 40}}}
+        {"rate_limit": {"primary_window": {"limit_window_seconds": 86400, "used_percent": 40,
+          "reset_at": "2026-09-09T18:00:00Z"}}}
         """#), now: now)
 
-        XCTAssertTrue(
-            windows.allSatisfy { $0.id != "codex-short" },
-            "a stated duration must not be overridden by position")
+        XCTAssertEqual(windows.count, 1)
+        let window = try XCTUnwrap(windows.first)
+        XCTAssertEqual(window.id, "codex-long")
+        XCTAssertEqual(window.category, .other)
+        XCTAssertEqual(window.label, "Limit")
+        XCTAssertEqual(window.periodSeconds, 86_400)
+        XCTAssertEqual(window.usedPercent, 40)
+        XCTAssertEqual(window.remainingPercent, 60)
+        XCTAssertEqual(window.severity, .healthy)
+        XCTAssertEqual(window.resetAt, Date(timeIntervalSince1970: 1_788_976_800))
+    }
+
+    func testTwoUnfamiliarDurationsPreserveBothWindowsAndTheirValues() {
+        let windows = CodexUsageParser.parse(payload(#"""
+        {"rate_limit": {
+          "primary_window": {"limit_window_seconds": 86400, "used_percent": 40},
+          "secondary_window": {"limit_window_seconds": 43200, "used_percent": 10}
+        }}
+        """#), now: now)
+
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(Set(windows.map(\.id)).count, 2)
+        XCTAssertEqual(Set(windows.compactMap(\.periodSeconds)), Set<Int64>([86_400, 43_200]))
+        for window in windows {
+            XCTAssertEqual(window.category, .other)
+            XCTAssertEqual(window.label, "Limit")
+            XCTAssertEqual(window.usedPercent, window.periodSeconds == 86_400 ? 40 : 10)
+        }
+    }
+
+    func testKnownAndLegacySlotsKeepPriorityOverUnfamiliarDurations() throws {
+        for known in ["18000", "604800", "null"] {
+            for unknownFirst in [true, false] {
+                let unknown = #"{"limit_window_seconds":86400,"used_percent":100}"#
+                let established = "{\"limit_window_seconds\":\(known),\"used_percent\":10}"
+                let primary = unknownFirst ? unknown : established
+                let secondary = unknownFirst ? established : unknown
+                let windows = CodexUsageParser.parse(payload("""
+                {"rate_limit":{"primary_window":\(primary),"secondary_window":\(secondary)}}
+                """), now: now)
+                XCTAssertEqual(windows.count, 2)
+                let unfamiliar = try XCTUnwrap(windows.first { $0.periodSeconds == 86_400 })
+                XCTAssertEqual(unfamiliar.category, .other)
+                XCTAssertEqual(unfamiliar.severity, .exhausted)
+                let retained = try XCTUnwrap(windows.first { $0.id != unfamiliar.id })
+                let expectedID: String
+                switch known {
+                case "18000": expectedID = "codex-short"
+                case "604800": expectedID = "codex-long"
+                default: expectedID = unknownFirst ? "codex-long" : "codex-short"
+                }
+                XCTAssertEqual(retained.id, expectedID)
+                XCTAssertEqual(retained.usedPercent, 10)
+            }
+        }
     }
 
     func testALegacyWindowWithNoDurationStillFallsBackToPosition() {

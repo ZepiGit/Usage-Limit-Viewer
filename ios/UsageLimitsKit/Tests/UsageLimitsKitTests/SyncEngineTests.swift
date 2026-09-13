@@ -1,5 +1,8 @@
 import XCTest
 @testable import UsageLimitsKit
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The refresh path, which is the most expensive thing in this codebase to get wrong.
 ///
@@ -334,8 +337,20 @@ final class SyncEngineTests: XCTestCase {
         _ = try await engine(provider: RotatingProvider(), store: store, sink: sink)
             .sync(accounts: [account("a"), account("b")])
 
-        let recorded = await sink.outcomes.count
-        XCTAssertEqual(recorded, 2)
+        // A count proves outcomes reached the sink, not WHICH accounts they belonged to: a
+        // run that recorded "b" twice and "a" never would pass it untouched. Recording order
+        // is not fixed, so the identities are compared without it.
+        let recorded = await sink.outcomes
+        XCTAssertEqual(recorded.count, 2)
+        XCTAssertEqual(recorded.map(outcomeAccountID).sorted(), ["a", "b"])
+        for outcome in recorded {
+            switch outcome {
+            case .success(let accountID, _):
+                XCTAssertEqual(accountID, "b", "the only account that can succeed here is \"b\"")
+            case .failure(let accountID, _):
+                XCTAssertEqual(accountID, "a", "the only account that can fail here is \"a\"")
+            }
+        }
     }
 
     // MARK: - What must never leak
@@ -744,4 +759,100 @@ extension SyncEngineTests {
         XCTAssertEqual(current.accessToken, "access-B", "the login must win, not the old session's rotation")
     }
 
+}
+
+// MARK: - A run the caller abandons while a request is in the air
+
+extension SyncEngineTests {
+    func testARequestAbandonedByCancellationIsNotAnAccountFailure() async throws {
+        try await checkCancelledRequest(.cancelledURLError)
+    }
+
+    func testARejectionOnACancelledRunBeginsNoRotation() async throws {
+        try await checkCancelledRequest(.unauthorised)
+    }
+
+    private func checkCancelledRequest(_ reply: GatedTransport.Reply) async throws {
+        let started = expectation(description: "usage request started")
+        let transport = GatedTransport(reply: reply, started: started)
+        // Budget zero makes the parked send the last attempt. Real HTTP/provider error
+        // mapping runs; no URLSession, external request or live credential is involved.
+        let http = UsageHTTPClient(transport: transport, maxRetries: 0)
+        let provider = ClaudeClient(httpClient: http, now: { [now] in now })
+        let seeded = fresh("access-1")
+        let store = InMemoryCredentialStore(credentials: ["ref-a": seeded])
+        let sink = RecordingSink()
+        let account = ProviderAccount(
+            id: "a", provider: .claude, externalAccountID: "synthetic-a",
+            email: nil, displayName: nil, plan: nil, credentialReference: "ref-a",
+            createdAt: now, lastSuccessfulSync: nil)
+        let engine = SyncEngine(
+            providers: ["claude": provider], credentials: store, sink: sink,
+            now: { [now] in now })
+        let syncTask = Task { try await engine.sync(accounts: [account]) }
+        await fulfillment(of: [started], timeout: 5)
+        syncTask.cancel()
+        await transport.release()
+        do {
+            _ = try await syncTask.value
+            XCTFail("expected CancellationError")
+        } catch is CancellationError {
+            // A cancelled request must not become a persisted account failure.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        let recorded = await sink.outcomes
+        XCTAssertTrue(recorded.isEmpty, "cancelled request recorded \(recorded)")
+        let exchanges = await transport.exchanges
+        XCTAssertEqual(exchanges, 0, "cancelled request started a token exchange")
+        let stored = try await store.load(reference: "ref-a")
+        XCTAssertEqual(stored, seeded)
+    }
+
+    private func outcomeAccountID(_ outcome: SyncOutcome) -> String {
+        switch outcome {
+        case .success(let accountID, _): return accountID
+        case .failure(let accountID, _): return accountID
+        }
+    }
+
+    private actor GatedTransport: HTTPTransport {
+        enum Reply { case cancelledURLError, unauthorised }
+        private let reply: Reply
+        private let started: XCTestExpectation
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var released = false
+        private(set) var exchanges = 0
+
+        init(reply: Reply, started: XCTestExpectation) {
+            self.reply = reply
+            self.started = started
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
+        }
+
+        func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+            if request.httpMethod == "POST" {
+                exchanges += 1
+                // A forbidden exchange really rotates the synthetic stored pair on baseline.
+                let body = #"{"access_token":"access-2","refresh_token":"refresh-2","expires_in":3600}"#
+                return (Data(body.utf8), HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            started.fulfill()
+            if !released {
+                await withCheckedContinuation { continuation = $0 }
+            }
+            switch reply {
+            case .cancelledURLError: throw URLError(.cancelled)
+            case .unauthorised:
+                return (Data(), HTTPURLResponse(
+                    url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+            }
+        }
+    }
 }

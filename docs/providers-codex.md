@@ -227,6 +227,15 @@ windows and sorts them into a short slot (`FIVE_HOUR`) and a long slot (`WEEKLY`
 entirely, and in that case the windows are also left `OTHER` with a null period and a generic
 "Limit" label — an unknown duration stays unknown rather than being guessed at.
 
+A **declared but unfamiliar duration** also survives on both platforms. Known-duration and
+legacy assignments retain priority; an unassigned unknown window takes the free long slot,
+then the free short slot. These suffixes are identities, not duration classifications: the
+window remains `OTHER` / "Limit", with its reported period, percentage and reset intact.
+Each family has only two input windows, so this needs neither a third slot nor a new category.
+Two unfamiliar durations therefore produce two distinct windows, not an empty result.
+Severity still follows the known remaining percentage and exhaustion flag, not whether the
+period has a recognised category.
+
 **Grouping** mirrors the payload's three families. `rate_limit` windows carry no group and no
 label prefix, so ordinary Codex usage reads as plain "5h limit" and "Weekly".
 `code_review_rate_limit` becomes the group "Code review" with labels like
