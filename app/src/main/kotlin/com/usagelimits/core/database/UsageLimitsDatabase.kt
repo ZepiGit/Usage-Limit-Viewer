@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotificationStateEntity::class,
         WidgetConfigEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class UsageLimitsDatabase : RoomDatabase() {
@@ -147,6 +147,22 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * A placed widget chooses its panel colour and opacity, and can override its ink.
+         *
+         * The defaults are the app's own dark panel at full opacity, so nothing already on a
+         * home screen changes; a widget saved transparent under the old flag becomes 0 %,
+         * which is the same look under the new name.
+         */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE widget_configs ADD COLUMN backgroundArgb INTEGER NOT NULL DEFAULT -15790322")
+                db.execSQL("ALTER TABLE widget_configs ADD COLUMN backgroundOpacity INTEGER NOT NULL DEFAULT 100")
+                db.execSQL("ALTER TABLE widget_configs ADD COLUMN textTone TEXT NOT NULL DEFAULT 'AUTO'")
+                db.execSQL("UPDATE widget_configs SET backgroundOpacity = 0 WHERE transparent = 1")
+            }
+        }
+
         fun build(context: Context): UsageLimitsDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
@@ -156,6 +172,7 @@ abstract class UsageLimitsDatabase : RoomDatabase() {
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7,
             MIGRATION_7_8,
+            MIGRATION_8_9,
             ).build()
     }
 }

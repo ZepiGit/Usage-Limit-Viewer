@@ -103,9 +103,13 @@ class ClaudeProvider(
             // One redirect, one attempt: the port is released and the verifier discarded even
             // when the browser never comes back.
             listener.close()
-            server = null
-            pendingCodes = null
-            pendingState = null
+            // Only this attempt's secrets: a cancelled attempt unwinds here after a retry may
+            // already have stored a new pair, and wiping that pair fails the retry.
+            if (server === listener) {
+                server = null
+                pendingCodes = null
+                pendingState = null
+            }
         }
 
         response.error?.let { error ->

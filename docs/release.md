@@ -52,8 +52,40 @@ the repository. Use an absolute keystore path.
 The release variant uses `com.usagelimits`, including when debug-signed. It cannot
 update an installation signed with a different key. Keep signing-key creation,
 backup, access and distribution credentials under the release owner's control.
-Never commit credentials or a keystore, and do not enable Gradle's configuration
-cache for a signed build.
+Never commit release credentials or the release keystore, and do not enable
+Gradle's configuration cache for a signed build.
+
+## Updating an installed build without losing data
+
+Android replaces an installed app in place only when the new APK carries the
+same application ID, the same signing key and a version code that is not lower.
+Anything else ends in "app not installed" and the only way forward is an
+uninstall, which deletes the Room database, the encrypted credentials and every
+widget's configuration. Three things keep that from happening:
+
+- **One debug key everywhere.** `app/debug.keystore` is committed and is the
+  debug signing config for every machine and every CI run. It uses Android's
+  default debug credentials (`android` / `androiddebugkey`) and signs nothing
+  distributed. Before this, Gradle used the key in `~/.android`, which each
+  GitHub runner minted afresh, so every downloaded verification APK was signed
+  differently from the one before it.
+- **A rising version code.** The version code is the commit count
+  (`git rev-list --count HEAD`) unless `ANDROID_VERSION_CODE` overrides it, in
+  the Android workflow, in the release workflow and locally alike. The two
+  workflows check out the full history so the count is real.
+- **Migrations for every shipped schema.** `UsageLimitsDatabase` carries a
+  migration for each version since 1 and never falls back to a destructive one.
+  `DatabaseUpgradeTest` builds every exported schema, fills it with an account,
+  a snapshot and a widget, opens it with the current app and checks all three
+  survive; a version bump without its migration and schema export fails there.
+
+What still cannot be carried over: the debug variant installs as
+`com.usagelimits.debug`, a separate app with its own data, and a build signed
+with the release key cannot update one signed with the debug key or vice versa.
+Pick one line — debug-signed verification builds, or signed releases — and stay
+on it for the phone whose data matters. The Android workflow signs with the
+release key automatically once the four `ANDROID_KEYSTORE_*` secrets exist, so
+switching to real releases is a one-time reinstall, not a recurring one.
 
 With the release owner's settings supplied:
 

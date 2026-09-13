@@ -6,6 +6,7 @@ import com.usagelimits.core.network.ProviderException
 import com.usagelimits.providers.LoginChallenge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -146,6 +147,65 @@ class CodexBrowserLoginTest {
         val body = bodies.single()
         val form = body.split('&').associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), "UTF-8") }
         assertEquals("only the matching callback is exchanged", "real-code", form["code"])
+        assertTrue(portIsFree())
+    }
+
+    @Test
+    fun `a state echoed with OpenAI's onboarding suffix still completes the login`() = runBlocking {
+        // Seen on real accounts: the provider appends `.onboarding_entrypoint=…` to the state
+        // it returns. The Codex CLI accepts it; before this, the listener answered it with 400
+        // and the app waited until the redirect timed out.
+        val bodies = mutableListOf<String>()
+        val provider = CodexProvider(answering(tokenJson, bodies))
+        val challenge = provider.beginLogin() as LoginChallenge.Redirect
+        val state = query(challenge.authorizationUrl).getValue("state")
+
+        val completing = async(Dispatchers.IO) { provider.completeLogin(challenge, null) }
+        withContext(Dispatchers.IO) {
+            send(Codex.REDIRECT_PORT, "GET /auth/callback?code=C2&state=$state.onboarding_entrypoint=life_sciences HTTP/1.1")
+        }
+        val credentials = completing.await()
+
+        assertEquals("a", credentials.accessToken)
+        val form = bodies.single().split('&').associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), "UTF-8") }
+        assertEquals("C2", form["code"])
+        assertTrue(portIsFree())
+    }
+
+    @Test
+    fun `the device code is available on request while the port is free`() = runBlocking {
+        // The button under the browser wait. It must not depend on the port being taken —
+        // that fallback is automatic; this one is the user's.
+        val challenge = CodexProvider(answering(deviceJson)).deviceLoginChallenge()
+        assertTrue(challenge is LoginChallenge.DeviceCode)
+        challenge as LoginChallenge.DeviceCode
+        assertEquals("WDJB-MJHT", CodexProvider.displayCode(challenge.userCode))
+        assertTrue("no listener is left behind", portIsFree())
+    }
+
+    @Test
+    fun `an abandoned attempt's clean-up does not wipe the retry that replaced it`() = runBlocking {
+        // The retry race: attempt one is cancelled, attempt two binds the port and stores a
+        // fresh PKCE pair, and only THEN does attempt one's `finally` run. Nulling the
+        // instance fields unconditionally there made attempt two fail with "Login was not
+        // started" the moment its redirect arrived.
+        val bodies = mutableListOf<String>()
+        val provider = CodexProvider(answering(tokenJson, bodies))
+        val first = provider.beginLogin() as LoginChallenge.Redirect
+        val abandoned = async(Dispatchers.IO) { runCatching { provider.completeLogin(first, null) } }
+        delay(300)
+        abandoned.cancel()
+        abandoned.join()
+        assertTrue("the abandoned listener released the port", portIsFree())
+
+        val second = provider.beginLogin() as LoginChallenge.Redirect
+        val state = query(second.authorizationUrl).getValue("state")
+        val completing = async(Dispatchers.IO) { provider.completeLogin(second, null) }
+        withContext(Dispatchers.IO) {
+            send(Codex.REDIRECT_PORT, "GET /auth/callback?code=C3&state=$state HTTP/1.1")
+        }
+        assertEquals("a", completing.await().accessToken)
+        assertEquals("C3", bodies.single().split('&').associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), "UTF-8") }["code"])
         assertTrue(portIsFree())
     }
 

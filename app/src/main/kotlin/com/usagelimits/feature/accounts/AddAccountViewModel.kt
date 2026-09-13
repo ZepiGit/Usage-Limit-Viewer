@@ -11,6 +11,7 @@ import com.usagelimits.core.di.AppContainer
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.network.ProviderException
 import com.usagelimits.core.sync.userMessage
+import com.usagelimits.providers.DeviceCodeLoginCapable
 import com.usagelimits.providers.LoginChallenge
 import com.usagelimits.providers.KeyLoginCapable
 import com.usagelimits.providers.codex.CodexProvider
@@ -52,7 +53,13 @@ sealed interface AddAccountState {
     ) : AddAccountState
 
     /** Redirect flow: the browser is open and the loopback listener is waiting. */
-    data class AwaitingBrowser(val provider: ProviderId) : AddAccountState
+    data class AwaitingBrowser(
+        val provider: ProviderId,
+        /** True where the provider also signs in with a device code, so the wait has a way out. */
+        val deviceCodeAlternative: Boolean = false,
+        /** The page the browser was sent to, so it can be opened again if the tab was lost. */
+        val authorizationUrl: String? = null,
+    ) : AddAccountState
 
     data class Success(val provider: ProviderId, val accountLabel: String) : AddAccountState
 
@@ -61,6 +68,10 @@ sealed interface AddAccountState {
         val message: String,
         /** True where the provider also takes a pasted key, so "try again" has a sibling. */
         val keyAlternative: Boolean = false,
+        /** True where the provider also signs in with a device code. */
+        val deviceCodeAlternative: Boolean = false,
+        /** True when the failed attempt was the device flow, so "try again" repeats that. */
+        val viaDeviceCode: Boolean = false,
     ) : AddAccountState
 }
 
@@ -100,20 +111,36 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
      * [withKey] picks the pasted-key way in, for a provider that offers one beside its flow.
      * The flow is the default; the key is the button under it.
      */
-    fun startLogin(context: Context, providerId: ProviderId, withKey: Boolean = false) {
-        loginJob?.cancel()
+    fun startLogin(
+        context: Context,
+        providerId: ProviderId,
+        withKey: Boolean = false,
+        /** The device-code way in, for a provider whose browser redirect did not land. */
+        withDeviceCode: Boolean = false,
+    ) {
+        val previous = loginJob
+        previous?.cancel()
         val keyAlternative = container.providerRegistry.forId(providerId) is KeyLoginCapable
+        val deviceCodeAlternative = container.providerRegistry.forId(providerId) is DeviceCodeLoginCapable
         loginJob = viewModelScope.launch {
             _state.value = AddAccountState.Starting(providerId)
+            // The previous attempt has to be GONE, not merely told to go. Its listener is
+            // closed in a `finally` that runs on another thread some time after `cancel()`
+            // returns, and a retry that raced it found the pinned port still bound — which
+            // Codex answers by quietly switching to the device flow, and Claude answers with
+            // a failure — or had its freshly stored PKCE pair wiped by the old attempt's
+            // clean-up. Waiting here makes the retry start from a clean provider.
+            previous?.join()
             try {
                 val provider = container.providerRegistry.forId(providerId)
                     ?: throw ProviderException.Unexpected("Provider unavailable")
 
-                val challenge = if (withKey) {
-                    (provider as? KeyLoginCapable)?.keyLoginChallenge()
+                val challenge = when {
+                    withKey -> (provider as? KeyLoginCapable)?.keyLoginChallenge()
                         ?: throw ProviderException.Unexpected("This provider takes no key")
-                } else {
-                    provider.beginLogin()
+                    withDeviceCode -> (provider as? DeviceCodeLoginCapable)?.deviceLoginChallenge()
+                        ?: throw ProviderException.Unexpected("This provider has no device code")
+                    else -> provider.beginLogin()
                 }
 
                 when (challenge) {
@@ -137,7 +164,11 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
                     }
 
                     is LoginChallenge.Redirect -> {
-                        _state.value = AddAccountState.AwaitingBrowser(providerId)
+                        _state.value = AddAccountState.AwaitingBrowser(
+                            provider = providerId,
+                            deviceCodeAlternative = deviceCodeAlternative,
+                            authorizationUrl = challenge.authorizationUrl,
+                        )
                         openUrl(context, challenge.authorizationUrl)
                     }
 
@@ -182,11 +213,15 @@ class AddAccountViewModel(private val container: AppContainer) : ViewModel() {
 
                 _state.value = AddAccountState.Success(providerId, account.label)
             } catch (e: ProviderException) {
-                _state.value = AddAccountState.Failed(providerId, e.userMessage(), keyAlternative)
+                _state.value = AddAccountState.Failed(
+                    providerId, e.userMessage(), keyAlternative, deviceCodeAlternative, withDeviceCode,
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value = AddAccountState.Failed(providerId, "Sign-in failed", keyAlternative)
+                _state.value = AddAccountState.Failed(
+                    providerId, "Sign-in failed", keyAlternative, deviceCodeAlternative, withDeviceCode,
+                )
             }
         }
     }

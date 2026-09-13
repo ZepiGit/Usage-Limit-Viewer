@@ -3,6 +3,8 @@ package com.usagelimits
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.WorkManager
+import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,11 +27,23 @@ import org.robolectric.shadows.ShadowLooper
  * deterministic and reachable from here.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+// The ONE test that runs the real Application. Every other Robolectric test gets a plain
+// `android.app.Application` from robolectric.properties, because the real one launches
+// background work — WorkManager, its database — that outlives the test and races the native
+// runtime set-up of whichever sandbox comes next; see UsageLimitsApp.startupJob.
+@Config(application = UsageLimitsApp::class, sdk = [34])
 class AppLaunchTest {
 
     private fun app(): UsageLimitsApp =
         ApplicationProvider.getApplicationContext<Application>() as UsageLimitsApp
+
+    /** Nothing this class started may still be running when the next class sets up. */
+    @After
+    fun drainStartupWork() {
+        ShadowLooper.idleMainLooper()
+        runBlocking { app().startupJob?.join() }
+        ShadowLooper.idleMainLooper()
+    }
 
     @Test
     fun `the application builds its container on create`() {
@@ -51,7 +65,7 @@ class AppLaunchTest {
         // IllegalStateException into the application scope, which then poisoned whatever ran
         // next — the symptom that exposed it.
         ShadowLooper.idleMainLooper()
-        Thread.sleep(200)
+        runBlocking { application.startupJob?.join() }
         ShadowLooper.idleMainLooper()
 
         assertTrue("the app should still be usable after start-up", application.container != null)

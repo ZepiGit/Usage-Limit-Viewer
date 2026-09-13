@@ -81,12 +81,33 @@ possibilities:
 whole distinction, and it matters because the detailed widget shows the first three.
 
 The choice is persisted per widget in the Room table `widget_configs`, keyed by the
-framework's `appWidgetId` and holding only `scope`, `accountId`, `provider`, `transparent` and
-`updatedAt` — ids, a flag and enum names, nothing else. `transparent` drops the card background
-so the wallpaper shows through, and arrived in `MIGRATION_5_6` with a column default matching
-the entity's `@ColumnInfo(defaultValue = "0")`: Room compares the declared schema against the
-one it finds, and a default stated in the ALTER but not on the entity fails validation at
-launch. `WidgetUpdater.loadSnapshot` resolves the `GlanceId` to an
+framework's `appWidgetId` and holding `scope`, `accountId`, `provider`, `updatedAt`, the custom
+account list, the placement metrics and the widget's look — ids, numbers and enum names,
+nothing else. The look is three columns added in version 9: `backgroundArgb` (the panel
+colour), `backgroundOpacity` (0–100, where 0 is the old "transparent" and is what the old
+`transparent` flag migrates to) and `textTone` (`AUTO`, `LIGHT` or `DARK`). Every column
+added by a migration carries the same default on the entity's `@ColumnInfo`: Room compares
+the declared schema against the one it finds, and a default stated in the ALTER but not on
+the entity fails validation at launch.
+
+### Background colour, opacity and ink
+
+`WidgetStyle` turns those three columns into every colour a widget draws. The panel is the
+chosen colour with the opacity folded into its alpha; the ink — text, tile and track — is
+derived from the panel's luminance, so a light panel gets dark text without a second setting.
+`AUTO` treats a fully transparent widget as dark-wallpaper by default, because there is no
+panel to read against; `LIGHT` and `DARK` exist for the wallpaper that guess gets wrong. Bars
+and rings keep the raw status accents on either ink; only the words switch to the deeper
+variants that clear 4.5:1 on near-white. `WidgetStyleTest` pins the derivation.
+
+None of the widgets read a colour constant any more. That matters beyond taste: the launcher
+renders a widget from the ARGB values baked into its `RemoteViews`, and a widget that mixed
+a user-chosen panel with a fixed light ink would be blank on a light panel. It also means a
+launcher that re-tints third-party widgets — some do, to match the phone's light or dark
+theme, and the effect looks like the panel changing on its own when a widget is moved — is
+given a panel whose opacity the user controls: a translucent or transparent panel is left
+alone by that kind of theming, which is the workaround for a launcher that will not respect
+the colour as sent. `WidgetUpdater.loadSnapshot` resolves the `GlanceId` to an
 `appWidgetId`, reads the row, and passes the result to `WidgetDataBuilder.build`. Both the
 scope name and the enum names are part of the on-disk contract, which is why `WidgetScope`
 carries a "do not rename casually" note; `WidgetScope.fromName` maps anything unrecognised —
@@ -277,7 +298,8 @@ Three entries appear in the gallery, all fed by one `UsageProvider` and one snap
 
 ### Why transparency is a second entry rather than a switch
 
-Android puts a "transparent background" checkbox in its configuration activity. iOS has no
+Android puts a colour picker, an opacity slider and an ink override in its configuration
+activity — see "Background colour, opacity and ink" above. iOS has no
 equivalent that this app can reach: a per-tile option requires a *configurable* widget, which
 means `AppIntentConfiguration` and iOS 17, where the app's deployment target is iOS 16. A
 second gallery entry costs the user one extra row when placing a tile and works on every

@@ -69,6 +69,8 @@ fun AddAccountScreen(
     modifier: Modifier = Modifier,
     /** The pasted-key way in, for a provider that offers one beside its flow. */
     onStartWithKey: (ProviderId) -> Unit = {},
+    /** The device-code way in, for a provider whose browser redirect may not land. */
+    onStartWithDeviceCode: (ProviderId) -> Unit = {},
 ) {
     val context = LocalContext.current
     val activeState by rememberUpdatedState(state)
@@ -268,10 +270,35 @@ fun AddAccountScreen(
                     }
 
                     is AddAccountState.AwaitingBrowser -> {
+                        val uriHandler = LocalUriHandler.current
                         LoadingCard(
                             "Complete the sign-in in your browser. You'll come straight back here.",
                         )
-                        TextButton(onClick = { if (acceptsInput()) onCancel() }) { Text("Cancel", color = UsageColors.TextSecondary) }
+                        if (state.deviceCodeAlternative) {
+                            // The browser flow needs the browser to reach this app on
+                            // localhost, and not every phone lets it. The code needs nothing
+                            // of the sort, so it is offered right where the wait would
+                            // otherwise run out the clock.
+                            Text(
+                                text = "Browser not coming back? Sign in with a code instead — " +
+                                    "you type it on the provider's page and no redirect is needed.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = UsageColors.TextSecondary,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (state.deviceCodeAlternative) {
+                                TextButton(onClick = { if (acceptsInput()) onStartWithDeviceCode(state.provider) }) {
+                                    Text("Use a device code", color = UsageColors.Terracotta)
+                                }
+                            }
+                            state.authorizationUrl?.let { url ->
+                                TextButton(onClick = { if (acceptsInput()) uriHandler.openUri(url) }) {
+                                    Text("Open page again", color = UsageColors.Terracotta)
+                                }
+                            }
+                            TextButton(onClick = { if (acceptsInput()) onCancel() }) { Text("Cancel", color = UsageColors.TextSecondary) }
+                        }
                     }
 
                     is AddAccountState.Success -> {
@@ -313,7 +340,14 @@ fun AddAccountScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             state.provider?.let { provider ->
                                 Button(
-                                    onClick = { if (acceptsInput()) onStart(provider) },
+                                    // The same way in as the attempt that failed: someone who
+                                    // chose the code because the browser never came back
+                                    // must not be sent back to the browser by "try again".
+                                    onClick = {
+                                        if (acceptsInput()) {
+                                            if (state.viaDeviceCode) onStartWithDeviceCode(provider) else onStart(provider)
+                                        }
+                                    },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = UsageColors.Terracotta,
                                         contentColor = UsageColors.Background,
@@ -322,6 +356,17 @@ fun AddAccountScreen(
                                 if (state.keyAlternative) {
                                     TextButton(onClick = { if (acceptsInput()) onStartWithKey(provider) }) {
                                         Text("Use an API key", color = UsageColors.Terracotta)
+                                    }
+                                }
+                                if (state.deviceCodeAlternative) {
+                                    if (state.viaDeviceCode) {
+                                        TextButton(onClick = { if (acceptsInput()) onStart(provider) }) {
+                                            Text("Use the browser", color = UsageColors.Terracotta)
+                                        }
+                                    } else {
+                                        TextButton(onClick = { if (acceptsInput()) onStartWithDeviceCode(provider) }) {
+                                            Text("Use a device code", color = UsageColors.Terracotta)
+                                        }
                                     }
                                 }
                             }

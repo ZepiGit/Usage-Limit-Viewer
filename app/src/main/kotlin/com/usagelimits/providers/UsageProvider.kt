@@ -79,6 +79,18 @@ interface KeyLoginCapable {
 }
 
 /**
+ * A provider whose browser flow can be swapped for a device code at the user's request.
+ *
+ * The browser flow stays the default: it costs the user nothing when the redirect lands.
+ * The code is for when it does not — a browser that will not open `http://localhost`, or a
+ * process the system killed while the browser was in front — and is offered beside the wait
+ * and beside a failed attempt, never instead of the flow.
+ */
+interface DeviceCodeLoginCapable {
+    suspend fun deviceLoginChallenge(): LoginChallenge
+}
+
+/**
  * One monitored provider.
  *
  * Implementations own every provider-specific detail — endpoints, headers, payload shapes —

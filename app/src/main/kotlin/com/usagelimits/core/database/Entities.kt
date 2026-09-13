@@ -108,6 +108,21 @@ data class WidgetConfigEntity(
     val customAccountIdsJson: String = "[]",
     @androidx.room.ColumnInfo(defaultValue = "'{}'")
     val layoutMetricsJson: String = "{}",
+    /**
+     * The panel colour, opaque ARGB as a signed int, and its opacity in percent.
+     *
+     * Version 9. The opacity supersedes [transparent]: a widget saved transparent before the
+     * upgrade is migrated to 0 %, and the flag is still written as `opacity == 0` so a
+     * downgrade reads it correctly. Defaults match the app's own dark panel, so every widget
+     * already placed keeps the look it was placed with.
+     */
+    @androidx.room.ColumnInfo(defaultValue = "-15790322")
+    val backgroundArgb: Int = com.usagelimits.widget.WidgetBackground.DEFAULT_ARGB,
+    @androidx.room.ColumnInfo(defaultValue = "100")
+    val backgroundOpacity: Int = com.usagelimits.widget.WidgetBackground.DEFAULT_OPACITY,
+    /** One of [com.usagelimits.widget.WidgetTextTone]. */
+    @androidx.room.ColumnInfo(defaultValue = "'AUTO'")
+    val textTone: String = "AUTO",
 )
 
 /**

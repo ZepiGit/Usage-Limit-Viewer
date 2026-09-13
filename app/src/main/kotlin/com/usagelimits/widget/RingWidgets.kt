@@ -3,9 +3,9 @@ package com.usagelimits.widget
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,9 +23,7 @@ import androidx.glance.unit.ColorProvider
 import com.usagelimits.MainActivity
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
-import com.usagelimits.core.time.Countdown
 import com.usagelimits.ui.providerLogoResource
-import com.usagelimits.ui.theme.UsageColors
 
 open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
@@ -34,6 +32,7 @@ open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
         val initial = WidgetUpdater.load(context, id)
         provideContent {
             val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val style = view.style
             val size = LocalSize.current
             val grid = WidgetLayout.miniGrid(size.width.value, size.height.value, view.metrics)
             val columns = if (mini) grid.columns else WidgetLayout.accountColumns(size.width.value, size.height.value, view.metrics)
@@ -41,17 +40,19 @@ open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
             val groups = selected.chunked(columns)
             val rowHeight = if (mini) ((size.height.value - 8f) / grid.rows).coerceAtLeast(20f).dp else 44.dp
             val ringSize = if (mini) minOf((size.width.value - 8f) / columns, rowHeight.value).minus(8f).coerceIn(16f, 52f).dp else 36.dp
-            Column(GlanceModifier.fillMaxSize().cornerRadius(24.dp)
-                .background(if (view.transparent) Color.Transparent else UsageColors.Background)
-                .padding(if (mini) 4.dp else 10.dp)) {
-                if (groups.isEmpty()) Text("No matching accounts", style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 12.sp))
-                else if (mini) {
-                    // Fixed visible capacity also avoids sharing a collection adapter between
-                    // differently sized portrait and landscape RemoteViews.
-                    groups.forEach { group -> RingAccountRow(context, group, columns, rowHeight, ringSize, true) }
-                } else LazyColumn(GlanceModifier.fillMaxSize()) {
-                    items(groups, itemId = { it.first().accountId.hashCode().toLong() }) { group ->
-                        RingAccountRow(context, group, columns, rowHeight, ringSize, false)
+            CompositionLocalProvider(LocalWidgetStyle provides style) {
+                Column(GlanceModifier.fillMaxSize().cornerRadius(24.dp)
+                    .background(style.background.color)
+                    .padding(if (mini) 4.dp else 10.dp)) {
+                    if (groups.isEmpty()) Text("No matching accounts", style = TextStyle(color = ColorProvider(style.textSecondary), fontSize = 12.sp))
+                    else if (mini) {
+                        // Fixed visible capacity also avoids sharing a collection adapter between
+                        // differently sized portrait and landscape RemoteViews.
+                        groups.forEach { group -> RingAccountRow(context, group, columns, rowHeight, ringSize, true) }
+                    } else LazyColumn(GlanceModifier.fillMaxSize()) {
+                        items(groups, itemId = { it.first().accountId.hashCode().toLong() }) { group ->
+                            RingAccountRow(context, group, columns, rowHeight, ringSize, false)
+                        }
                     }
                 }
             }
@@ -62,6 +63,7 @@ open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
 @Composable
 private fun RingAccountRow(context: Context, group: List<WidgetAccount>, columns: Int,
     rowHeight: androidx.compose.ui.unit.Dp, ringSize: androidx.compose.ui.unit.Dp, mini: Boolean) {
+    val style = LocalWidgetStyle.current
     Row(GlanceModifier.fillMaxWidth().height(rowHeight), verticalAlignment = Alignment.CenterVertically) {
         group.forEach { account ->
             val action = actionStartActivity(Intent(context, MainActivity::class.java).putExtra("accountId", account.accountId))
@@ -72,11 +74,11 @@ private fun RingAccountRow(context: Context, group: List<WidgetAccount>, columns
                 Spacer(GlanceModifier.width(8.dp))
                 Column(GlanceModifier.defaultWeight()) {
                     Text(account.accountLabel ?: account.subtitle ?: account.title, maxLines = 1,
-                        style = TextStyle(color = ColorProvider(UsageColors.TextPrimary), fontSize = 11.sp, fontWeight = FontWeight.Medium))
+                        style = TextStyle(color = ColorProvider(style.textPrimary), fontSize = 11.sp, fontWeight = FontWeight.Medium))
                     Text(if (account.requiresReauthentication) "Reconnect" else ringLimit(account)?.resetAt?.let {
                         compactRingReset(context, it)
                     } ?: "No reset time", maxLines = 1,
-                        style = TextStyle(color = ColorProvider(UsageColors.TextSecondary), fontSize = 11.sp))
+                        style = TextStyle(color = ColorProvider(style.textSecondary), fontSize = 11.sp))
                 }
             }
         }
@@ -99,16 +101,17 @@ internal fun compactRingReset(context: Context, resetAt: Long): String {
 
 @Composable
 private fun RingMark(account: WidgetAccount, size: androidx.compose.ui.unit.Dp) {
+    val style = LocalWidgetStyle.current
     val row = ringLimit(account)
     val accent = when {
-        account.requiresReauthentication -> UsageColors.Red
-        account.severity == Severity.ERROR || account.severity == Severity.STALE -> UsageColors.Slate
-        row?.severity == Severity.EXHAUSTED -> UsageColors.Red
-        row?.severity == Severity.LOW || row?.severity == Severity.MEDIUM -> UsageColors.Amber
-        else -> UsageColors.Green
+        account.requiresReauthentication -> WidgetStyle.Red
+        account.severity == Severity.ERROR || account.severity == Severity.STALE -> WidgetStyle.Slate
+        row?.severity == Severity.EXHAUSTED -> WidgetStyle.Red
+        row?.severity == Severity.LOW || row?.severity == Severity.MEDIUM -> WidgetStyle.Amber
+        else -> WidgetStyle.Green
     }
     Box(GlanceModifier.size(size), contentAlignment = Alignment.Center) {
-        Image(ImageProvider(UsageRing.draw(160, row?.remainingPercent, accent.toArgb(), UsageColors.ProgressTrack.toArgb())),
+        Image(ImageProvider(UsageRing.draw(160, row?.remainingPercent, accent.toArgb(), style.trackArgb)),
             "${account.title}, ${account.subtitle.orEmpty()}, ${com.usagelimits.core.model.percentLabel(row?.remainingPercent)} remaining" +
                 if (account.requiresReauthentication) ", reconnect required" else "",
             GlanceModifier.fillMaxSize())

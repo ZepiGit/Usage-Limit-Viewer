@@ -36,11 +36,25 @@ class UsageLimitsApp : Application(), Configuration.Provider {
      */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /**
+     * The start-up work, so a test can wait for it instead of sleeping and hoping.
+     *
+     * It matters beyond tidiness: this job opens WorkManager's database on a background
+     * thread, and a test that ends while it is still running leaves it racing the next test
+     * class's set-up in the same JVM. Robolectric's native runtime unpacks its fonts through a
+     * process-wide zip filesystem, and two sandboxes doing that at once fail the second one
+     * with `FileSystemAlreadyExistsException` — after which every SQLite call in that sandbox
+     * throws `UnsatisfiedLinkError`, in tests that never touched WorkManager.
+     */
+    @Volatile
+    var startupJob: kotlinx.coroutines.Job? = null
+        private set
+
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
 
-        appScope.launch {
+        startupJob = appScope.launch {
             val interval = runCatching { container.settingsStore.settings.first().syncIntervalMinutes }
                 .getOrDefault(AppSettings.DEFAULT_SYNC_INTERVAL_MINUTES)
 

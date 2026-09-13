@@ -17,6 +17,12 @@ val releaseStorePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "USAGE_LIMI
 val releaseKeyAlias = signingValue("ANDROID_KEY_ALIAS", "USAGE_LIMITS_KEY_ALIAS")
 val releaseKeyPassword = signingValue("ANDROID_KEY_PASSWORD", "USAGE_LIMITS_KEY_PASSWORD")
 val signingValues = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+
+/** Commits reachable from HEAD, or 1 where there is no git to ask. See `versionCode`. */
+val commitCount: Int = runCatching {
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toInt()
+}.getOrDefault(1).coerceAtLeast(1)
 val releaseSigningConfigured = signingValues.any { it != null }
 if (releaseSigningConfigured) {
     require(signingValues.all { it != null }) { "Release signing requires all four signing settings." }
@@ -31,14 +37,33 @@ android {
         applicationId = "com.usagelimits"
         minSdk = 26
         targetSdk = 36
-        // Supplied by the release job so a second release can actually be uploaded; a
-        // hardcoded 1 fails on the second upload and there is no way back from a published one.
-        versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
+        // Supplied by the workflows; otherwise the commit count, which rises with the history
+        // on every machine that builds the same commit. A hardcoded 1 made every build a
+        // sideways install — fine for `adb install -r`, but an installer that sees the same
+        // version code from a different run cannot tell an update from a re-install — and a
+        // published release can never go back to a lower code.
+        versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: commitCount
         versionName = System.getenv("ANDROID_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
+        // One debug key for every machine and every CI run, checked in at app/debug.keystore.
+        //
+        // Android refuses to update an installed app with an APK signed by a different key, and
+        // the only way past that refusal is to uninstall — which deletes the database, the
+        // credentials and every widget's configuration. Gradle's default debug key lives in
+        // ~/.android and is minted fresh on any machine that lacks one, so a GitHub runner
+        // signed each verification APK with a key nobody had seen before, and installing the
+        // next one meant starting from nothing. A key that is repository content is the same
+        // key everywhere. It is a DEBUG key: the password is Android's own default and nothing
+        // distributed is signed with it; releases use the real keystore below.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (releaseSigningConfigured) {
             create("release") {
                 storeFile = file(releaseStorePath!!)

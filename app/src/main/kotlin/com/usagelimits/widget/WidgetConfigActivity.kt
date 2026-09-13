@@ -14,7 +14,17 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.Role
+import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,14 +88,20 @@ class WidgetConfigActivity : ComponentActivity() {
                     catch (_: Exception) { error = "Could not load this widget. Please try again." }
                 }
                 if (loaded) WidgetConfigScreen(accounts, initial, kind, saving, error,
-                    onCancel = { finish() }, onSave = { scope, accountId, providerId, transparent, custom ->
+                    onCancel = { finish() }, onSave = { scope, accountId, providerId, style, custom ->
                         if (!saving) {
                             saving = true
                             lifecycleScope.launch {
                                 try {
                                     container.widgetConfigDao.upsert(WidgetConfigEntity(
                                         appWidgetId = widgetId, scope = scope.name, accountId = accountId,
-                                        provider = providerId, transparent = transparent, updatedAt = System.currentTimeMillis(),
+                                        provider = providerId, updatedAt = System.currentTimeMillis(),
+                                        // The old flag is written alongside the opacity so a
+                                        // downgrade still reads the widget the way it was saved.
+                                        transparent = style.background.isTransparent,
+                                        backgroundArgb = style.background.argb,
+                                        backgroundOpacity = style.background.clampedOpacity,
+                                        textTone = style.textTone.name,
                                         customAccountIdsJson = JSONArray(custom).toString(),
                                         layoutMetricsJson = (WidgetMetrics.fromJson(initial?.layoutMetricsJson ?: "{}") ?: placementMetrics).toJson()))
                                     WidgetUpdater.refreshAll(this@WidgetConfigActivity)
@@ -105,11 +121,17 @@ class WidgetConfigActivity : ComponentActivity() {
 @Composable
 private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConfigEntity?, kind: String,
     saving: Boolean, error: String?, onCancel: () -> Unit,
-    onSave: (WidgetScope, String?, String?, Boolean, List<String>) -> Unit) {
+    onSave: (WidgetScope, String?, String?, WidgetStyle, List<String>) -> Unit) {
     var scopeName by rememberSaveable { mutableStateOf(WidgetScope.fromName(initial?.scope).name) }
     var accountId by rememberSaveable { mutableStateOf(initial?.accountId) }
     var providerId by rememberSaveable { mutableStateOf(initial?.provider) }
-    var transparent by rememberSaveable { mutableStateOf(initial?.transparent ?: false) }
+    val savedStyle = remember(initial) {
+        WidgetStyle.fromStored(initial?.backgroundArgb, initial?.backgroundOpacity, initial?.transparent ?: false, initial?.textTone)
+    }
+    var backgroundArgb by rememberSaveable { mutableStateOf(savedStyle.background.argb) }
+    var opacity by rememberSaveable { mutableStateOf(savedStyle.background.clampedOpacity) }
+    var textToneName by rememberSaveable { mutableStateOf(savedStyle.textTone.name) }
+    val style = WidgetStyle(WidgetBackground(backgroundArgb, opacity), WidgetTextTone.fromName(textToneName))
     val savedIds = remember(initial) { runCatching {
         val a = JSONArray(initial?.customAccountIdsJson ?: "[]"); (0 until a.length()).map { a.getString(it) }
     }.getOrDefault(emptyList()) }
@@ -147,15 +169,22 @@ private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConf
         Row(Modifier.fillMaxWidth().background(UsageColors.Surface).navigationBarsPadding().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TextButton(onClick = onCancel, enabled = !saving) { Text("Cancel") }
             Button(modifier = Modifier.weight(1f), enabled = valid && !saving,
-                onClick = { onSave(scope, accountId, providerId, transparent, currentOrder.filter { it in selected }) }) {
+                onClick = { onSave(scope, accountId, providerId, style, currentOrder.filter { it in selected }) }) {
                 Text(if (saving) "Saving…" else "Save widget")
             }
         }
     }) { inset ->
         LazyColumn(Modifier.fillMaxSize().padding(inset), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Text(kind, style = MaterialTheme.typography.headlineLarge, color = UsageColors.TextPrimary) }
-            item { ContentPreview(preview, kind, transparent) }
-            item { UsageCard { ToggleRow("Transparent background", "Show your wallpaper behind the whole widget", transparent) { transparent = it } } }
+            item { ContentPreview(preview, kind, style) }
+            item {
+                BackgroundSettings(
+                    style = style,
+                    onColor = { backgroundArgb = it },
+                    onOpacity = { opacity = it },
+                    onTextTone = { textToneName = it.name },
+                )
+            }
             item { SectionHeader("Widget content") }
             item { ScopeChoice("Closest Resets", "Automatically shows whatever account resets next", scope == WidgetScope.CLOSEST_RESETS) { scopeName = WidgetScope.CLOSEST_RESETS.name } }
             item { ScopeChoice("All accounts", "Same order as Overview", scope == WidgetScope.ALL_ACCOUNTS) { scopeName = WidgetScope.ALL_ACCOUNTS.name } }
@@ -218,26 +247,108 @@ private fun ScopeChoice(title: String, subtitle: String, selected: Boolean, prov
     }
 }
 
+/**
+ * The panel controls: a colour, how much of it, and which ink to write on it.
+ *
+ * Opacity is a slider rather than the old on/off switch because "a little wallpaper through"
+ * is what most people actually want, and a switch cannot say it. The ink follows the colour
+ * on its own; the override is for a see-through widget on a wallpaper the guess gets wrong.
+ */
 @Composable
-private fun ContentPreview(snapshot: WidgetSnapshot, kind: String, transparent: Boolean) {
-    Column(Modifier.fillMaxWidth().background(if (transparent) UsageColors.SurfaceElevated else UsageColors.Background).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Preview · ${snapshot.accountCount} selected", style = MaterialTheme.typography.labelMedium, color = UsageColors.TextSecondary)
-        if (snapshot.accounts.isEmpty()) Text("Select accounts to see your widget", color = UsageColors.TextSecondary)
-        else if (kind.contains("Rings")) Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            snapshot.accounts.take(4).forEach { account ->
-                val row = account.rows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(progress = { ((row?.remainingPercent ?: 0.0) / 100).toFloat() }, modifier = Modifier.fillMaxSize(), color = UsageColors.Terracotta, trackColor = UsageColors.ProgressTrack, strokeWidth = 4.dp)
-                    ProviderId.fromId(account.providerId)?.let { ProviderLogo(it, Modifier.size(22.dp)) }
-                }
+@OptIn(ExperimentalLayoutApi::class)
+private fun BackgroundSettings(
+    style: WidgetStyle,
+    onColor: (Int) -> Unit,
+    onOpacity: (Int) -> Unit,
+    onTextTone: (WidgetTextTone) -> Unit,
+) {
+    UsageCard {
+        Text("Background", style = MaterialTheme.typography.titleMedium, color = UsageColors.TextPrimary)
+        Text("Colour and opacity of this widget's panel", style = MaterialTheme.typography.bodyMedium, color = UsageColors.TextSecondary)
+        Spacer(Modifier.height(12.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            WidgetStyle.CHOICES.forEach { choice ->
+                val chosen = choice.argb == style.background.argb
+                Box(
+                    Modifier.size(40.dp)
+                        .clip(CircleShape)
+                        .background(androidx.compose.ui.graphics.Color(choice.argb))
+                        .border(if (chosen) 3.dp else 1.dp, if (chosen) UsageColors.Terracotta else UsageColors.Outline, CircleShape)
+                        .selectable(chosen, role = Role.RadioButton) { onColor(choice.argb) }
+                        .semantics { contentDescription = "${choice.label} background" },
+                )
             }
-        } else snapshot.accounts.take(if (kind == "Usage Summary") 1 else 2).forEach { account ->
-            Text(account.title, color = UsageColors.TextPrimary)
-            account.rows.take(2).forEach { row ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(row.label, Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall, color = UsageColors.TextSecondary)
-                    LinearProgressIndicator(progress = { ((row.remainingPercent ?: 0.0) / 100).toFloat() }, modifier = Modifier.weight(1f), color = UsageColors.Terracotta, trackColor = UsageColors.ProgressTrack)
-                    Text(com.usagelimits.core.model.percentLabel(row.remainingPercent), color = UsageColors.TextPrimary)
+        }
+        Spacer(Modifier.height(12.dp))
+        val percent = style.background.clampedOpacity
+        Text(
+            if (percent == 0) "Opacity · transparent" else "Opacity · $percent %",
+            style = MaterialTheme.typography.bodyLarge, color = UsageColors.TextPrimary,
+        )
+        Slider(
+            value = percent.toFloat(),
+            onValueChange = { onOpacity(it.roundToInt().coerceIn(0, 100)) },
+            valueRange = 0f..100f,
+            steps = 19,
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Background opacity" },
+            colors = SliderDefaults.colors(thumbColor = UsageColors.Terracotta, activeTrackColor = UsageColors.Terracotta, inactiveTrackColor = UsageColors.SurfaceMuted),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text("Text", style = MaterialTheme.typography.bodyLarge, color = UsageColors.TextPrimary)
+        Text("Auto follows the colour above. Pick one if your wallpaper shows through.", style = MaterialTheme.typography.bodyMedium, color = UsageColors.TextSecondary)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(WidgetTextTone.AUTO to "Auto", WidgetTextTone.LIGHT to "Light", WidgetTextTone.DARK to "Dark").forEach { (tone, label) ->
+                FilterChip(
+                    selected = style.textTone == tone,
+                    onClick = { onTextTone(tone) },
+                    label = { Text(label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = UsageColors.TerracottaSurface, selectedLabelColor = UsageColors.Terracotta,
+                        labelColor = UsageColors.TextSecondary,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The widget as it will look, drawn with the same style rules the widget itself uses, over
+ * a stand-in for the wallpaper so a translucent panel reads as translucent.
+ */
+@Composable
+private fun ContentPreview(snapshot: WidgetSnapshot, kind: String, style: WidgetStyle) {
+    val wallpaper = Brush.linearGradient(listOf(androidx.compose.ui.graphics.Color(0xFF3B2F6B), androidx.compose.ui.graphics.Color(0xFFE0A33E)))
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(wallpaper).padding(12.dp)) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(style.background.color).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Preview · ${snapshot.accountCount} selected", style = MaterialTheme.typography.labelMedium, color = style.textSecondary)
+            if (snapshot.accounts.isEmpty()) Text("Select accounts to see your widget", color = style.textSecondary)
+            else if (kind.contains("Rings")) Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                snapshot.accounts.take(4).forEach { account ->
+                    val row = account.rows.minByOrNull { it.remainingPercent ?: Double.MAX_VALUE }
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            progress = { ((row?.remainingPercent ?: 0.0) / 100).toFloat() }, modifier = Modifier.fillMaxSize(),
+                            color = row?.let(style::bar) ?: WidgetStyle.Green, trackColor = style.track, strokeWidth = 4.dp,
+                        )
+                        ProviderId.fromId(account.providerId)?.let { ProviderLogo(it, Modifier.size(22.dp)) }
+                    }
+                }
+            } else snapshot.accounts.take(if (kind == "Usage Summary") 1 else 2).forEach { account ->
+                Text(account.title, color = style.textPrimary)
+                account.rows.take(2).forEach { row ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(row.label, Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall, color = style.textSecondary)
+                        LinearProgressIndicator(
+                            progress = { ((row.remainingPercent ?: 0.0) / 100).toFloat() }, modifier = Modifier.weight(1f),
+                            color = style.bar(row), trackColor = style.track,
+                        )
+                        Text(com.usagelimits.core.model.percentLabel(row.remainingPercent), color = style.barText(row))
+                    }
                 }
             }
         }

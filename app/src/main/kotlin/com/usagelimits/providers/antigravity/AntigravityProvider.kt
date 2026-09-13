@@ -118,9 +118,13 @@ class AntigravityProvider(
             // login fail to bind the pinned port. The verifier and state go with it — leaving
             // them set would let an abandoned attempt's secrets be reused by the next one.
             listener.close()
-            server = null
-            pendingPkce = null
-            pendingState = null
+            // Only this attempt's secrets: a cancelled attempt unwinds here after a retry may
+            // already have stored a new pair, and wiping that pair fails the retry.
+            if (server === listener) {
+                server = null
+                pendingPkce = null
+                pendingState = null
+            }
         }
 
         redirect.error?.let {
