@@ -181,8 +181,9 @@ object CodexUsageParser {
     private fun classify(primary: JsonObject?, secondary: JsonObject?): Classified {
         var shortWindow: JsonObject? = null
         var longWindow: JsonObject? = null
+        val windows = listOfNotNull(primary, secondary)
 
-        for (window in listOfNotNull(primary, secondary)) {
+        for (window in windows) {
             when (WindowCategory.fromPeriodSeconds(periodSeconds(window))) {
                 WindowCategory.FIVE_HOUR -> if (shortWindow == null) shortWindow = window
                 WindowCategory.WEEKLY, WindowCategory.MONTHLY ->
@@ -193,11 +194,8 @@ object CodexUsageParser {
 
         // Position is meaningful ONLY for legacy payloads that omit the duration entirely.
         //
-        // Without the absence check this fired for a window whose duration was stated and simply
-        // unfamiliar — a daily limit, say — and forced it into the five-hour slot, where it is
-        // labelled and read as the session limit. That is the same class of error as reading a
-        // week as five hours, which a live payload caught once already; a present but unfamiliar
-        // duration is not an omitted field, and the comment here has always said so.
+        // A declared but unfamiliar duration is not legacy data. Leave it for the final pass
+        // instead of letting its position take a slot ahead of a window with no duration.
         if (shortWindow == null && primary != null && primary !== longWindow &&
             periodSeconds(primary) == null
         ) {
@@ -207,6 +205,17 @@ object CodexUsageParser {
             periodSeconds(secondary) == null
         ) {
             longWindow = secondary
+        }
+
+        // Keep declared but unfamiliar durations after known and legacy slots have priority.
+        // There are only two input windows, so an unassigned one always has a free slot.
+        // Slot names are identities only: toWindow still derives OTHER/"Limit" from duration.
+        for (window in windows) {
+            if (window === shortWindow || window === longWindow) continue
+            val period = periodSeconds(window) ?: continue
+            if (WindowCategory.fromPeriodSeconds(period) != WindowCategory.OTHER) continue
+            if (longWindow == null) longWindow = window
+            else if (shortWindow == null) shortWindow = window
         }
 
         return Classified(shortWindow, longWindow)

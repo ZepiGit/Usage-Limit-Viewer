@@ -12,7 +12,7 @@ Everything lives in a single Gradle module under `com.usagelimits`, with the pac
 carrying the layering:
 
 ```
-core/model      pure Kotlin types — no imports at all, not even kotlinx
+core/model      Kotlin models; reconnect-message constant reference, no Android framework
 core/network    HttpClient, JsonSupport, ProviderException, ProviderEndpoints
 core/auth       OAuthCredentials, CredentialStore, KeystoreCredentialStore
 core/oauth      Pkce, JwtClaims, LoopbackServer
@@ -30,9 +30,11 @@ navigation/     the app shell
 
 The dependency rule is that arrows point *down* this list, and it holds where it matters:
 
-- `core/model` imports **nothing**. Not Android, not kotlinx.serialization, not even the rest
-  of `core`. That is what makes `Severity`, `WindowCategory` and the window arithmetic
-  testable in a plain JVM test with no Robolectric, and it is worth defending.
+- `Severity`, `WindowCategory` and window arithmetic have no Android or serialization
+  dependency and remain testable in plain JVM tests. `ConnectionStatus` has one narrow
+  cross-package dependency: it references the compile-time reconnect-message constant owned
+  by `NotificationEvaluator`, rather than maintaining a second current message literal.
+  The older persisted wording remains an explicit compatibility fallback.
 - `providers/` depends on `core/` and on nothing above it. A provider cannot reach a screen,
   a widget, or the database.
 - `widget/` has no import of `core.auth` and no import of `providers` — the point of
@@ -244,6 +246,13 @@ worker reports success if *any* account succeeded and asks WorkManager to retry 
 all failed, since that pattern implies a shared cause (offline, doze) rather than four
 independent problems — and retrying when a provider is already failing would only double the
 request rate.
+
+**Cancellation is not an account failure.** Android checks the coroutine before recording
+an error; Swift likewise checks the task before converting any caught error into a failure.
+This includes cancellation represented by a transport/provider error rather than
+`CancellationError`. Swift also checks before starting reactive renewal after a rejected
+request. An exchange already in flight still completes its save, and an already-completed
+usage result retains the existing best-effort delivery policy.
 
 **The refresh mutex.** Token refresh is serialised per `credentialReference` through a map of
 mutexes, and — importantly — the expiry is re-checked *inside* the lock. The race this

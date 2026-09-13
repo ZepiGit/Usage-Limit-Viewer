@@ -5,6 +5,81 @@ Google Antigravity, xAI Grok and Kimi Code. The main correctness risk is a
 plausible but wrong percentage or reset time. Tests need to check what a number
 means, which account it belongs to, and how old it is.
 
+## Follow-up corrections — 13 September 2026
+
+Source baseline: main at `ba6d2bf3d9ff1eb96418a9f5576e3c67c8cc2db8`, with the local
+PAK-1 through PAK-4 corrections below. No commit, push, CI dispatch or release was made.
+The pre-existing untracked `.mimosa/` directory was not modified by this work.
+
+| Package | Implemented behavior and evidence |
+|---|---|
+| PAK-1 / ULV-001 | Both Codex parsers retain declared unknown durations as OTHER / "Limit", preserving percentages, resets and exhaustion. Known and legacy assignments retain priority; remaining unknowns use free long then short slots. Each family has two inputs, so no third-window product decision is needed. |
+| PAK-2 / ULV-002 | Swift checks cancellation before publishing an error and before starting reactive renewal after a rejection. An already-started exchange still runs through persistence; completed successes still reach the sink. |
+| PAK-3 / ULV-003 | Device-poll and xAI tests require the correct error variants; the sync sink test checks account identities and outcome kinds, not just the number of calls. |
+| PAK-4 / ULV-005 | Kotlin and Swift reconnect inference reference the evaluator-owned current message. The old persisted wording remains an explicit compatibility fallback. |
+| PAK-5 / ULV-004 | Not changed: choosing 5h versus OTHER/null when Kimi omits duration still requires the owner's product decision. |
+
+**Corrections to the supplied analysis.** The ISO timestamp 2026-09-09T18:00:00Z is
+1788976800000 epoch milliseconds, not 1788640800000. A known 60% remaining is HEALTHY,
+not UNKNOWN merely because its duration maps to OTHER. Both device-poll implementations
+map `invalid_client` to `ProviderException.Unexpected`, not LoginCancelled. The existing
+xAI double-failure fixture uses HTTP 503; its public provider error is `ProviderError.noData`,
+not the lower-level HTTPError.status. Tests preserve those existing production contracts.
+
+**Red/green proof.** New Codex assertions were executed against an archived baseline with
+only the test files overlaid: three test cases failed on each platform (one unknown window,
+two unknown windows, and mixed known/legacy precedence). With the parser fixes, all six
+Android position-fallback tests and all 23 Swift Codex tests passed. This was an isolated
+baseline replay, not an assertion that production edits waited for the first red execution.
+The two Swift cancellation tests use a gated synthetic HTTPTransport through the actual
+ClaudeClient and UsageHTTPClient with maxRetries zero. On baseline, URLError(.cancelled)
+produced one persisted failure; a 401 delivered after cancellation started one token exchange
+and changed the stored pair. Both cases still surfaced CancellationError to the caller:
+that fact alone did not protect the sink or credentials. With the guards, both tests pass
+with zero recorded outcomes, zero exchanges and unchanged credentials.
+
+**Assertion sensitivity.** In the disposable baseline copy, changing the Kimi terminal-error
+variant from Unexpected to LoginCancelled failed the new type assertion; changing the xAI
+mapped variant from noData to malformedPayload failed its case assertion; changing the
+failure's account ID to "wrong-account" failed the sink identity assertions while the
+record count remained two. Mutations were restored; the final suites passed.
+
+**Executed final checks:**
+
+- Android: **415 tests, zero failures/errors/skips**, JDK 21.0.12.1, Android SDK 36.
+  The initial full run had one ConnectException in the unchanged silent-peer case of
+  LoopbackServerNoiseTest. The baseline class run then passed, as did the complete final
+  rerun. No root cause was established and no timeout or loopback code was changed.
+- Swift package: **468 tests, zero failures**, Swift 6.0.3 in the existing local Docker image,
+  with networking disabled, source mounted read-only and a separate scratch build directory.
+- A throwaway executable linked against the built Swift package passed direct checks for two
+  retained unknown windows, exhausted daily quota, preserved reset and reconnect inference.
+- Read-only Codex and Swift sync/security reviews found no blocking issues.
+
+The successful Android run invoked the wrapper JAR directly because this harness could not
+launch the batch wrapper correctly (same Gradle tasks, no project configuration change):
+
+```text
+C:/temp/ulv-jdk21/jdk-21.0.12.1+1/bin/java.exe -Xmx64m -Xms64m -jar <repo>/gradle/wrapper/gradle-wrapper.jar :app:testDebugUnitTest --rerun-tasks --console=plain
+```
+
+JAVA_HOME pointed to that JDK; ANDROID_HOME was
+`C:/Users/miche/AppData/Local/ElWeatherTools/android-sdk`.
+The equivalent normal invocation is `gradlew.bat :app:testDebugUnitTest --rerun-tasks`.
+Swift ran `swift test --package-path ios/UsageLimitsKit --scratch-path /build`
+inside `swift:6.0.3` with `--network=none`.
+Local logs are retained under `C:/temp/ulv-followup-20260913` (android-red,
+android-codex-green, android-pak3-mutant, android-final, android-final-rerun,
+swift-red, swift-cancellation-red/green, swift-pak3-mutant, swift-sink-mutant/restored,
+swift-final and smoke logs). Temporary baseline sources and scratch builds were removed.
+
+**Limits:** Gradle reported corruption in the existing user-cache journal file-access.bin,
+including on successful runs. No shared cache was deleted or repaired. The intermittent
+loopback refusal remains an observation, not a confirmed regression or resolved defect.
+No APK packaging, emulator/device UI, Xcode build, Apple URLSession cancellation behavior,
+provider login/refresh, credit redemption or store publication was verified in this follow-up.
+The scripted HTTP tests do not establish what error an Apple URLSession emits on a device.
+
 ## Local audit results — 12 September 2026
 
 The completed baseline checks used JDK 17, Android SDK 35 and Swift 6.0.3 in

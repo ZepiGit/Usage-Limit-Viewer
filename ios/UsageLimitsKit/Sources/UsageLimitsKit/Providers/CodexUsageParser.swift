@@ -225,6 +225,16 @@ public enum CodexUsageParser: Sendable {
             longIndex = 1
         }
 
+        // Known and legacy slots retain priority. With only two inputs, every unassigned
+        // unknown window has a free slot; its category and label still come from its duration.
+        for (index, candidate) in windows.enumerated() {
+            guard index != shortIndex, index != longIndex,
+                  let window = candidate, let period = periodSeconds(window),
+                  WindowCategory.from(periodSeconds: period) == .other else { continue }
+            if longIndex == nil { longIndex = index }
+            else if shortIndex == nil { shortIndex = index }
+        }
+
         return (shortIndex, longIndex)
     }
 

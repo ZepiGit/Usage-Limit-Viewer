@@ -47,7 +47,19 @@ class DevicePollProtocolTest {
                     assertEquals(3, requests)
                 } else {
                     assertTrue("$kimi / $error must fail", result.isFailure)
-                    if (error != "invalid_client") assertTrue(result.exceptionOrNull() is ProviderException.LoginCancelled)
+                    // Only the RFC 8628 user-decision codes (access_denied, expired_token) end
+                    // a grant as a cancellation. An unknown terminal code — invalid_client
+                    // among them — reaches the poll loop's else-branch and surfaces as
+                    // Unexpected (KimiProvider.kt:156, XaiProvider.kt:218), which still stops
+                    // the grant after one request rather than polling to expiry.
+                    if (error == "invalid_client") {
+                        assertTrue(
+                            "invalid_client is a protocol fault, not a user refusal",
+                            result.exceptionOrNull() is ProviderException.Unexpected,
+                        )
+                    } else {
+                        assertTrue(result.exceptionOrNull() is ProviderException.LoginCancelled)
+                    }
                     assertEquals(1, requests)
                 }
             }

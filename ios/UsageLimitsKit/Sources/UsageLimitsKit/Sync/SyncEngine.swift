@@ -223,9 +223,10 @@ public actor SyncEngine {
     /// The failure boundary for a single account.
     ///
     /// Every error the pipeline raises becomes this account's failure alone; the neighbouring
-    /// accounts carry on and are recorded regardless. `CancellationError` is the single exception:
-    /// it stands for the caller giving up, not for an account going wrong, and recording it as a
-    /// failure would paint a healthy account red because a screen was closed.
+    /// accounts carry on and are recorded regardless. The caller giving up is the single
+    /// exception: it arrives as `CancellationError`, or as any other error thrown by a task that
+    /// is itself cancelled, and recording it as a failure would paint a healthy account red
+    /// because a screen was closed.
     private func isolatedOutcome(for account: ProviderAccount) async throws -> SyncOutcome {
         do {
             let result = try await usage(for: account)
@@ -233,6 +234,9 @@ public actor SyncEngine {
         } catch let cancelled as CancellationError {
             throw cancelled
         } catch {
+            // Transport cancellation can arrive as a mapped provider error. Like Android,
+            // check the task before publishing a failure; completed successes still persist.
+            try Task.checkCancellation()
             return .failure(accountID: account.id, message: Self.message(for: error))
         }
     }
@@ -299,6 +303,10 @@ public actor SyncEngine {
             //
             // Once only. If the pair that comes back is rejected too, the credential is
             // genuinely revoked and retrying is just a second way to fail.
+            //
+            // Do not start a rotation for an abandoned run. An exchange already in flight
+            // remains non-cancellable through its save.
+            try Task.checkCancellation()
             let renewed = try await renewedCredentials(
                 reference: account.credentialReference,
                 provider: provider,

@@ -113,7 +113,14 @@ public enum ConnectionStatus: String, Sendable, Codable {
     case connected, reconnectRequired, unknown
 
     public static func legacy(status: SnapshotStatus, message: String?) -> ConnectionStatus {
-        if message == "Sign-in expired — reconnect this account" || message == "This account needs signing in again." {
+        // The evaluator's constant, not a second copy of the sentence: a reword there must not
+        // leave a cached snapshot reading as connected.
+        if message == NotificationEvaluator.signInExpiredMessage
+            // Compatibility fallback: the wording an earlier build cached in snapshots that
+            // outlive the upgrade. A literal on purpose — it is historical data to recognise,
+            // not a message this build produces.
+            || message == "This account needs signing in again."
+        {
             return .reconnectRequired
         }
         return status == .failed ? .unknown : .connected
