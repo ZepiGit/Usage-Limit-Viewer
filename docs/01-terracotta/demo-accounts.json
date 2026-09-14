@@ -1,0 +1,46 @@
+[
+  {
+    "id": "codex-personal",
+    "provider": "codex",
+    "title": "OpenAI Codex Plus",
+    "short": "Codex Plus",
+    "label": "Personal",
+    "p": 72,
+    "q": 83,
+    "reset": "14:05",
+    "weekly": "17 Sep"
+  },
+  {
+    "id": "codex-work",
+    "provider": "codex",
+    "title": "OpenAI Codex Plus",
+    "short": "Codex Plus",
+    "label": "Work",
+    "p": 41,
+    "q": 64,
+    "reset": "16:20",
+    "weekly": "18 Sep"
+  },
+  {
+    "id": "claude-personal",
+    "provider": "claude",
+    "title": "Claude Pro",
+    "short": "Claude Pro",
+    "label": "Personal",
+    "p": 58,
+    "q": 76,
+    "reset": "15:10",
+    "weekly": "19 Sep"
+  },
+  {
+    "id": "claude-work",
+    "provider": "claude",
+    "title": "Claude Pro",
+    "short": "Claude Pro",
+    "label": "Work",
+    "p": 18,
+    "q": 61,
+    "reset": "13:45",
+    "weekly": "20 Sep"
+  }
+]

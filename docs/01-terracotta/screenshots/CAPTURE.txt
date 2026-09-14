@@ -1,0 +1,6 @@
+Real iOS Simulator screenshots of Usage Limits.
+Synthetic in-memory demo accounts only; no credentials or provider requests.
+Source commit: abc43759b19bcc59894b9ab055fec358916e1065
+Fixture clock: 2026-09-12 09:41 UTC.
+iPhone 17 Pro Max | com.apple.CoreSimulator.SimRuntime.iOS-26-2
+iPad Air 13-inch (M3) | com.apple.CoreSimulator.SimRuntime.iOS-26-2
