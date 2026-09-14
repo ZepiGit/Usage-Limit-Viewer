@@ -3,6 +3,8 @@ package com.usagelimits.core.network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.ConnectionPool
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,10 +14,13 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.net.ProtocolException
+import java.security.cert.CertificateException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
@@ -70,9 +75,10 @@ class HttpClient(
          * a blip signs the account out instead. The failure it prevents costs one refresh
          * cycle; the failure it causes costs the account.
          *
-         * So a one-time grant is retried only where the server has SAID it did not act: 429 is
-         * an explicit refusal, and nothing was spent. Transport failures and 5xx are exactly
-         * the cases where delivery is unknown, and those are not retried. Plain reads keep the
+         * A one-time grant can be retried after a 429 or a connection failure proven to
+         * precede the HTTP exchange. A DNS outage or a failed connection has not spent it.
+         * Once the exchange starts, transport failures and 5xx leave delivery unknown and
+         * must not be retried. Plain reads keep the
          * full policy — a usage GET spends nothing and is safe to repeat.
          */
         oneTimeGrant: Boolean = false,
@@ -82,6 +88,7 @@ class HttpClient(
         requireSecure(url)
         var attempt = 0
         while (attempt <= retries) {
+            currentCoroutineContext().ensureActive()
             try {
                 return executeOnce(url, method, headers, body, badRequestMeansExpired, oneTimeGrant, devicePoll)
             } catch (e: ProviderException.RateLimited) {
@@ -100,7 +107,7 @@ class HttpClient(
                 if (oneTimeGrant || attempt == retries) throw e
                 delay(backoffMs(attempt))
             } catch (e: ProviderException.Offline) {
-                if (oneTimeGrant || attempt == retries) throw e
+                if ((oneTimeGrant && !e.requestNotSent) || attempt == retries) throw e
                 delay(backoffMs(attempt))
             }
             attempt++
@@ -142,9 +149,28 @@ class HttpClient(
         // in the browser — fails only after the request is written, which is the one case
         // that can no longer be retried. A fresh connection cannot be stale, and the pool it
         // comes from evicts it as soon as the reply is read. `newBuilder` keeps the dispatcher.
+        var exchangeStarted = false
+        var connectionFailure: IOException? = null
         val call = if (oneTimeGrant) {
             client.newBuilder()
                 .connectionPool(ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
+                // This last application interceptor sees transport failures. The network
+                // guard runs after DNS, TCP and TLS, before any HTTP request is written.
+                // Unknown delivery stays final; the caller's event listeners stay intact.
+                .addInterceptor { chain ->
+                    try {
+                        chain.proceed(chain.request())
+                    } catch (e: IOException) {
+                        if (!exchangeStarted) connectionFailure = e
+                        throw e
+                    }
+                }
+                .apply {
+                    networkInterceptors().add(0, okhttp3.Interceptor { chain ->
+                        exchangeStarted = true
+                        chain.proceed(chain.request())
+                    })
+                }
                 .build()
         } else {
             client
@@ -178,9 +204,18 @@ class HttpClient(
                 }
             }
         } catch (e: IOException) {
-            throw ProviderException.Offline(describeTransportFailure(url, e), e)
+            throw ProviderException.Offline(
+                describeTransportFailure(url, e), e,
+                requestNotSent = e === connectionFailure && isTransientConnectionFailure(e),
+            )
         }
     }
+
+    private fun isTransientConnectionFailure(e: IOException): Boolean =
+        e !is ProtocolException &&
+            (e !is InterruptedIOException || e is SocketTimeoutException) &&
+            e !is SSLPeerUnverifiedException &&
+            !(e is SSLHandshakeException && e.cause is CertificateException)
 
     /**
      * Says WHERE a request died and HOW, without any of the exception's own text: OkHttp's

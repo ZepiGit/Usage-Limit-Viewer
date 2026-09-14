@@ -48,6 +48,7 @@ import com.usagelimits.MainActivity
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.percentLabel
 import com.usagelimits.core.time.Countdown
+import kotlinx.coroutines.flow.first
 
 /**
  * The style of the widget being composed: its panel and the ink derived from it.
@@ -140,13 +141,14 @@ class CompactUsageWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val initial = WidgetUpdater.load(context, id)
+        val views = WidgetUpdater.observe(context, id)
+        val initial = views.first()
         provideContent {
-            val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val view by views.collectAsState(initial)
             val snapshot = view.snapshot
             val style = view.style
             val width = LocalSize.current.width.value
-            val fontScale = androidx.compose.ui.platform.LocalContext.current.resources.configuration.fontScale
+            val fontScale = androidx.glance.LocalContext.current.resources.configuration.fontScale
             GlanceTheme {
                 CompositionLocalProvider(LocalWidgetStyle provides style) {
                     val root = GlanceModifier
@@ -365,9 +367,10 @@ class DetailedUsageWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val initial = WidgetUpdater.load(context, id)
+        val views = WidgetUpdater.observe(context, id)
+        val initial = views.first()
         provideContent {
-            val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val view by views.collectAsState(initial)
             val snapshot = view.snapshot
             val style = view.style
             GlanceTheme {

@@ -17,7 +17,12 @@ sealed class ProviderException(message: String, cause: Throwable? = null) : Exce
     class ServerError(val statusCode: Int, message: String) : ProviderException(message)
 
     /** No usable network. */
-    class Offline(message: String = "No network connection", cause: Throwable? = null) :
+    class Offline(
+        message: String = "No network connection",
+        cause: Throwable? = null,
+        /** True only when the transport failed before an HTTP exchange could start. */
+        val requestNotSent: Boolean = false,
+    ) :
         ProviderException(message, cause)
 
     /**

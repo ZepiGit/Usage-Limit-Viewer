@@ -24,14 +24,16 @@ import com.usagelimits.MainActivity
 import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
 import com.usagelimits.ui.providerLogoResource
+import kotlinx.coroutines.flow.first
 
 open class AccountRingsWidget(private val mini: Boolean) : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val initial = WidgetUpdater.load(context, id)
+        val views = WidgetUpdater.observe(context, id)
+        val initial = views.first()
         provideContent {
-            val view by WidgetUpdater.observe(context, id).collectAsState(initial)
+            val view by views.collectAsState(initial)
             val style = view.style
             val size = LocalSize.current
             val grid = WidgetLayout.miniGrid(size.width.value, size.height.value, view.metrics)
