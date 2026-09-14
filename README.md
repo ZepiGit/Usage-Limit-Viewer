@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/01-terracotta/app-icon.png" width="76" alt="Usage Limits app icon"></p>
 
-<h1 align="center">Usage Limits</h1>
+<h1 align="center">Usage Limits Mobile</h1>
 
 <p align="center"><strong>Know what’s left. See what resets next.</strong><br>Codex, Claude, Antigravity, Grok and Kimi — on your phone and home screen.</p>
 
