@@ -34,6 +34,10 @@ public protocol TimelineProvider {
 /// `EnvironmentValues` can name them without depending on this one.
 public typealias WidgetFamily = WidgetFamilyPlaceholder
 
+/// Same arrangement for the host rendering mode: the cases live next to the other
+/// environment placeholders, the app spells it `WidgetRenderingMode`.
+public typealias WidgetRenderingMode = WidgetRenderingModePlaceholder
+
 public protocol WidgetConfiguration {}
 
 public struct StaticConfiguration<Provider: TimelineProvider>: WidgetConfiguration {

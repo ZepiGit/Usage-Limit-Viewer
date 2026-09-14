@@ -533,6 +533,11 @@ public struct EnvironmentValues {
     public var colorScheme: ColorScheme = .dark
     public var scenePhase: ScenePhase = .active
     public var widgetFamily: WidgetFamilyPlaceholder = .systemSmall
+    /// The host rendering mode, placeholder for the same reason as `widgetFamily`:
+    /// `EnvironmentValues` lives in this module, the app-facing alias lives in the
+    /// WidgetKit shim. Added when the bars and rings started yielding track opacity
+    /// in accented renderings.
+    public var widgetRenderingMode: WidgetRenderingModePlaceholder = .fullColor
     /// A BINDING, as in the real SwiftUI, not a value: rows have to be able to write it back
     /// (a swipe-to-delete ends editing), and a shim that took a plain value would accept
     /// `.environment(\.editMode, editMode)` — which does not compile against the SDK.
@@ -563,6 +568,15 @@ public struct Transaction {
 public enum WidgetFamilyPlaceholder {
     case systemSmall, systemMedium, systemLarge, systemExtraLarge
     case accessoryRectangular, accessoryCircular, accessoryInline
+}
+
+/// The host's rendering mode, declared here for the same reason as
+/// `WidgetFamilyPlaceholder` above. The cases mirror WidgetKit's real
+/// `WidgetRenderingMode`; no associated values, so `==` works without ceremony.
+public enum WidgetRenderingModePlaceholder {
+    case fullColor
+    case accented
+    case accentedDesaturated
 }
 
 /// Where a container background applies. The app calls `containerBackground(for: .widget)`.

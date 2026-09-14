@@ -43,3 +43,7 @@ ios/Tools/AppleShims/.build/
 # dies mid-run leaves one behind, and one did — holding a deliberate sabotage of SyncEngine it
 # never got to draw a conclusion from. `.claude/skills/` stays tracked.
 .claude/worktrees/
+
+# Local security-scanner hook state. Session baselines and continue markers churn on every
+# agent run and kept leaking into commits; they are machine-local tool state, like .gradle/.
+.mimosa/

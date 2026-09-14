@@ -59,6 +59,26 @@ public struct EmptyShimView: View {
     public var body: some View { ShimLeaf() }
 }
 
+/// The content a `ViewModifier`'s body receives.
+///
+/// Real SwiftUI declares a dedicated content type whose plumbing the builder machinery
+/// provides; one concrete leaf satisfies the recursion here, where nothing is rendered.
+public struct ViewModifierContent: View {
+    public init() {}
+    public var body: some View { ShimLeaf() }
+}
+
+/// `ViewModifier`, as real SwiftUI declares it: a `body(content:)` producing another view.
+/// The content associated type carries the protocol's default, so a conformer spells its
+/// parameter `Content` without naming the concrete type — which is how the app's
+/// modifiers are written.
+@MainActor
+public protocol ViewModifier {
+    associatedtype Content = ViewModifierContent
+    associatedtype Body: View
+    @ViewBuilder func body(content: Content) -> Body
+}
+
 @resultBuilder
 @MainActor
 public enum ViewBuilder {
@@ -77,6 +97,7 @@ public enum ViewBuilder {
 // Every modifier the app uses, returning Self so chains type-check without modelling
 // SwiftUI's real modifier types.
 extension View {
+    public func modifier(_ modifier: some ViewModifier) -> Self { self }
     public func font(_ value: Font?) -> Self { self }
     public func accessibilityElement(children: Any? = nil) -> Self { self }
     public func accessibilityHidden(_ value: Bool) -> Self { self }
