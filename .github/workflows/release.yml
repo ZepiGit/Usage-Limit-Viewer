@@ -58,13 +58,21 @@ jobs:
       # The version code has to advance or the second upload is rejected, and there is no way
       # back from a published one. The commit count rises with the history and is the same
       # number the Android workflow stamps on a verification build of the same commit.
+      #
+      # A tag reads v0.2.0; the app's versionName reads 0.2.0, so the v-prefix is stripped.
+      - name: Derive the release version name
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.versionName || github.ref_name }}"
+          echo "RELEASE_VERSION_NAME=${tag#v}" >> "$GITHUB_ENV"
+
       - name: Build the signed bundle and APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_VERSION_NAME: ${{ inputs.versionName || github.ref_name }}
+          ANDROID_VERSION_NAME: ${{ env.RELEASE_VERSION_NAME }}
         run: |
           export ANDROID_VERSION_CODE="$(git rev-list --count HEAD)"
           ./gradlew --no-daemon --no-configuration-cache bundleRelease assembleRelease
@@ -73,16 +81,24 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
+      # Flat, and deliberately flat: upload-artifact preserves directory structure, and the
+      # publish job below wants the three files at one level, named after what they are.
+      - name: Stage the build outputs
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/outputs/bundle/release/*.aab dist/
+          cp app/build/outputs/apk/release/*.apk dist/
+          cp app/build/outputs/mapping/release/mapping.txt dist/
+          ls -l dist
+
       # Kept per release, because an obfuscated stack trace from a build nobody can reproduce
       # locally is unreadable without the mapping that produced it.
       - name: Upload the build outputs
         uses: actions/upload-artifact@v4
         with:
           name: android-release
-          path: |
-            app/build/outputs/bundle/release/*.aab
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/mapping/release/mapping.txt
+          path: dist
           if-no-files-found: error
 
   ios:
@@ -118,9 +134,83 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
+      # Zipped here, on the runner that still has the archive: a release asset must be ONE
+      # file, and upload-artifact would flatten a bare directory into its contents. The
+      # README inside the zip says what an unsigned archive is good for, at the very place
+      # a downloader reads it.
+      - name: Zip the archive for the release
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          printf '%s\n' \
+            'Unsigned iOS release archive of Usage Limits (Release configuration).' \
+            '' \
+            'This archive is NOT installable on a device as-is: it carries no distribution' \
+            'certificate and no provisioning profile, because this repository has no paid' \
+            'Apple developer account. It is what a signing step would consume:' \
+            'open it in Xcode, assign a team, and distribute from there.' \
+            > RELEASE-README.txt
+          zip -q -r UsageLimits-ios-unsigned.xcarchive.zip UsageLimits.xcarchive RELEASE-README.txt
+
       - name: Upload the archive
         uses: actions/upload-artifact@v4
         with:
           name: ios-archive
-          path: ${{ runner.temp }}/UsageLimits.xcarchive
+          path: ${{ runner.temp }}/UsageLimits-ios-unsigned.xcarchive.zip
           if-no-files-found: error
+
+  publish:
+    name: Publish the GitHub release
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    # The release itself is the deliverable: without contents:write this job could upload
+    # artifacts that only a workflow-run page exposes, but never attach the finished apps
+    # to the tag the repository page lists.
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    # One tag shape for both triggers: a v* push arrives AS the tag; a manual dispatch names
+    # the bare version and gets the v-prefix here.
+    env:
+      RELEASE_TAG: ${{ inputs.versionName && format('v{0}', inputs.versionName) || github.ref_name }}
+    steps:
+      # Checked out so a manual dispatch can anchor its new tag to exactly the commit that
+      # was built, rather than to wherever the default branch has drifted in the meantime.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # The finished apps, named after their version rather than Gradle's defaults, so the
+      # assets read the same way every release without a lookup.
+      - name: Package the release assets
+        run: |
+          set -euo pipefail
+          NAME="${RELEASE_TAG#v}"
+          mkdir -p dist
+          mv artifacts/app-release.apk "dist/UsageLimits-$NAME.apk"
+          mv artifacts/app-release.aab "dist/UsageLimits-$NAME.aab"
+          mv artifacts/mapping.txt "dist/UsageLimits-$NAME-mapping.txt"
+          mv artifacts/UsageLimits-ios-unsigned.xcarchive.zip \
+            "dist/UsageLimits-$NAME-ios-unsigned.xcarchive.zip"
+          ls -l dist
+
+      - name: Create the release with the finished apps
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; replacing its assets." >&2
+            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Usage Limits ${RELEASE_TAG#v}" \
+              --generate-notes \
+              --latest \
+              dist/*
+          fi

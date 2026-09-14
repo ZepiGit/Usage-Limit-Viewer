@@ -69,14 +69,27 @@ public struct ViewModifierContent: View {
 }
 
 /// `ViewModifier`, as real SwiftUI declares it: a `body(content:)` producing another view.
-/// The content associated type carries the protocol's default, so a conformer spells its
-/// parameter `Content` without naming the concrete type — which is how the app's
-/// modifiers are written.
+///
+/// Real SwiftUI publishes `Content` as a TYPEALIAS IN A PROTOCOL EXTENSION, not as an
+/// associated type with a default — Apple's own interface shows `typealias Content` with no
+/// assignment beside the associatedtype `Body`. The two spellings are not interchangeable:
+/// a defaulted `associatedtype Content = ViewModifierContent` makes the conformer's own
+/// `func body(content: Content)` unresolvable — the witness would have to infer the
+/// associated type from a parameter spelled as the type being inferred, and Swift reports
+/// "reference to invalid associated type 'Content'" for every conformer. With the extension
+/// typealias the name resolves concretely, the witness matches, and the protocol requirement
+/// itself references the same typealias.
 @MainActor
 public protocol ViewModifier {
-    associatedtype Content = ViewModifierContent
     associatedtype Body: View
     @ViewBuilder func body(content: Content) -> Body
+}
+
+@MainActor
+extension ViewModifier {
+    /// The content a `ViewModifier`'s body receives, spelled `Content` at every call site —
+    /// which is how the app's modifiers are written and how real SwiftUI spells it.
+    public typealias Content = ViewModifierContent
 }
 
 @resultBuilder
