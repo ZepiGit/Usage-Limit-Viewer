@@ -203,6 +203,13 @@ jobs:
             -maximum-test-execution-time-allowance 300 \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
 
+      # Sequential simulators, on purpose. The iPhone suite boots one device; this step
+      # needs an iPad, and booting the second while the first still races the runner's
+      # launchd: "Failed to start launchd_sim: could not bind to session" killed this device
+      # before the app ever launched, and every accessibility lookup after it failed with
+      # kAXErrorServerNotFound until the run gave up. One device at a time — shut down,
+      # erase, boot — plus one retry on a FRESH device, because a simulator that misbooted
+      # once cannot be trusted to recover in place.
       - name: Run adaptive UI checks on an iPad
         working-directory: ios/UsageLimits
         run: |
@@ -210,18 +217,34 @@ jobs:
           udid=$(xcrun simctl list devices available --json \
             | jq -r '[.devices[][] | select(.isAvailable and (.name | startswith("iPad")))] | last | .udid')
           test -n "$udid" && test "$udid" != "null"
-          xcrun simctl boot "$udid" || true
-          xcrun simctl bootstatus "$udid" -b
-          xcodebuild test \
-            -scheme UsageLimits \
-            -destination "platform=iOS Simulator,id=$udid" \
-            -resultBundlePath "$GITHUB_WORKSPACE/ios-ipad-tests.xcresult" \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -maximum-test-execution-time-allowance 300 \
-            -only-testing:UsageLimitsUITests/AppLaunchUITests/testEachScreenOpensWithNoAccountsConnected \
-            -only-testing:UsageLimitsUITests/AppLaunchUITests/testLandscapeAndLargeTextKeepTheProviderPickerReachable \
-            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual
+          # The iPhone simulator from the step above may still be running; sharing the runner
+          # between two booted simulators is the collision this step cannot afford.
+          xcrun simctl shutdown all || true
+          for attempt in 1 2; do
+            if [ "$attempt" -eq 2 ]; then
+              echo "::warning::first iPad attempt hit a simulator failure; retrying on a fresh device" >&2
+              xcrun simctl shutdown all || true
+              xcrun simctl delete "$udid" || true
+              devicetype=$(xcrun simctl list devicetypes | grep 'iPad-Pro' | tail -1 | sed 's/.*(//' | sed 's/)//')
+              udid=$(xcrun simctl create "iPad CI retry" "$devicetype")
+            fi
+            xcrun simctl erase "$udid" || true
+            xcrun simctl boot "$udid" || true
+            xcrun simctl bootstatus "$udid" -b
+            if xcodebuild test \
+              -scheme UsageLimits \
+              -destination "platform=iOS Simulator,id=$udid" \
+              -resultBundlePath "$GITHUB_WORKSPACE/ios-ipad-tests-$attempt.xcresult" \
+              -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES \
+              -maximum-test-execution-time-allowance 300 \
+              -only-testing:UsageLimitsUITests/AppLaunchUITests/testEachScreenOpensWithNoAccountsConnected \
+              -only-testing:UsageLimitsUITests/AppLaunchUITests/testLandscapeAndLargeTextKeepTheProviderPickerReachable \
+              CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual; then
+              exit 0
+            fi
+          done
+          exit 1
 
       # Kept on failure only, because a UI test that fails is unreadable from console output
       # alone: the bundle carries the screenshot and the view hierarchy at the moment it broke.
@@ -232,5 +255,5 @@ jobs:
           name: ios-ui-test-results
           path: |
             ios-tests.xcresult
-            ios-ipad-tests.xcresult
+            ios-ipad-tests-*.xcresult
           if-no-files-found: ignore
