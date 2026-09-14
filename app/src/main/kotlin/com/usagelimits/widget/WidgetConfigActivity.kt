@@ -105,6 +105,10 @@ class WidgetConfigActivity : ComponentActivity() {
                                         customAccountIdsJson = JSONArray(custom).toString(),
                                         layoutMetricsJson = (WidgetMetrics.fromJson(initial?.layoutMetricsJson ?: "{}") ?: placementMetrics).toJson()))
                                     WidgetUpdater.refreshAll(this@WidgetConfigActivity)
+                                    // A saved configuration can change what the widget shows
+                                    // without new data; the next staleness/reset boundary moves
+                                    // with it, so recompute the one coalesced repaint.
+                                    WidgetPresentationWorker.scheduleNext(this@WidgetConfigActivity)
                                     setResult(RESULT_OK, result); finish()
                                 } catch (_: Exception) { saving = false; error = "Could not save the widget. Try again." }
                             }
@@ -186,6 +190,10 @@ private fun WidgetConfigScreen(accounts: List<AccountUsage>, initial: WidgetConf
                 )
             }
             item { SectionHeader("Widget content") }
+            // Restored as a real choice: it was removed from this screen once and the saved
+            // value kept working, so a widget could silently watch "most critical" with no way
+            // to see or change that from here.
+            item { ScopeChoice("Most Critical", "Automatically shows whatever needs attention most", scope == WidgetScope.MOST_CRITICAL) { scopeName = WidgetScope.MOST_CRITICAL.name } }
             item { ScopeChoice("Closest Resets", "Automatically shows whatever account resets next", scope == WidgetScope.CLOSEST_RESETS) { scopeName = WidgetScope.CLOSEST_RESETS.name } }
             item { ScopeChoice("All accounts", "Same order as Overview", scope == WidgetScope.ALL_ACCOUNTS) { scopeName = WidgetScope.ALL_ACCOUNTS.name } }
             item { SectionHeader("One provider") }
@@ -295,7 +303,13 @@ private fun BackgroundSettings(
         )
         Spacer(Modifier.height(8.dp))
         Text("Text", style = MaterialTheme.typography.bodyLarge, color = UsageColors.TextPrimary)
-        Text("Auto follows the colour above. Pick one if your wallpaper shows through.", style = MaterialTheme.typography.bodyMedium, color = UsageColors.TextSecondary)
+        // States AUTO's actual assumption, which is now continuous at every opacity: the ink
+        // contrasts the chosen COLOUR, never the wallpaper — a widget cannot see the wallpaper,
+        // so a see-through panel needs the explicit override when the colour's guess is wrong.
+        Text(
+            "Auto contrasts the colour above at any opacity. If the wallpaper shows through, pick Light or Dark yourself.",
+            style = MaterialTheme.typography.bodyMedium, color = UsageColors.TextSecondary,
+        )
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(WidgetTextTone.AUTO to "Auto", WidgetTextTone.LIGHT to "Light", WidgetTextTone.DARK to "Dark").forEach { (tone, label) ->

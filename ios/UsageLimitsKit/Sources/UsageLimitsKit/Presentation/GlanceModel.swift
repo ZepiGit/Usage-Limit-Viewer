@@ -209,6 +209,25 @@ public struct AccountUsage: Sendable, Equatable {
     }
 }
 
+public extension GlanceRow {
+    /// Whether the cached reading this row carries predates the row's OWN reset instant.
+    ///
+    /// Selection drops a reset from the ordering keys the moment it passes, but the cached
+    /// percentage survives until the next fetch replaces it — so the value a tile shows can
+    /// belong to a window that has since rolled over while the summary line names some other,
+    /// still-future reset. When this is true the reading is invalidated, not merely old, and
+    /// the surface should say the reset happened and fresh data is pending — never invent a
+    /// post-reset availability from clock arithmetic.
+    ///
+    /// `fetchedAt` is the OWNING account's fetch instant: a reading taken after the reset
+    /// (a fresh snapshot that simply reports a passed resetAt) is confirmed, not pending.
+    func resetPending(at date: Date, fetchedAt: Date?) -> Bool {
+        guard let resetAt, resetAt <= date else { return false }
+        guard let fetchedAt else { return true }
+        return fetchedAt < resetAt
+    }
+}
+
 /// Reduces the cache to what one surface needs.
 ///
 /// Pure functions over already-loaded data, so rendering never touches a provider or the
@@ -311,7 +330,11 @@ public enum GlanceModel {
     }
 
     /// Five-point buckets, so sub-point drift cannot reorder a home screen.
-    private static func band(_ remaining: Double) -> Int {
+    ///
+    /// Internal because `GlanceSnapshot.selecting` applies the same ranking to an
+    /// already-built snapshot — the legacy providers re-select from the published export —
+    /// and a second copy of the comparator is a second answer to one question.
+    static func band(_ remaining: Double) -> Int {
         // Saturating, never trapping. `Int(_:)` in Swift traps on a value outside Int's range
         // where Kotlin's `.toInt()` saturates, and this runs inside a widget extension where a
         // trap is a blank tile and no diagnostic. `remainingPercent` already refuses non-finite
@@ -336,7 +359,9 @@ public enum GlanceModel {
     /// account at 3 % off the screen entirely. A blank tile answers nothing; the account with a
     /// real number does. That an account is unreadable still reaches the user through
     /// `overallSeverity` and through the app's own list, neither of which is slot-limited.
-    private static func urgency(_ severity: Severity) -> Int {
+    /// `GlanceSnapshot.selecting` reuses this ranking, so it is internal for the same
+    /// reason `band` is: one comparator, one answer.
+    static func urgency(_ severity: Severity) -> Int {
         switch severity {
         case .exhausted: return 0
         case .low: return 1

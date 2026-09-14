@@ -66,9 +66,16 @@ data class WidgetStyle(
         get() = when (textTone) {
             WidgetTextTone.LIGHT -> true
             WidgetTextTone.DARK -> false
-            // A fully transparent widget has no panel to read against; the app's own dark
-            // wallpaper default is the safer guess, and the override exists for the rest.
-            WidgetTextTone.AUTO -> background.isTransparent || !background.isLightColor
+            // AUTO reads the CHOSEN PANEL COLOUR at every opacity, including zero, so the ink
+            // never flips as the opacity slider crosses a value. The old rule special-cased
+            // full transparency and inverted the guess there: a white panel therefore chose
+            // dark ink at 1 % and light ink at 0 % — a deterministic black/white flip on a
+            // setting the user had merely nudged. A fully transparent panel has no true
+            // backdrop (the wallpaper is unknowable to this process and must not be sampled),
+            // so AUTO's assumption is "the panel colour is what I contrast against", stated
+            // continuously; a see-through widget on a wallpaper that assumption gets wrong is
+            // exactly what the LIGHT/DARK overrides are for.
+            WidgetTextTone.AUTO -> !background.isLightColor
         }
 
     val textPrimary: Color get() = if (lightInk) Color(0xFFF0EEE6) else Color(0xFF1A1918)
@@ -98,12 +105,24 @@ data class WidgetStyle(
         Severity.STALE -> if (lightInk) Color(0xFFA29F94) else Color(0xFF6B6960)
     }
 
-    fun bar(row: WidgetRow): Color = when {
+    /**
+     * Bar fill for one row.
+     *
+     * [validity] is the owning account's DATA validity — stale, failed or needing
+     * reconnection — and outranks every quota decoration. The old rule checked the teal
+     * "untouched" state first, so a stale account whose cached reading was still at 100 %
+     * painted a reassuring fresh-looking bar under an "out of date" warning. When the data
+     * itself is not to be trusted, the bar says so.
+     */
+    fun bar(row: WidgetRow, validity: Severity? = null): Color = when {
+        validity != null -> accent(validity)
         row.remainingPercent != null && row.remainingPercent >= 99.5 -> Teal
         else -> accent(row.severity)
     }
 
-    fun barText(row: WidgetRow): Color = when {
+    /** [bar] for the row's words. */
+    fun barText(row: WidgetRow, validity: Severity? = null): Color = when {
+        validity != null -> textColor(validity)
         row.remainingPercent != null && row.remainingPercent >= 99.5 -> if (lightInk) Teal else Color(0xFF247A69)
         else -> textColor(row.severity)
     }

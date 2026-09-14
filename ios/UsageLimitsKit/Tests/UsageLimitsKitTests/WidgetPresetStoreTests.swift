@@ -23,4 +23,22 @@ final class WidgetPresetStoreTests: XCTestCase {
             XCTFail("Corrupt configuration must not silently choose other accounts")
         } catch { }
     }
+
+    func testEachRequestSeesTheLatestPresetRevision() async throws {
+        // A widget request captures its inputs, but the capture must never outlive the
+        // request: the NEXT request reloads the store and adopts the edited preset. Two
+        // loads with a rewrite in between have to disagree — freezing across requests was
+        // the risk the capture mechanism was designed against.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WidgetPresetStore(fileURL: url)
+
+        try await store.save([WidgetPreset(id: "layout", name: "Work", accountIDs: ["one"])])
+        let first = try await store.load()
+        XCTAssertEqual(first.first?.accountIDs, ["one"])
+
+        try await store.save([WidgetPreset(id: "layout", name: "Work", accountIDs: ["two"])])
+        let second = try await store.load()
+        XCTAssertEqual(second.first?.accountIDs, ["two"])
+    }
 }

@@ -36,7 +36,30 @@ class WidgetSelectionContractTest {
         val result = WidgetDataBuilder.build(accounts, now, WidgetScope.CLOSEST_RESETS, null, null)
         assertEquals(listOf("full-soon", "empty-later", "past", "unknown"), result.accounts.map { it.accountId })
         assertEquals(now + 1000, result.nextResetAt)
-        assertEquals(WidgetScope.CLOSEST_RESETS, WidgetScope.fromName("MOST_CRITICAL"))
+        // WGT-001: the persisted name used to be aliased to CLOSEST_RESETS, so a saved policy
+        // changed meaning without any configuration write. A stored name keeps its meaning.
+        assertEquals(WidgetScope.MOST_CRITICAL, WidgetScope.fromName("MOST_CRITICAL"))
+    }
+
+    @Test fun `legacy most-critical name retains urgency semantics`() {
+        // Account "empty" is exhausted but resets later; "full-soon" is healthy and resets
+        // sooner. Urgency ordering must lead with the exhausted account — if this widget led
+        // with "full-soon" instead, a saved MOST_CRITICAL row was silently reinterpreted as
+        // CLOSEST_RESETS and the user saw their widget start watching a different account.
+        val accounts = listOf(account("empty", 100.0, now + 9000), account("full-soon", 0.0, now + 1000))
+        val critical = WidgetDataBuilder.build(accounts, now, WidgetScope.fromName("MOST_CRITICAL"), null, null)
+        assertEquals("empty", critical.accounts.first().accountId)
+        // The explicit closest-resets choice really is a different policy, not the same one.
+        val resets = WidgetDataBuilder.build(accounts, now, WidgetScope.CLOSEST_RESETS, null, null)
+        assertEquals("full-soon", resets.accounts.first().accountId)
+    }
+
+    @Test fun `account selection survives another account's reset boundary`() {
+        // The selected account must stay selected when some OTHER account's reset ordering
+        // changes — an exact choice never falls back to another account.
+        val accounts = listOf(account("selected", 30.0, now + 9000), account("other", 10.0, now + 1000))
+        val snapshot = WidgetDataBuilder.build(accounts, now, WidgetScope.ACCOUNT, "selected", null)
+        assertEquals(listOf("selected"), snapshot.accounts.map { it.accountId })
     }
 
     @Test fun `all accounts matches overview and custom is an exact ordered subset`() {

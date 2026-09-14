@@ -2,6 +2,13 @@ import Foundation
 
 extension GlanceSnapshot {
     /// Selection is applied to the same ordered cache on every widget instance.
+    ///
+    /// `.mostCritical` and `.closestResets` were once one branch here, which made the two
+    /// policies indistinguishable: a widget asked for the account nearest running out and one
+    /// asked for the account most in need rendered identically, and a consumer selecting
+    /// `.mostCritical` on the published export silently inherited reset order. They are
+    /// different rankings — urgency first with a coarse tie-break, versus soonest future
+    /// reset — and they legitimately disagree whenever a future reset boundary moves.
     public func selecting(scope: GlanceScope, now: Date, accountID: String? = nil,
         providerID: String? = nil, customAccountIDs: [String] = []) -> GlanceSnapshot {
         let selected: [GlanceAccount]
@@ -12,7 +19,21 @@ extension GlanceSnapshot {
         case .custom:
             var seen = Set<String>()
             selected = customAccountIDs.filter { seen.insert($0).inserted }.compactMap { id in accounts.first { $0.id == id } }
-        case .closestResets, .mostCritical:
+        case .mostCritical:
+            // The same ranking `GlanceModel.build` applies for `.mostCritical`: urgency rank,
+            // then the tightest number in five-point bands, then the original order. A second
+            // copy of the comparator would be a second answer to the same question, so the
+            // kit's own is reused.
+            selected = accounts.enumerated().sorted { lhs, rhs in
+                let left = GlanceModel.urgency(lhs.element.severity)
+                let right = GlanceModel.urgency(rhs.element.severity)
+                if left != right { return left < right }
+                let leftBand = GlanceModel.band(lhs.element.tightestRemaining)
+                let rightBand = GlanceModel.band(rhs.element.tightestRemaining)
+                if leftBand != rightBand { return leftBand < rightBand }
+                return lhs.offset < rhs.offset
+            }.map(\.element)
+        case .closestResets:
             selected = accounts.enumerated().sorted { lhs, rhs in
                 let left = lhs.element.resetDates.filter { $0 > now }.min() ?? .distantFuture
                 let right = rhs.element.resetDates.filter { $0 > now }.min() ?? .distantFuture
@@ -21,9 +42,13 @@ extension GlanceSnapshot {
         }
         guard let lead = selected.first else { return .empty }
         return GlanceSnapshot(accounts: selected, accountCount: selected.count,
+            // "Is anything wrong anywhere" across the SELECTION — the lead's own severity
+            // would hide a broken account behind a healthy one that happens to sort first.
+            // Aged at `now` rather than reusing the stored verdict, so an entry replayed
+            // hours later reads as stale rather than fresh.
             updatedAt: selected.compactMap(\.fetchedAt).max(),
             nextResetAt: lead.resetDates.filter { $0 > now }.min(),
-            overallSeverity: lead.severity(at: now, staleAfter: staleAfter),
+            overallSeverity: selected.map { $0.severity(at: now, staleAfter: staleAfter) }.max() ?? .stale,
             headlineShort: lead.rows.first { $0.category == .fiveHour },
             headlineLong: lead.rows.first { $0.category != .fiveHour }, staleAfter: staleAfter)
     }

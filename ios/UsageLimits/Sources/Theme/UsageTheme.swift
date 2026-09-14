@@ -69,8 +69,19 @@ enum SeverityPalette {
     /// Bar colour for one window.
     ///
     /// An untouched window gets teal rather than green, preserving the distinction between
-    /// "nothing used yet" and "healthy but partly used".
+    /// "nothing used yet" and "healthy but partly used". But the validity states outrank that
+    /// decoration: the callers pass the account's AGED severity, and a stale or failed account
+    /// whose cached reading still sat at 100 % kept painting a fresh-looking teal bar under an
+    /// out-of-date verdict. When the data itself is not to be trusted, the bar says so. Quota
+    /// severity stays per row — an exhausted account still draws its own healthy five-hour
+    /// row in the healthy window's colour, because a trustworthy reading is a trustworthy
+    /// reading whatever its number.
     static func bar(remainingPercent: Double?, severity: Severity) -> Color {
+        switch severity {
+        case .stale: return UsageColors.slate
+        case .error: return UsageColors.red
+        default: break
+        }
         if let remaining = remainingPercent, remaining >= 99.5 { return UsageColors.teal }
         return accent(severity)
     }

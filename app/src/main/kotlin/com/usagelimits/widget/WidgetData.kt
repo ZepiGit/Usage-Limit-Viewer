@@ -29,7 +29,21 @@ data class WidgetAccount(
     val iconChoiceId: String? = null,
     val accountLabel: String? = null,
     val resetTimes: List<Long> = rows.mapNotNull { it.resetAt },
-)
+) {
+    /**
+     * Whether the cached reading itself is to be trusted: STALE or ERROR while it is not, null
+     * while it is. Deliberately narrower than [severity] — an exhausted account's data is
+     * perfectly trustworthy, and funnelling quota severity in here would recolour a healthy
+     * five-hour row red because a different, longer window ran out. A validity state may
+     * override the row's own colour; a quota state may not.
+     */
+    val dataValidity: Severity?
+        get() = when {
+            requiresReauthentication -> Severity.ERROR
+            severity == Severity.ERROR || severity == Severity.STALE -> severity
+            else -> null
+        }
+}
 
 /**
  * Everything a widget renders, already reduced from the cache.
@@ -45,6 +59,12 @@ data class WidgetSnapshot(
     val overallSeverity: Severity,
     val headlineShort: WidgetRow?,
     val headlineLong: WidgetRow?,
+    /**
+     * The data validity of the account the headline numbers come from — the compact tile draws
+     * its two quota tiles from this account, so its staleness is the validity those numbers
+     * must answer to. Null while the lead's data is trustworthy.
+     */
+    val leadValidity: Severity? = null,
 ) {
     companion object {
         val Empty = WidgetSnapshot(
@@ -138,6 +158,7 @@ object WidgetDataBuilder {
             overallSeverity = ordered.maxOfOrNull { it.severity } ?: Severity.STALE,
             headlineShort = lead?.rows?.firstOrNull { it.category == WindowCategory.FIVE_HOUR },
             headlineLong = lead?.rows?.firstOrNull { it.category != WindowCategory.FIVE_HOUR },
+            leadValidity = lead?.dataValidity,
         )
     }
 

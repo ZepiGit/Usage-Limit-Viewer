@@ -31,6 +31,12 @@ import UsageLimitsKit
 struct UsageEntry: TimelineEntry {
     let date: Date
     let snapshot: GlanceSnapshot
+
+    /// Why there may be nothing to draw, captured where the source was read. The views render
+    /// this instead of re-reading the snapshot file while being archived — a second read can
+    /// return a different generation than the one the entry was built from. Nil while the
+    /// entry carries a usable snapshot.
+    var unavailable: ConfiguredSelectionOutcome? = nil
 }
 
 // MARK: - Timeline provider
@@ -55,26 +61,79 @@ struct UsageProvider: TimelineProvider {
         // plausible-looking sample numbers: a preview that invents "12 %" invites
         // the user to trust a figure no app ever wrote. It is a worse advert than
         // a fabricated one — and the only one we can defend.
-        UsageEntry(date: Date(), snapshot: .empty)
+        UsageEntry(date: Date(), snapshot: .empty, unavailable: .noAccounts)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
         // One synchronous read of a few hundred bytes: the user is staring at the
         // tile, so a fast honest answer beats a deferred one.
-        completion(UsageEntry(date: Date(), snapshot: SnapshotCache.load()))
+        let load = SnapshotCache.loadResult()
+        completion(Self.entry(from: load, at: Date()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
-        let snapshot = SnapshotCache.load()
+        let load = SnapshotCache.loadResult()
         let now = Date()
-        let entries = Self.entryDates(now: now, nextResetAt: snapshot.nextResetAt)
-            .map { UsageEntry(date: $0, snapshot: snapshot) }
+        let snapshot = Self.criticalSelection(of: load.snapshot, now: now)
+        var dates = Self.entryDates(now: now, nextResetAt: snapshot.nextResetAt)
+        // A staleness boundary past the reset horizon needs its own entry: the views age
+        // severity at each entry's date, but only where an entry exists to age it. Drawn
+        // from the captured cache — no reload, no network, just the flip the cached data
+        // itself implies when no refresh has come to overwrite it.
+        dates.append(contentsOf: Self.staleBoundaries(of: snapshot, after: now))
+        let unavailable = Self.unavailable(from: load)
+        let entries = dates.map {
+            UsageEntry(date: $0, snapshot: snapshot, unavailable: unavailable)
+        }
         completion(
             Timeline(
                 entries: entries,
                 policy: .after(Self.refreshDate(now: now, nextResetAt: snapshot.nextResetAt))
             )
         )
+    }
+
+    // MARK: Snapshot shaping
+
+    /// The legacy tiles' stated focus is the account most in need of attention — but the
+    /// published export follows the overview's order, which is the user's, not urgency's.
+    /// Without a selection pass of its own, every legacy tile inherited whatever order the
+    /// exporter currently used, so reordering the overview moved the tile's lead with no
+    /// widget edit anywhere. The pass runs against a COPY of the export; the export itself
+    /// keeps overview order, because the configured widgets' "All accounts" depends on it.
+    static func criticalSelection(of snapshot: GlanceSnapshot, now: Date) -> GlanceSnapshot {
+        snapshot.selecting(scope: .mostCritical, now: now)
+    }
+
+    /// One entry from one read. `mostCritical` ordering and every view decision derive from
+    /// the same captured generation.
+    private static func entry(from load: GlanceSnapshotCodec.Load, at date: Date) -> UsageEntry {
+        UsageEntry(date: date, snapshot: criticalSelection(of: load.snapshot, now: date),
+            unavailable: unavailable(from: load))
+    }
+
+    /// The read outcome, translated once. A missing file is "no accounts yet" — the app has
+    /// not published anything, and it is not a locked device. Only an unreadable existing
+    /// file, whose expected cause is data protection, claims that.
+    private static func unavailable(from load: GlanceSnapshotCodec.Load) -> ConfiguredSelectionOutcome {
+        switch load {
+        case .loaded: return .ready
+        case .empty, .missing: return .noAccounts
+        case .unreadable: return .sourceUnavailable
+        case .corrupt: return .corruptSource
+        }
+    }
+
+    /// The earliest instant at which a cached account ages out of "current", per account.
+    private static func staleBoundaries(of snapshot: GlanceSnapshot, after now: Date) -> [Date] {
+        snapshot.accounts.compactMap { account in
+            guard let fetchedAt = account.fetchedAt else { return nil }
+            let staleAt = fetchedAt.addingTimeInterval(snapshot.staleAfter)
+            return staleAt > now ? staleAt : nil
+        }
+        .sorted()
+        .prefix(2)   // The soonest flip or two; a dozen accounts need not mean a dozen entries.
+        .map { $0 }
     }
 
     // MARK: Timeline maths
@@ -242,7 +301,9 @@ enum QuotaFormatting {
 /// when it was written and stays true whatever the system does next. The same
 /// argument forbids "5 min ago" styling — an age silently goes stale — so the data
 /// instead carries its own timestamp: "As of 12:40".
-private enum GlanceText {
+/// Internal, not private: the configured widgets in `ConfiguredWidgets.swift` render the
+/// same reset line, and a second copy of the wording is a second answer to one question.
+enum GlanceText {
 
     /// "Resets Tue 09:00", or the boundary state once the reset has passed.
     static func resetLine(resetAt: Date?, now: Date) -> String? {
@@ -257,15 +318,61 @@ private enum GlanceText {
     }
 
     /// "As of 12:40" — the data's own timestamp, or nothing if the cache states none.
-    static func asOfLine(updatedAt: Date?, now: Date) -> String? {
+    ///
+    /// [label] names whose timestamp it is, because an aggregate max does not mean what
+    /// "As of" implies beside one account's numbers: on a multi-account tile the maximum
+    /// fetch instant across the selection is the NEWEST account's update, so the header
+    /// says that rather than dating every row with it.
+    static func asOfLine(updatedAt: Date?, now: Date, label: String = "As of") -> String? {
         guard let updatedAt else { return nil }
-        return "As of \(Countdown.absolute(updatedAt, now: now))"
+        return "\(label) \(Countdown.absolute(updatedAt, now: now))"
+    }
+}
+
+/// The ink a tile writes with.
+///
+/// An OPAQUE tile is the app's near-black panel, so the light palette is the only readable
+/// choice and no configuration is needed. A TRANSPARENT tile has no panel — the wallpaper
+/// shows through and the widget process cannot see it (and must not sample it) — so the
+/// user's configured tone decides, exactly as the Android `WidgetStyle` LIGHT/DARK override
+/// does. Restated as values rather than dynamic system colours, for the same reason the
+/// palette is numeric: the home-screen rendering must not drift with whatever the host
+/// decides to recolor.
+struct WidgetInk {
+    let primary: Color
+    let secondary: Color
+    let tertiary: Color
+    let track: Color
+    let chip: Color
+
+    static let light = WidgetInk(
+        primary: UsageColors.textPrimary,
+        secondary: UsageColors.textSecondary,
+        tertiary: UsageColors.textTertiary,
+        track: UsageColors.progressTrack,
+        chip: UsageColors.surface)
+
+    /// The light palette's counterpart for a transparent tile over a light wallpaper: the
+    /// same hues pulled down, mirroring the Android dark-ink constants.
+    static let dark = WidgetInk(
+        primary: Color(hex: 0x1A1918),
+        secondary: Color(hex: 0x5C5A53),
+        tertiary: Color(hex: 0x6B6960),
+        track: Color(hex: 0x1A1918).opacity(0.18),
+        chip: Color(hex: 0x14000000))
+
+    /// The tone only matters when the wallpaper is the backdrop; an opaque panel always
+    /// pairs with light ink. `darkTone` arrives as a Bool because the tone choice is an
+    /// AppIntents type living behind an iOS 17 gate this file does not share.
+    static func ink(transparent: Bool, darkTone: Bool) -> WidgetInk {
+        transparent && darkTone ? .dark : .light
     }
 }
 
 /// Tap destinations. Lock Screen accessories ignore these; the app registers the scheme in its
-/// `CFBundleURLTypes` and answers them in `onOpenURL`.
-private enum DeepLink {
+/// `CFBundleURLTypes` and answers them in `onOpenURL`. Internal: the configured widgets share
+/// the same destinations.
+enum DeepLink {
     static let glance = URL(string: "usagelimits://glance")
 
     /// Opens the app and refreshes there.
@@ -281,6 +388,32 @@ private enum DeepLink {
 
 // MARK: - Shared views
 
+/// Yields the track's opacity in accented and monochrome host renderings (WGT-004).
+///
+/// `widgetRenderingMode` exists only on iOS 17 while these views ship as far back as iOS 16,
+/// so the environment read lives inside an availability-gated modifier — the same shape as
+/// `widgetBackground` below. A pre-17 host never offered accented rendering and keeps the
+/// full-opacity track it always had.
+private struct AccentedTrackYield: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.modifier(ModernTrackYield())
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 17.0, *)
+private struct ModernTrackYield: ViewModifier {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+
+    func body(content: Content) -> some View {
+        content.opacity(renderingMode == .fullColor ? 1 : 0.3)
+    }
+}
+
 /// One quota bar.
 ///
 /// A fixed height on a *bar* is legitimate — the Dynamic Type rule concerns text —
@@ -292,6 +425,7 @@ private struct QuotaBar: View {
     let severity: Severity
     /// Spoken context ("Claude, Messages") so the label below reads as a sentence.
     let context: String
+    var ink: WidgetInk = .light
 
     @ScaledMetric(relativeTo: .caption) private var barHeight = 5
 
@@ -299,7 +433,8 @@ private struct QuotaBar: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(UsageColors.progressTrack)
+                    .fill(ink.track)
+                    .modifier(AccentedTrackYield())
                 if let remainingPercent {
                     // Unknown percentages draw the empty track only — never a 0 % sliver.
                     Capsule()
@@ -334,35 +469,46 @@ private struct QuotaBar: View {
 /// Deliberately not a blank tile, and deliberately not one message for every cause.
 ///
 /// A tile with nothing on it has several quite different causes, and each wants a different
-/// sentence. The message is taken from the read outcome the codec reports, never inferred
-/// here: an earlier version guessed from whether the file existed, and so told anyone with a
-/// readable but empty snapshot — the ordinary state with no accounts connected — that their
-/// device was locked, which unlocking could not fix. None of these says "you have quota left".
-private struct WidgetEmptyStateView: View {
+/// sentence. The message comes from the outcome CAPTURED with the entry — the configured
+/// provider resolves its selection and carries the reason; the legacy provider carries the
+/// read outcome. No view re-reads the snapshot file while being archived: a second read is
+/// both wasted I/O and a fresh generation that can disagree with the one the entry was
+/// built from. The reason decides between "open the app" and "edit this widget" — a selected
+/// account that no longer exists is not "no accounts yet", and no wording here says
+/// "you have quota left".
+/// Internal: the configured widgets render this same empty state from their captured
+/// outcome, rather than growing a second copy of its wording.
+struct WidgetEmptyStateView: View {
 
-    var outcome: GlanceSnapshotCodec.Load = SnapshotCache.loadResult()
+    var reason: ConfiguredSelectionOutcome = .noAccounts
 
     private var icon: String {
-        switch outcome {
-        case .unreadable: return "lock"
-        case .corrupt: return "exclamationmark.triangle"
-        default: return "gauge.with.needle"
+        switch reason {
+        case .missingAccount: return "person.slash"
+        case .missingPreset: return "slider.horizontal.3"
+        case .sourceUnavailable: return "lock"
+        case .corruptSource: return "exclamationmark.triangle"
+        case .ready, .noAccounts: return "gauge.with.needle"
         }
     }
 
     private var title: String {
-        switch outcome {
-        case .unreadable: return "Locked"
-        case .corrupt: return "Can't read usage"
-        default: return "No accounts yet"
+        switch reason {
+        case .missingAccount: return "Account unavailable"
+        case .missingPreset: return "Layout unavailable"
+        case .sourceUnavailable: return "Locked"
+        case .corruptSource: return "Can't read usage"
+        case .ready, .noAccounts: return "No accounts yet"
         }
     }
 
     private var detail: String {
-        switch outcome {
-        case .unreadable: return "Unlock this device to see how much quota is left"
-        case .corrupt: return "Open UsageLimits to rebuild the data"
-        default: return "Open UsageLimits to see how much quota is left"
+        switch reason {
+        case .missingAccount: return "Edit this widget and choose another account"
+        case .missingPreset: return "Recreate this layout in UsageLimits, then edit this widget"
+        case .sourceUnavailable: return "Unlock this device to see how much quota is left"
+        case .corruptSource: return "Open UsageLimits to rebuild the data"
+        case .ready, .noAccounts: return "Open UsageLimits to see how much quota is left"
         }
     }
 
@@ -395,6 +541,7 @@ private struct MediumAccountRow: View {
     /// there rather than at the moment the app wrote the snapshot.
     let now: Date
     let staleAfter: TimeInterval
+    var ink: WidgetInk = .light
 
     /// The row's own severity while the account is healthy, and the account's otherwise.
     ///
@@ -417,7 +564,7 @@ private struct MediumAccountRow: View {
                     .accessibilityHidden(true)
                 Text(verbatim: account.title)
                     .font(.subheadline)
-                    .foregroundColor(UsageColors.textPrimary)
+                    .foregroundColor(ink.primary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 WidgetPercentage(remainingPercent: row?.remainingPercent)
@@ -428,7 +575,8 @@ private struct MediumAccountRow: View {
             QuotaBar(
                 remainingPercent: row?.remainingPercent,
                 severity: rowSeverity,
-                context: row.map { "\(account.title), \($0.label)" } ?? account.title
+                context: row.map { "\(account.title), \($0.label)" } ?? account.title,
+                ink: ink
             )
         }
     }
@@ -445,13 +593,14 @@ struct UsageWidgetSmallView: View {
 
     let entry: UsageEntry
     var transparent: Bool = false
+    var ink: WidgetInk = .light
 
     var body: some View {
         Group {
             if let focus = WidgetFocus(snapshot: entry.snapshot) {
                 content(for: focus)
             } else {
-                WidgetEmptyStateView()
+                WidgetEmptyStateView(reason: entry.unavailable ?? .noAccounts)
             }
         }
         .widgetBackground(transparent ? nil : UsageColors.background)
@@ -459,9 +608,17 @@ struct UsageWidgetSmallView: View {
     }
 
     private func content(for focus: WidgetFocus) -> some View {
-        // The snapshot's next reset is the LEAD's soonest reset — the kit scoped it that way
-        // — so it is the right clock for this tile, and never a countdown.
-        let resetAt = entry.snapshot.nextResetAt
+        // The snapshot's next reset is the LEAD's soonest FUTURE reset. When the row this
+        // tile actually displays has a reset that has already passed, that row's instant is
+        // the truthful one: the reading above it predates its own rollover, and naming some
+        // other, still-future window's reset beside it — "0 %, Resets Friday" — is exactly
+        // the pairing that made a pre-reset reading look explained. resetLine renders the
+        // passed instant as "Reset · refresh pending"; nothing synthesises post-reset
+        // availability from clock arithmetic.
+        let shownReset: Date? = {
+            if let rowReset = focus.row?.resetAt, rowReset <= entry.date { return rowReset }
+            return entry.snapshot.nextResetAt
+        }()
         // Aged to THIS entry's date, not to the moment the app wrote the snapshot. A timeline
         // holds several entries built from one snapshot, so a frozen verdict means a tile that
         // was healthy at write time still reads healthy hours later with nothing behind it.
@@ -473,13 +630,13 @@ struct UsageWidgetSmallView: View {
         return VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: focus.account.title)
                 .font(.headline)
-                .foregroundColor(UsageColors.textPrimary)
+                .foregroundColor(ink.primary)
                 .lineLimit(1)
 
             if let row = focus.row {
                 Text(verbatim: row.label)
                     .font(.caption)
-                    .foregroundColor(UsageColors.textSecondary)
+                    .foregroundColor(ink.secondary)
                     .lineLimit(1)
             }
 
@@ -493,20 +650,25 @@ struct UsageWidgetSmallView: View {
             QuotaBar(
                 remainingPercent: focus.row?.remainingPercent,
                 severity: severity,
-                context: focus.row.map { "\(focus.account.title), \($0.label)" } ?? focus.account.title
+                context: focus.row.map { "\(focus.account.title), \($0.label)" } ?? focus.account.title,
+                ink: ink
             )
 
-            if let reset = GlanceText.resetLine(resetAt: resetAt, now: entry.date) {
+            if let reset = GlanceText.resetLine(resetAt: shownReset, now: entry.date) {
                 Text(verbatim: reset)
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textSecondary)
+                    .foregroundColor(ink.secondary)
                     .lineLimit(1)
             }
 
-            if let asOf = GlanceText.asOfLine(updatedAt: entry.snapshot.updatedAt, now: entry.date) {
+            // This tile shows ONE account's numbers; the timestamp must belong to that
+            // account. The snapshot-level maximum is the newest account's fetch and can
+            // freshen a lead that was read an hour earlier — date the number being shown.
+            if let asOf = GlanceText.asOfLine(
+                updatedAt: focus.account.fetchedAt ?? entry.snapshot.updatedAt, now: entry.date) {
                 Text(verbatim: asOf)
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textTertiary)
+                    .foregroundColor(ink.tertiary)
                     .lineLimit(1)
             }
         }
@@ -529,6 +691,7 @@ struct UsageWidgetMediumView: View {
 
     let entry: UsageEntry
     var transparent: Bool = false
+    var ink: WidgetInk = .light
 
     /// The kit's order, untouched. See `WidgetFocus` for what re-ranking here cost.
     private var rankedAccounts: [GlanceAccount] {
@@ -557,7 +720,7 @@ struct UsageWidgetMediumView: View {
     var body: some View {
         Group {
             if entry.snapshot.accounts.isEmpty {
-                WidgetEmptyStateView()
+                WidgetEmptyStateView(reason: entry.unavailable ?? .noAccounts)
             } else {
                 content
             }
@@ -568,14 +731,15 @@ struct UsageWidgetMediumView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 5) {
-            WidgetHeader(entry: entry)
+            WidgetHeader(entry: entry, ink: ink)
 
             ForEach(visibleAccounts) { account in
                 MediumAccountRow(
                     account: account,
                     row: row(for: account),
                     now: entry.date,
-                    staleAfter: entry.snapshot.staleAfter)
+                    staleAfter: entry.snapshot.staleAfter,
+                    ink: ink)
             }
 
             if hiddenCount > 0 {
@@ -583,10 +747,10 @@ struct UsageWidgetMediumView: View {
                 // being shown three unreadable half-rows.
                 Text(verbatim: "+\(hiddenCount) more")
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textTertiary)
+                    .foregroundColor(ink.tertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(UsageColors.surface))
+                    .background(Capsule().fill(ink.chip))
             }
         }
         .padding(12)
@@ -670,11 +834,13 @@ private struct UsageRing: View {
     /// CGFloat, so the name is ambiguous on the Linux typecheck. Swift converts between the two
     /// implicitly (SE-0307), so `StrokeStyle` takes it unchanged on the real SDK.
     let lineWidth: Double
+    var ink: WidgetInk = .light
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(UsageColors.progressTrack, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .stroke(ink.track, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .modifier(AccentedTrackYield())
             if let remainingPercent {
                 // Unknown draws the track alone. A full ring for "the provider did not say"
                 // would be an all-clear nothing reported, which is the one direction a quota
@@ -707,7 +873,7 @@ struct UsageRingWidgetView: View {
             if let focus = WidgetFocus(snapshot: entry.snapshot) {
                 content(for: focus)
             } else {
-                WidgetEmptyStateView()
+                WidgetEmptyStateView(reason: entry.unavailable ?? .noAccounts)
             }
         }
         // Transparent: the wallpaper shows through the system's widget material. A ring reads
@@ -719,6 +885,12 @@ struct UsageRingWidgetView: View {
     private func content(for focus: WidgetFocus) -> some View {
         let aged = focus.account.severity(at: entry.date, staleAfter: entry.snapshot.staleAfter)
         let severity = aged == .healthy ? (focus.row?.severity ?? aged) : aged
+        // Same rule as the small tile: a row whose own reset has passed shows that instant,
+        // not some other window's still-future one. See `UsageWidgetSmallView`.
+        let shownReset: Date? = {
+            if let rowReset = focus.row?.resetAt, rowReset <= entry.date { return rowReset }
+            return entry.snapshot.nextResetAt
+        }()
         return VStack(spacing: 6) {
             ZStack {
                 UsageRing(
@@ -748,7 +920,7 @@ struct UsageRingWidgetView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundColor(UsageColors.textPrimary)
                 .lineLimit(1)
-            if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
+            if let reset = GlanceText.resetLine(resetAt: shownReset, now: entry.date) {
                 Text(verbatim: reset)
                     .font(.caption2)
                     .foregroundColor(UsageColors.textSecondary)
@@ -821,6 +993,7 @@ struct UsageWidgetLargeView: View {
 
     let entry: UsageEntry
     let transparent: Bool
+    var ink: WidgetInk = .light
 
     /// Eight at regular sizes, five once the type is large enough that eight would clip.
     private var visibleLimit: Int { dynamicTypeSize >= .xLarge ? 5 : 8 }
@@ -842,7 +1015,7 @@ struct UsageWidgetLargeView: View {
     var body: some View {
         Group {
             if entry.snapshot.accounts.isEmpty {
-                WidgetEmptyStateView()
+                WidgetEmptyStateView(reason: entry.unavailable ?? .noAccounts)
             } else {
                 content
             }
@@ -853,23 +1026,24 @@ struct UsageWidgetLargeView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
-            WidgetHeader(entry: entry)
+            WidgetHeader(entry: entry, ink: ink)
 
             ForEach(visibleAccounts) { account in
                 MediumAccountRow(
                     account: account,
                     row: row(for: account),
                     now: entry.date,
-                    staleAfter: entry.snapshot.staleAfter)
+                    staleAfter: entry.snapshot.staleAfter,
+                    ink: ink)
             }
 
             if hiddenCount > 0 {
                 Text(verbatim: "+\(hiddenCount) more")
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textTertiary)
+                    .foregroundColor(ink.tertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(UsageColors.surface))
+                    .background(Capsule().fill(ink.chip))
             }
 
             Spacer(minLength: 0)
@@ -884,20 +1058,24 @@ struct UsageWidgetLargeView: View {
 private struct WidgetHeader: View {
 
     let entry: UsageEntry
+    var ink: WidgetInk = .light
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let asOf = GlanceText.asOfLine(updatedAt: entry.snapshot.updatedAt, now: entry.date) {
+            // The maximum fetch instant across the accounts shown. "As of" beside one
+            // account's row means THAT account's fetch — a newer hidden account must not
+            // freshen an older visible one, so the aggregate names itself truthfully.
+            if let asOf = GlanceText.asOfLine(updatedAt: entry.snapshot.updatedAt, now: entry.date, label: "Latest update") {
                 Text(verbatim: asOf)
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textTertiary)
+                    .foregroundColor(ink.tertiary)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
             if let reset = GlanceText.resetLine(resetAt: entry.snapshot.nextResetAt, now: entry.date) {
                 Text(verbatim: reset)
                     .font(.caption2)
-                    .foregroundColor(UsageColors.textSecondary)
+                    .foregroundColor(ink.secondary)
                     .lineLimit(1)
             }
             if let refresh = DeepLink.refresh {
@@ -908,7 +1086,7 @@ private struct WidgetHeader: View {
                 Link(destination: refresh) {
                     Image(systemName: "arrow.clockwise")
                         .font(.caption2.weight(.semibold))
-                        .foregroundColor(UsageColors.textSecondary)
+                        .foregroundColor(ink.secondary)
                 }
                 .accessibilityLabel("Refresh in the app")
             }
@@ -926,27 +1104,32 @@ struct UsageWidgetEntryView: View {
     /// setting, because a widget's look is chosen per placed tile and two tiles of the same
     /// kind may legitimately differ.
     var transparent: Bool = false
+    /// The ink to write with. Opaque tiles pair with the light palette; a transparent tile
+    /// whose tone is configured dark gets the dark one. Defaults to light, which is what the
+    /// legacy widgets — with no tone configuration — have always written.
+    var ink: WidgetInk = .light
 
     var body: some View {
         switch family {
         case .systemLarge:
-            UsageWidgetLargeView(entry: entry, transparent: transparent)
+            UsageWidgetLargeView(entry: entry, transparent: transparent, ink: ink)
         case .systemMedium:
-            UsageWidgetMediumView(entry: entry, transparent: transparent)
+            UsageWidgetMediumView(entry: entry, transparent: transparent, ink: ink)
         case .accessoryRectangular:
             UsageAccessoryRectangularView(entry: entry)
         default:
-            UsageWidgetSmallView(entry: entry, transparent: transparent)
+            UsageWidgetSmallView(entry: entry, transparent: transparent, ink: ink)
         }
     }
 }
 
 // MARK: - Widget
 
-private extension View {
+extension View {
     /// Tile background that survives both generations of widget chrome: iOS 17
     /// requires `containerBackground` for full-bleed colour, and iOS 16 never
-    /// heard of it. One wrapper keeps the call sites honest on either.
+    /// heard of it. One wrapper keeps the call sites honest on either. Internal,
+    /// because the configured widgets share it.
     @ViewBuilder
     func widgetBackground(_ color: Color?) -> some View {
         if #available(iOS 17.0, *) {

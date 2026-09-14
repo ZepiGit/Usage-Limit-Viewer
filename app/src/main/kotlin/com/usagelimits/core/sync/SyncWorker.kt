@@ -36,6 +36,10 @@ class SyncWorker(
 
         container.publishAfterSync(applicationContext)
 
+        // New cache, new presentation boundaries: the repaint that flips a tile to "stale" or
+        // crosses a reset is scheduled from the freshly written cache, without the network.
+        com.usagelimits.widget.WidgetPresentationWorker.scheduleNext(applicationContext)
+
         return if (outcomes.isEmpty() || outcomes.any { it.success }) {
             Result.success()
         } else {
