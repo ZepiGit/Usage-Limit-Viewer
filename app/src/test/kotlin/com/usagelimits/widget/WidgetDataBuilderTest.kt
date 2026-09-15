@@ -10,6 +10,7 @@ import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.model.WidgetScope
 import com.usagelimits.core.model.WindowCategory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -310,6 +311,47 @@ class WidgetDataBuilderTest {
     fun `an unmatched account id yields the empty snapshot`() {
         val snapshot = WidgetDataBuilder.build(all, now, WidgetScope.ACCOUNT, "missing", null)
         assertEquals(0, snapshot.accountCount)
+    }
+
+    @Test
+    fun `a window whose reset passed since the fetch is marked, and one fetched after it is not`() {
+        // The cached 60 % describes a five-hour window the provider has already closed. Until
+        // a fetch confirms the new one, the row must not be drawn in a colour that vouches for
+        // it — nor as a full ring nobody has reported.
+        val overtaken = AccountUsage(
+            account = account("a", ProviderId.CODEX),
+            snapshot = UsageSnapshot(
+                accountId = "a",
+                fetchedAt = now - 10 * 60_000,
+                status = SnapshotStatus.OK,
+                windows = listOf(
+                    UsageWindow("5h", "5h limit", WindowCategory.FIVE_HOUR, 40.0, 18_000, now - 60_000, false),
+                    UsageWindow("wk", "Weekly", WindowCategory.WEEKLY, 40.0, 604_800, now + 86_400_000, false),
+                ),
+            ),
+        )
+        val rows = WidgetDataBuilder.build(listOf(overtaken), now, WidgetScope.ALL_ACCOUNTS, null, null)
+            .accounts.single().rows.associateBy { it.category }
+
+        assertTrue(rows.getValue(WindowCategory.FIVE_HOUR).resetElapsed)
+        assertEquals(Severity.STALE, rows.getValue(WindowCategory.FIVE_HOUR).validity)
+        // The weekly window has not reset; its number stands on its own.
+        assertFalse(rows.getValue(WindowCategory.WEEKLY).resetElapsed)
+        assertEquals(null, rows.getValue(WindowCategory.WEEKLY).validity)
+
+        // Fetched after the reset: the provider already described the new window.
+        val confirmed = overtaken.copy(snapshot = overtaken.snapshot!!.copy(fetchedAt = now - 30_000))
+        val confirmedRow = WidgetDataBuilder.build(listOf(confirmed), now, WidgetScope.ALL_ACCOUNTS, null, null)
+            .accounts.single().rows.first { it.category == WindowCategory.FIVE_HOUR }
+        assertFalse(confirmedRow.resetElapsed)
+    }
+
+    @Test
+    fun `reset elapsed is the same rule at the boundary as the sync decision`() {
+        assertFalse(WidgetDataBuilder.resetElapsedAt(resetAt = null, fetchedAt = now - 1, nowMs = now))
+        assertFalse(WidgetDataBuilder.resetElapsedAt(resetAt = now + 1, fetchedAt = now - 1, nowMs = now))
+        assertTrue(WidgetDataBuilder.resetElapsedAt(resetAt = now, fetchedAt = now - 1, nowMs = now))
+        assertFalse(WidgetDataBuilder.resetElapsedAt(resetAt = now, fetchedAt = now, nowMs = now))
     }
 
     @Test

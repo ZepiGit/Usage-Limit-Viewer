@@ -6,8 +6,10 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
 /** User-configurable preferences. */
@@ -71,6 +73,22 @@ data class AppSettings(
     }
 }
 
+/**
+ * When the background machinery last moved, for the Settings diagnostics.
+ *
+ * Timestamps only. Kept apart from [AppSettings] because they change on every sync and every
+ * widget repaint, and the widgets observe [AppSettings]: folding them in would have every
+ * repaint re-emit into the very flow that drives the repaint.
+ */
+data class SyncDiagnostics(
+    /** When a sync pass last started, whether or not it succeeded. */
+    val lastSyncAttemptAt: Long? = null,
+    /** When a sync pass last ran to completion, successful or not. */
+    val lastSyncFinishedAt: Long? = null,
+    /** When the widgets were last asked to repaint from the cache. */
+    val lastWidgetRefreshAt: Long? = null,
+)
+
 private val Context.dataStore by preferencesDataStore(name = "usage_limits_settings")
 
 /**
@@ -84,7 +102,18 @@ class SettingsStore(context: Context) {
 
     private val dataStore = context.applicationContext.dataStore
 
-    val settings: Flow<AppSettings> = dataStore.data.map { it.toSettings() }
+    // Distinct, because the diagnostics below share this file: a timestamp written after
+    // every sync would otherwise re-emit an unchanged AppSettings into every collector,
+    // including the widgets' own observe flow.
+    val settings: Flow<AppSettings> = dataStore.data.map { it.toSettings() }.distinctUntilChanged()
+
+    val diagnostics: Flow<SyncDiagnostics> = dataStore.data.map { it.toDiagnostics() }.distinctUntilChanged()
+
+    suspend fun recordSyncAttempt(atMs: Long) = edit { it[Keys.LAST_SYNC_ATTEMPT] = atMs }
+
+    suspend fun recordSyncFinished(atMs: Long) = edit { it[Keys.LAST_SYNC_FINISHED] = atMs }
+
+    suspend fun recordWidgetRefresh(atMs: Long) = edit { it[Keys.LAST_WIDGET_REFRESH] = atMs }
 
     suspend fun setProviderIcon(providerId: String, iconId: String) = edit { prefs ->
         val previous = prefs[Keys.PROVIDER_ICONS].orEmpty()
@@ -189,6 +218,12 @@ internal fun Preferences.toSettings() = AppSettings(
     providerIcons = this[Keys.PROVIDER_ICONS].orEmpty().filter { ":" in it }.associate { it.substringBefore(':') to it.substringAfter(':') },
 )
 
+internal fun Preferences.toDiagnostics() = SyncDiagnostics(
+    lastSyncAttemptAt = this[Keys.LAST_SYNC_ATTEMPT],
+    lastSyncFinishedAt = this[Keys.LAST_SYNC_FINISHED],
+    lastWidgetRefreshAt = this[Keys.LAST_WIDGET_REFRESH],
+)
+
 /**
  * The on-disk key names.
  *
@@ -217,4 +252,7 @@ private object Keys {
     val SHOW_TIER = booleanPreferencesKey("show_subscription_tier")
     val SHOW_RENEWAL = booleanPreferencesKey("show_renewal_time")
     val MUTED_ACCOUNTS = stringSetPreferencesKey("muted_account_ids")
+    val LAST_SYNC_ATTEMPT = longPreferencesKey("last_sync_attempt_at")
+    val LAST_SYNC_FINISHED = longPreferencesKey("last_sync_finished_at")
+    val LAST_WIDGET_REFRESH = longPreferencesKey("last_widget_refresh_at")
 }

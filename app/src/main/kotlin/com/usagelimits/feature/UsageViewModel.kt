@@ -11,6 +11,7 @@ import com.usagelimits.core.model.ProviderId
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.model.UsageWindow
 import com.usagelimits.core.settings.AppSettings
+import com.usagelimits.core.settings.SyncDiagnostics
 import com.usagelimits.core.sync.SyncWorker
 import com.usagelimits.core.sync.userMessage
 import com.usagelimits.core.network.ProviderException
@@ -50,6 +51,8 @@ data class UsageUiState(
     val settings: AppSettings = AppSettings(),
     val isRefreshing: Boolean = false,
     val message: String? = null,
+    /** When the background machinery last moved — the Settings diagnostics. */
+    val diagnostics: SyncDiagnostics = SyncDiagnostics(),
 ) {
     val accountCount: Int get() = accounts.size
 
@@ -162,8 +165,9 @@ class UsageViewModel(
         container.settingsStore.settings,
         refreshing,
         transientMessage,
-    ) { accounts, settings, isRefreshing, message ->
-        UsageUiState(accounts, settings, isRefreshing, message)
+        container.settingsStore.diagnostics,
+    ) { accounts, settings, isRefreshing, message, diagnostics ->
+        UsageUiState(accounts, settings, isRefreshing, message, diagnostics)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UsageUiState())
 
     private val _resetCreditInFlight = MutableStateFlow<String?>(null)

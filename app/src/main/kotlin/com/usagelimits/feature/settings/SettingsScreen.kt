@@ -20,12 +20,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.usagelimits.core.model.Severity
 import com.usagelimits.core.settings.AppSettings
+import com.usagelimits.core.sync.BackgroundRestrictions
+import com.usagelimits.core.time.Countdown
 import com.usagelimits.feature.UsageUiState
 import com.usagelimits.ui.components.SectionHeader
 import com.usagelimits.ui.components.ToggleRow
@@ -190,13 +194,12 @@ fun SettingsScreen(
 
         item { SectionHeader("Diagnostics") }
         item {
+            val now = System.currentTimeMillis()
             UsageCard {
                 InfoRow("Accounts", state.accountCount.toString())
-                InfoRow(
-                    "Last successful sync",
-                    state.lastUpdated?.let { com.usagelimits.core.time.Countdown.freshnessLabel(it, System.currentTimeMillis()) }
-                        ?: "Never",
-                )
+                InfoRow("Last successful sync", state.lastUpdated.ago(now))
+                InfoRow("Last sync attempt", state.diagnostics.lastSyncAttemptAt.ago(now))
+                InfoRow("Widgets last repainted", state.diagnostics.lastWidgetRefreshAt.ago(now))
                 InfoRow("Sync interval", "${settings.syncIntervalMinutes} min")
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -207,6 +210,89 @@ fun SettingsScreen(
                 )
             }
         }
+        item { BackgroundRefreshCard() }
+    }
+}
+
+/** "37m ago" for a timestamp the diagnostics show, "Never" for none. */
+private fun Long?.ago(nowMs: Long): String =
+    this?.let { Countdown.freshnessLabel(it, nowMs).removePrefix("Updated ") } ?: "Never"
+
+/**
+ * What the device lets this app do in the background, and where to change it.
+ *
+ * The widgets can only be as current as the background refresh the device allows. A phone
+ * that has put the app in a rare standby bucket or restricted its background use defers the
+ * refresh by hours, and the one place that could say so was silent: the app showed fresh
+ * numbers whenever it was opened, the home screen showed the day the widget was placed, and
+ * nothing named the cause. This card does.
+ */
+@Composable
+private fun BackgroundRefreshCard() {
+    val context = LocalContext.current
+    val restrictions = remember { BackgroundRestrictions.read(context) }
+    UsageCard {
+        Text(
+            text = "Background refresh",
+            style = MaterialTheme.typography.titleMedium,
+            color = UsageColors.TextPrimary,
+        )
+        Text(
+            text = "The widgets show what the last background refresh fetched. Android decides " +
+                "how often that runs; these are its current settings for this app.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = UsageColors.TextSecondary,
+        )
+        Spacer(Modifier.height(6.dp))
+        InfoRow(
+            "Background use",
+            if (restrictions.backgroundRestricted) "Restricted" else "Allowed",
+        )
+        InfoRow(
+            "Battery optimisation",
+            if (restrictions.batteryOptimised) "On (refresh may be deferred)" else "Off",
+        )
+        restrictions.standbyBucket?.let { bucket ->
+            InfoRow("Standby bucket", bucket.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase))
+        }
+        if (restrictions.severe) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Background refresh is being held back on this device, so widgets can " +
+                    "fall hours behind. Allowing background use for Usage Limits fixes it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = UsageColors.Amber,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "Open battery settings",
+            style = MaterialTheme.typography.labelLarge,
+            color = UsageColors.Background,
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(UsageColors.Terracotta)
+                .clickable { openBatterySettings(context) }
+                .padding(horizontal = 18.dp, vertical = 9.dp),
+        )
+    }
+}
+
+/**
+ * The system's battery-optimisation list, falling back to this app's details page.
+ *
+ * The list screen needs no permission. The per-app exemption dialog does, and asking for it
+ * is a Play policy matter for an app whose background work is a quota check.
+ */
+private fun openBatterySettings(context: android.content.Context) {
+    val list = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    val details = android.content.Intent(
+        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        android.net.Uri.fromParts("package", context.packageName, null),
+    )
+    for (intent in listOf(list, details)) {
+        val opened = runCatching { context.startActivity(intent) }.isSuccess
+        if (opened) return
     }
 }
 

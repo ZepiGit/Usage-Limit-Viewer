@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters
 import androidx.work.CoroutineWorker
 import com.usagelimits.UsageLimitsApp
 import com.usagelimits.core.model.Severity
+import com.usagelimits.core.sync.SyncWorker
 import kotlinx.coroutines.flow.first
 
 /**
@@ -22,6 +23,12 @@ import kotlinx.coroutines.flow.first
  * only the local cache, repaints, and schedules the next boundary. No network constraint, no
  * credentials, no polling loop, no exact alarm — WorkManager may defer it, which is why the
  * views also age every timestamp themselves when they do render.
+ *
+ * A reset boundary is the one case a cache-only repaint cannot get right: the number the
+ * provider now reports is not in the cache. So after repainting — the rows concerned now
+ * read "reset due" rather than a spent figure in a confident colour — this asks for a sync,
+ * through the same aged-cache check the system's widget tick uses, so the confirmation
+ * arrives as soon as the network allows.
  */
 class WidgetPresentationWorker(
     context: Context,
@@ -30,8 +37,11 @@ class WidgetPresentationWorker(
 
     override suspend fun doWork(): Result {
         WidgetUpdater.refreshAll(applicationContext)
-        // One boundary repainted; the next one needs its own reservation.
-        scheduleNext(applicationContext)
+        SyncWorker.syncIfCacheAged(applicationContext)
+        // One boundary repainted; the next one needs its own reservation. APPEND rather than
+        // REPLACE from inside our own run: REPLACE cancels the work under this name, which is
+        // this very worker, mid-flight.
+        scheduleNext(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE)
         return Result.success()
     }
 
@@ -61,7 +71,7 @@ class WidgetPresentationWorker(
          * it. Coalesced under one unique name, so widgets, syncs and config saves all agree on
          * a single next wake; REPLACE keeps the soonest request rather than stacking them.
          */
-        suspend fun scheduleNext(context: Context) {
+        suspend fun scheduleNext(context: Context, policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE) {
             val app = context.applicationContext as? UsageLimitsApp ?: return
             val container = app.container
             val accounts = container.repository.observeAccountUsage().first()
@@ -87,7 +97,7 @@ class WidgetPresentationWorker(
             val delay = (boundary - now).coerceIn(MIN_DELAY_MS, MAX_DELAY_MS)
             workManager.enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
+                policy,
                 OneTimeWorkRequestBuilder<WidgetPresentationWorker>()
                     .setInitialDelay(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
                     .build(),

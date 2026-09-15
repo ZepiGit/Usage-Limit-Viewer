@@ -169,6 +169,43 @@ review, not by the compiler. Making it airtight would mean handing `WidgetUpdate
 read-only interface (`suspend fun accountUsageOnce()` plus the config DAO) instead of the whole
 container; that is the right change if this package ever grows.
 
+## How a placed widget gets updated
+
+Three paths, deliberately independent of one another, so that no single deferral leaves a
+tile frozen:
+
+1. **After a sync moves the cache** (`WidgetUpdater.refreshAll`, called from
+   `publishAfterSync` and every foreground action). Immediate, but only as reliable as the
+   app's own WorkManager queue: the periodic `SyncWorker` runs when Android lets it, and each
+   Glance repaint is itself a WorkManager job (`SessionWorker`) that is lost if the process
+   dies before it starts.
+2. **On the system's clock.** Every provider XML declares `updatePeriodMillis="1800000"`, the
+   floor the framework honours. The launcher then asks the receiver for a render every thirty
+   minutes whether or not the app has run — inside Doze maintenance windows, and after the
+   process was killed. `UsageWidgetReceiver.onUpdate` repaints from the cache and, when the
+   cache is older than the sync interval or a reset has passed since it was fetched
+   (`SyncWorker.cacheNeedsSync`), enqueues a fetch. Placement and resize fire the same
+   callback, so the fetch is conditional: a widget dropped a minute after a sync costs nothing.
+3. **At a presentation boundary** (`WidgetPresentationWorker`): a cache-only repaint when a
+   snapshot crosses its staleness threshold or a reset instant arrives, plus the same
+   conditional fetch, because a reset is the one boundary a repaint cannot get right on its own.
+
+Before the second path existed, the ring widgets showed the numbers from the moment they were
+placed for as long as the app's periodic sync was deferred — including after every limit had
+reset. The reset case compounds it: a cache-only repaint at the reset instant can only redraw
+the spent window's figure, so `WidgetRow.resetElapsed` now marks a row whose reset passed
+after its fetch, and every surface draws such a row in the stale treatment beside "Reset due"
+until a fetch confirms the new window. Neither the old number in a confident colour nor an
+unreported full ring is claimed.
+
+`refreshAll` also stops failing silently. Each widget is refreshed on its own, cancellation
+is rethrown rather than swallowed, other failures are logged, and when Glance's stored
+receiver-to-class map knows no instances although the framework has some placed — cleared app
+data, or minified class names that moved between release builds, now prevented by a
+`-keepnames` rule — the receiver is sent the framework's own update intent, which rewrites the
+map and renders in one step. The Settings diagnostics show when the last sync ran and when
+the widgets were last repainted, alongside the device's own background restrictions.
+
 ## Why the refresh button enqueues work instead of fetching
 
 `RefreshWidgetAction` is an `ActionCallback` whose entire body is `SyncWorker.syncNow(context)`.
@@ -262,10 +299,10 @@ The reducer is size-agnostic, so a new size is mostly declaration:
    `description` string, and `initialLayout="@layout/glance_default_loading_layout"`.
 4. Add the description to `res/values/strings.xml` and register the receiver in
    `AndroidManifest.xml` with the `APPWIDGET_UPDATE` intent filter and the provider metadata.
-5. **Add the new widget class to `WidgetUpdater.refreshAll`** — it names each widget class
-   explicitly, so a size omitted there will render once when placed and then never update
-   again. This is the one step that fails silently, so it is the one to check first when a new
-   widget looks stale.
+5. **Add the new widget to `WidgetUpdater.allWidgets`**, paired with its receiver, and make
+   the receiver extend `UsageWidgetReceiver`. Declare `updatePeriodMillis="1800000"` in the
+   XML. `WidgetRefreshCoverageTest` reads the manifest and fails on any of the three being
+   missing, because each is a step that otherwise fails silently.
 
 Nothing else needs to change: the configuration table is keyed by `appWidgetId` and is
 class-agnostic, and `loadSnapshot` works for any `GlanceId`.

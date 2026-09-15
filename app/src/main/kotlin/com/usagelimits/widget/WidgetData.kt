@@ -15,7 +15,20 @@ data class WidgetRow(
     val remainingPercent: Double?,
     val resetAt: Long?,
     val severity: Severity,
-)
+    /**
+     * The window's reset instant has passed since this snapshot was fetched.
+     *
+     * The cached figure is then not old but WRONG: the provider has opened a fresh window and
+     * this row still describes the spent one. Surfaces draw such a row in the stale treatment
+     * and say "reset due" until a fetch confirms the new number — a full ring is not claimed
+     * either, because nothing has reported one. A snapshot fetched after the reset is
+     * unaffected: the provider had already described the new window by then.
+     */
+    val resetElapsed: Boolean = false,
+) {
+    /** The validity a surface should colour this row with, when its account's own is null. */
+    val validity: Severity? get() = if (resetElapsed) Severity.STALE else null
+}
 
 /** One account block in the larger widget. */
 data class WidgetAccount(
@@ -207,10 +220,10 @@ object WidgetDataBuilder {
      * so treating it as the largest possible number made the one window the app could not read
      * the last one it would ever show.
      */
-    private fun headline(windows: List<UsageWindow>, category: WindowCategory): WidgetRow? =
+    private fun headline(windows: List<UsageWindow>, category: WindowCategory, fetchedAt: Long, nowMs: Long): WidgetRow? =
         windows.filter { it.category == category }
             .minByOrNull { it.remainingPercent ?: -1.0 }
-            ?.toRow()
+            ?.toRow(fetchedAt, nowMs)
 
     /**
      * The one long-horizon row, chosen by how much it needs attention rather than by category.
@@ -230,7 +243,7 @@ object WidgetDataBuilder {
      * OTHER, whose duration no provider documents, a last resort among equals rather than a
      * category that can never appear.
      */
-    private fun longHeadline(windows: List<UsageWindow>): WidgetRow? =
+    private fun longHeadline(windows: List<UsageWindow>, fetchedAt: Long, nowMs: Long): WidgetRow? =
         windows.filter { it.category != WindowCategory.FIVE_HOUR }
             .minWithOrNull(
                 compareBy(
@@ -239,7 +252,7 @@ object WidgetDataBuilder {
                     { longCategoryRank(it.category) },
                 )
             )
-            ?.toRow()
+            ?.toRow(fetchedAt, nowMs)
 
     private fun longCategoryRank(category: WindowCategory): Int = when (category) {
         WindowCategory.WEEKLY -> 0
@@ -249,12 +262,13 @@ object WidgetDataBuilder {
 
     private fun AccountUsage.toWidgetAccount(nowMs: Long, staleAfterMs: Long, providerIcons: Map<String, String>): WidgetAccount {
         val windows = snapshot?.windows.orEmpty()
+        val fetchedAt = snapshot?.fetchedAt ?: Long.MAX_VALUE
 
         // Show the two horizons that matter, not every window an account reports — a widget
         // has room for about two rows before it stops being glanceable.
         val rows = listOfNotNull(
-            headline(windows, WindowCategory.FIVE_HOUR),
-            longHeadline(windows),
+            headline(windows, WindowCategory.FIVE_HOUR, fetchedAt, nowMs),
+            longHeadline(windows, fetchedAt, nowMs),
         )
 
         return WidgetAccount(
@@ -271,7 +285,7 @@ object WidgetDataBuilder {
         )
     }
 
-    private fun UsageWindow.toRow() = WidgetRow(
+    private fun UsageWindow.toRow(fetchedAt: Long, nowMs: Long) = WidgetRow(
         category = category,
         label = when (category) {
             WindowCategory.FIVE_HOUR -> "5h limit"
@@ -282,5 +296,14 @@ object WidgetDataBuilder {
         remainingPercent = remainingPercent,
         resetAt = resetAt,
         severity = severity,
+        resetElapsed = resetElapsedAt(resetAt, fetchedAt, nowMs),
     )
+
+    /**
+     * Whether a window's reset has come and gone since its snapshot was taken. Pure, and the
+     * same rule `SyncWorker.cacheNeedsSync` fetches on, so the tile that says "reset due" and
+     * the sync that answers it cannot disagree about when that is.
+     */
+    fun resetElapsedAt(resetAt: Long?, fetchedAt: Long, nowMs: Long): Boolean =
+        resetAt != null && resetAt <= nowMs && fetchedAt < resetAt
 }

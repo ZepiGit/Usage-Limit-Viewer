@@ -3,6 +3,11 @@
   1x4: a single glanceable row of headline numbers.
   minResize lets a user shrink it to 2 cells on a dense phone grid, while the target cell
   sizing keeps it a full-width row by default on both phone and unfolded foldable grids.
+
+  updatePeriodMillis is the one update path the app does not own: the system asks for a
+  render on its own clock (30 min is the floor it honours) even when the app's own sync has
+  been deferred or its process killed. UsageWidgetReceiver turns that tick into a sync when
+  the cache has aged. WidgetRefreshCoverageTest fails if a provider drops it.
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="180dp"
@@ -15,6 +20,7 @@
     android:widgetCategory="home_screen"
     android:description="@string/widget_compact_description"
     android:previewImage="@drawable/widget_summary_preview"
+    android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:configure="com.usagelimits.widget.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

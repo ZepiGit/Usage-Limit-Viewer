@@ -224,7 +224,18 @@ out both orderings and why they are deliberately opposite.
 minutes, and enqueues a one-shot pass on app start, on `MainActivity.onResume`, and from the
 widget's refresh button. That work is unique with `ExistingWorkPolicy.KEEP`, so several
 triggers in a row collapse into one pass, and every request carries a
-`NetworkType.CONNECTED` constraint.
+`NetworkType.CONNECTED` constraint. The one-shot is expedited on Android 12 and later, so a
+refresh the user just asked for does not wait for a Doze window. The system's periodic widget
+tick and the presentation-boundary repaint enqueue the same one-shot with an `onlyIfAged`
+flag: the worker fetches only when the cache is older than the interval or a reset has passed
+since it was taken (`SyncWorker.cacheNeedsSync`), so a widget placed a minute after a sync
+costs no provider round trip.
+
+Only the periodic pass may return `Result.retry()`, and it backs off linearly by ten minutes.
+A one-shot that retried used to sit in WorkManager's exponential backoff queue under the
+unique name, and `KEEP` then dropped every later trigger — app start, `onResume`, the refresh
+button — for as long as the backoff lasted. A one-shot in which every account failed now
+returns failure; the errors are already recorded per account, and the next trigger runs.
 
 The foreground actions — the refresh button, a single account's refresh button, the sync that
 follows a login, and the re-sync after a reset credit is spent — call `SyncEngine` directly

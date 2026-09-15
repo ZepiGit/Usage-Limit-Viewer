@@ -31,10 +31,23 @@
 -renamesourcefileattribute SourceFile
 
 # ---------------------------------------------------------------------------------------------
+# Glance widget classes keep their names
+#
+# GlanceAppWidgetManager persists a map from each manifest receiver to the CANONICAL CLASS NAME
+# of the GlanceAppWidget it renders, and `updateAll` looks the placed widgets up by that name.
+# Glance's own consumer rules keep ActionCallback subclasses only. Without this rule the names
+# are minified, and two builds need not minify them identically — after an update the stored
+# map names classes that no longer exist, `updateAll` finds nothing to update, and every placed
+# widget stays on its old numbers until the receiver next handles a system broadcast. Names
+# only; the classes themselves are reachable and need no keep.
+-keepnames class * extends androidx.glance.appwidget.GlanceAppWidget
+
+# ---------------------------------------------------------------------------------------------
 # Deliberately absent
 #
 # Room, WorkManager, Glance and OkHttp all ship consumer rules that AGP applies automatically —
 # Room's generated `_Impl` is reachable from the database class, WorkManager's rules keep the
-# worker constructors its default factory instantiates reflectively, Glance's providers are
-# declared in the manifest, and OkHttp has carried its own rules since 4.x. Adding keeps for them
+# worker constructors its default factory instantiates reflectively, Glance's receivers are
+# declared in the manifest (its widget classes are the one exception, above), and OkHttp has
+# carried its own rules since 4.x. Adding keeps for them
 # here would be cargo cult: untested, unnecessary, and impossible to justify removing later.
