@@ -2,6 +2,7 @@ package com.usagelimits.core.settings
 
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import org.junit.Assert.assertEquals
@@ -91,5 +92,19 @@ class SettingsMappingTest {
             AppSettings.MIN_SYNC_INTERVAL_MINUTES,
             settings.syncIntervalMinutes,
         )
+    }
+
+    @Test
+    fun `diagnostics timestamps live beside the settings without changing them`() {
+        // They share the file, so a sync writing its timestamp must not alter what
+        // `toSettings` reads — the widgets observe that mapping.
+        val prefs = mutablePreferencesOf(
+            longPreferencesKey("last_sync_attempt_at") to 10L,
+            longPreferencesKey("last_sync_finished_at") to 20L,
+            longPreferencesKey("last_widget_refresh_at") to 30L,
+        )
+        assertEquals(SyncDiagnostics(10L, 20L, 30L), prefs.toDiagnostics())
+        assertEquals(AppSettings(), prefs.toSettings())
+        assertEquals(SyncDiagnostics(), mutablePreferencesOf().toDiagnostics())
     }
 }

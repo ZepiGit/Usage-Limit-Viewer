@@ -176,6 +176,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.turbine)
     // Compose UI tests, run on the JVM under Robolectric. This environment has no KVM, so an
     // emulator is not available; Robolectric is what makes the screens testable at all, and an

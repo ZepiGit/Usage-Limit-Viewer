@@ -108,6 +108,9 @@ private fun RingMark(account: WidgetAccount, size: androidx.compose.ui.unit.Dp) 
     val accent = when {
         account.requiresReauthentication -> WidgetStyle.Red
         account.severity == Severity.ERROR || account.severity == Severity.STALE -> WidgetStyle.Slate
+        // A reset has passed since the fetch: the arc is the spent window's, drawn in the
+        // stale treatment beside "Reset due" rather than in a colour that vouches for it.
+        row?.resetElapsed == true -> WidgetStyle.Slate
         row?.severity == Severity.EXHAUSTED -> WidgetStyle.Red
         row?.severity == Severity.LOW || row?.severity == Severity.MEDIUM -> WidgetStyle.Amber
         else -> WidgetStyle.Green
@@ -125,9 +128,9 @@ private fun RingMark(account: WidgetAccount, size: androidx.compose.ui.unit.Dp) 
 
 class MinimalUsageWidget : AccountRingsWidget(false)
 class MiniRingsWidget : AccountRingsWidget(true)
-class MinimalUsageWidgetReceiver : GlanceAppWidgetReceiver() {
+class MinimalUsageWidgetReceiver : UsageWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = MinimalUsageWidget()
 }
-class MiniRingsWidgetReceiver : GlanceAppWidgetReceiver() {
+class MiniRingsWidgetReceiver : UsageWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = MiniRingsWidget()
 }

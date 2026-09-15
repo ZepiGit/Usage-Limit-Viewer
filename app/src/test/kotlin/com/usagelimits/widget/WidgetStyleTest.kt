@@ -80,6 +80,18 @@ class WidgetStyleTest {
     }
 
     @Test
+    fun `a row whose reset has passed is drawn stale, not in its cached colour`() {
+        // The figure is the spent window's; the provider has opened a fresh one the cache
+        // has not seen. Neither the healthy green nor a teal "untouched" may vouch for it.
+        val overtaken = WidgetRow("5h limit", WindowCategory.FIVE_HOUR, 100.0, null, Severity.HEALTHY, resetElapsed = true)
+        val style = WidgetStyle()
+        assertEquals(WidgetStyle.Slate, style.bar(overtaken))
+        assertEquals(style.textColor(Severity.STALE), style.barText(overtaken))
+        // An account-level failure still outranks it.
+        assertEquals(WidgetStyle.Red, style.bar(overtaken, Severity.ERROR))
+    }
+
+    @Test
     fun `an error full quota keeps the invalid-data treatment`() {
         val full = WidgetRow("5h limit", WindowCategory.FIVE_HOUR, 100.0, null, Severity.HEALTHY)
         val style = WidgetStyle()

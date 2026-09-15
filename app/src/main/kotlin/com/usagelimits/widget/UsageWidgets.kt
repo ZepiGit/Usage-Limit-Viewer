@@ -20,7 +20,6 @@ import androidx.glance.LocalSize
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
-import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.LinearProgressIndicator
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
@@ -269,7 +268,7 @@ class CompactUsageWidget : GlanceAppWidget() {
             Text(
                 text = row?.let(::percentText) ?: "—",
                 style = TextStyle(
-                    color = ColorProvider(if (snapshot.leadValidity != null) style.textColor(snapshot.leadValidity!!) else style.textPrimary),
+                    color = ColorProvider((snapshot.leadValidity ?: row?.validity)?.let(style::textColor) ?: style.textPrimary),
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                 ),
@@ -303,6 +302,9 @@ class CompactUsageWidget : GlanceAppWidget() {
         owner: String? = null,
     ) {
         val style = LocalWidgetStyle.current
+        // The account's validity first, then the row's own: a passed reset makes the number
+        // as untrustworthy as a stale fetch would.
+        val effectiveValidity = validity ?: row?.validity
         Column(
             modifier = modifier
                 .cornerRadius(16.dp)
@@ -331,7 +333,7 @@ class CompactUsageWidget : GlanceAppWidget() {
                     color = ColorProvider(
                         when {
                             accent != null -> accent
-                            validity != null -> style.textColor(validity)
+                            effectiveValidity != null -> style.textColor(effectiveValidity)
                             else -> style.textPrimary
                         },
                     ),
@@ -342,7 +344,7 @@ class CompactUsageWidget : GlanceAppWidget() {
             )
             if (row != null) {
                 Spacer(GlanceModifier.height(5.dp))
-                UsageBar(row, GlanceModifier.fillMaxWidth(), validity = validity)
+                UsageBar(row, GlanceModifier.fillMaxWidth(), validity = effectiveValidity)
             }
         }
     }
@@ -474,10 +476,10 @@ class DetailedUsageWidget : GlanceAppWidget() {
     }
 }
 
-class CompactUsageWidgetReceiver : GlanceAppWidgetReceiver() {
+class CompactUsageWidgetReceiver : UsageWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = CompactUsageWidget()
 }
 
-class DetailedUsageWidgetReceiver : GlanceAppWidgetReceiver() {
+class DetailedUsageWidgetReceiver : UsageWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = DetailedUsageWidget()
 }
